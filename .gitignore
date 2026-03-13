@@ -1,0 +1,54 @@
+# === Sensitive ===
+.credentials.json
+settings.local.json
+settings.json.bak
+
+# === Claude Code platform internals (auto-managed) ===
+history.jsonl
+file-history/
+debug/
+telemetry/
+plugins/
+cache/
+stats-cache.json
+sessions/
+session-timers/
+session-env/
+shell-snapshots/
+paste-cache/
+downloads/
+nudge/
+tasks/
+todos/
+teams/
+/projects/
+
+# === Backups & external repos ===
+backups/
+superclaude-backup/
+upstream/
+
+# === Operational state (project-specific, not framework) ===
+
+# Project-orch comms (users create their own per-project)
+comms/o-*/
+comms/orch-*/
+comms/_archive/
+
+# Meta memory (cross-project operational context)
+agent-memory/meta/
+
+# Auto-generated snapshots and archives
+agent-memory/_compact-snapshots/
+agent-memory/_archive/
+
+# Project-orch instance memory
+agent-memory/o-*/
+agent-memory/orch-*/
+
+# Project-specific shared knowledge (keep only superclaude.md)
+agent-memory/shared/projects/*
+!agent-memory/shared/projects/superclaude.md
+
+# Plans (project-specific orchestration)
+plans/
