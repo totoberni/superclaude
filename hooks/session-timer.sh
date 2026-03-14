@@ -15,7 +15,7 @@
 # Shared vars: SESSION_ID, TOOL_NAME, AGENT_NAME, TIMER_DIR, NUDGE_DIR, NUDGE_FIRED
 # Exit codes: 0 = allow, 2 = block
 
-set -euo pipefail
+set -uo pipefail
 
 INPUT=$(cat)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,6 +25,11 @@ NUDGE_FIRED=false
 SESSION_ID=""
 AGENT_NAME=""
 TOOL_NAME=""
+START_FILE=""
+OVERRIDE_FILE=""
+AGENT_FILE=""
+PID_FILE=""
+CLAUDE_PID=""
 
 mkdir -p "$TIMER_DIR"
 

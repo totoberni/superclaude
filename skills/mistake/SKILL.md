@@ -64,12 +64,12 @@ For every mistake or pattern found, classify its scope:
 
 | Category | Scope | Storage Location |
 |----------|-------|------------------|
-| **Project mistake/gotcha** | One project's codebase/setup | `~/.claude/agent-memory/shared/projects/<project>.md` → Mistakes table |
+| **Project mistake/gotcha** | One project's codebase/setup | `~/.claude/agent-memory/shared/projects/<project>.md` → Mistakes table (**meta only** — sandbox-denied for orchs) |
 | **Class-level mistake** | Applies to any agent of this class | `~/.claude/agent-memory/class/<class>/mtm.md` → Mistakes table |
 | **Universal tool pattern** | All agents, all projects | `~/.claude/rules/20-tool-conventions.md` |
 | **Agent operational pattern** | One agent type | That agent's `~/.claude/agent-memory/<agent>/MEMORY.md` |
 
-**Important**: Project mistakes go to `shared/projects/`, NOT to any orch-specific memory. This ensures all orch instances (current and future) working on the same project can see past mistakes.
+**Write scope**: `shared/projects/` is sandbox-denied for orchs. Orchs write mistakes to **class memory** (primary) and **instance memory** (secondary). Meta promotes to `shared/projects/` via `/lt-mem`. Orchs can still READ `shared/projects/` for existing gotchas.
 
 ### 4. Check for Duplicates
 
@@ -83,7 +83,7 @@ If already recorded, increment the `Occurrences` count instead of adding a dupli
 
 ### 5. Record
 
-**For project mistakes** — append to the Mistakes table in `~/.claude/agent-memory/shared/projects/<project>.md`:
+**For project mistakes** (meta only — orchs skip this, write to class instead) — append to the Mistakes table in `~/.claude/agent-memory/shared/projects/<project>.md`:
 
 ```markdown
 | M-<N> | <Phase> | <What Went Wrong> | <Root Cause> | <Fix Applied> | <Prevention Rule> | 1 |
@@ -165,4 +165,4 @@ Present a summary table:
 - **Cross-project**: `~/.claude/agent-memory/shared/global/ltm.md`
 - **Tool patterns**: `~/.claude/rules/20-tool-conventions.md` (auto-loaded)
 - **Agent-specific**: `~/.claude/agent-memory/<agent>/MEMORY.md`
-- Write scopes: rule 12. Class writes are layer 2 only — never write to `shared/global/ltm.md` (reserved for v3 /lt-mem).
+- Write scopes: rule 12. Class writes are layer 2 only — never write to `shared/global/ltm.md` directly. Promotion to global is handled by `/lt-mem`.

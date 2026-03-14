@@ -5,7 +5,7 @@
 # Snapshots state files, latest reports, and current directives so the
 # agent can recover after compaction.
 
-set -euo pipefail
+set -uo pipefail
 
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null) || SESSION_ID="unknown"
@@ -84,7 +84,7 @@ fi
   done
 } > "$SNAPSHOT_FILE" 2>/dev/null
 
-# Keep only the last 10 snapshots to avoid bloat
-ls -t "$SNAPSHOT_DIR"/compact-*.md 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+# Keep only the last 5 snapshots to prevent unbounded growth between /lt-mem runs
+ls -t "$SNAPSHOT_DIR"/compact-*.md 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
 
 exit 0

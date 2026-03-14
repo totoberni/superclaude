@@ -161,7 +161,7 @@ After scoring, check these v3 criteria and append if ANY fires:
 
 | Trigger | Measurement | Threshold | v3 Feature |
 |---------|------------|-----------|------------|
-| Corpus size | Sum of all populated cell line counts | >2,000 lines | /lt-mem skill (DIR-035) |
+| Corpus size | Sum of ALL files under agent-memory/ (including _system/) | >2,000 lines | Run /lt-mem --quick all (snapshot cleanup + promotion) |
 | Class bloat | Any single `class/*/mtm.md` | >40 lines | class/projects/ tier split |
 | Class growth | Count of class cells >30 lines | 3+ cells | Standalone manifest files |
 | Cross-cell duplication | Duplication % from criterion 3 | >10% | /lt-mem promotion logic |
@@ -169,9 +169,7 @@ After scoring, check these v3 criteria and append if ANY fires:
 Output format when trigger fires:
 ```
 ### v3 Triggers
-v3 TRIGGER: [description]. Recommend activating [feature].
-See ~/.claude/agent-memory/shared/projects/superclaude.md for spec.
-Prompt the user for approval before proceeding.
+v3 TRIGGER: Corpus at N lines. Run `/lt-mem --quick all` to consolidate and clean snapshots.
 ```
 
 If no triggers fire: `### v3 Triggers\nNone. All metrics within v2 thresholds.`

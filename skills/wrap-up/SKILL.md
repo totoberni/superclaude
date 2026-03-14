@@ -76,4 +76,5 @@ After all 4 steps:
 - Execute steps sequentially — RPT must exist before retrospectives reference it
 - If any step fails, continue with remaining steps and note the failure
 - Dual-write is handled by /mistake and /good-idea (Step 0 class detection). No extra logic needed here
-- Class writes are layer 2 only — never write to `shared/global/ltm.md` (reserved for v3 /lt-mem)
+- Class writes are layer 2 only — never write to `shared/global/ltm.md` directly. Use `/lt-mem` for promotions to global.
+- After completing a multi-session campaign (3+ directives), consider running `/lt-mem --quick <project>` as a final consolidation step.

@@ -74,12 +74,12 @@ Look for patterns in these categories:
 
 | Category | Scope | Storage Location |
 |----------|-------|------------------|
-| **Project win** | One project | `~/.claude/agent-memory/shared/projects/<project>.md` → Wins table |
+| **Project win** | One project | `~/.claude/agent-memory/shared/projects/<project>.md` → Wins table (**meta only** — sandbox-denied for orchs) |
 | **Cross-project win** | 2+ projects | `~/.claude/agent-memory/shared/global/ltm.md` → Index |
 | **Class-level win** | Applies as this agent class on any project | `~/.claude/agent-memory/class/<class>/mtm.md` → Wins table |
 | **Promotable pattern** | All agents, all projects | `~/.claude/rules/20-tool-conventions.md` (if tool-related) |
 
-**Important**: Project wins go to `shared/projects/`, NOT to any orch-specific memory. This ensures all orch instances (current and future) working on the same project can see past wins.
+**Write scope**: `shared/projects/` is sandbox-denied for orchs. Orchs write wins to **class memory** (primary) and **instance memory** (secondary). Meta promotes to `shared/projects/` via `/lt-mem`. Orchs can still READ `shared/projects/` for existing patterns.
 
 ### 5. Check for Duplicates
 
@@ -93,7 +93,7 @@ If already recorded, skip. Don't duplicate.
 
 ### 6. Record
 
-**For project wins** — append to `~/.claude/agent-memory/shared/projects/<project>.md` Wins table:
+**For project wins** (meta only — orchs skip this, write to class instead) — append to `~/.claude/agent-memory/shared/projects/<project>.md` Wins table:
 
 ```markdown
 | W-<N> | <Phase> | <What Worked> | <Why It Worked> | <Reusable? + scope> |
@@ -166,4 +166,4 @@ Present a summary table:
 - **Class**: `~/.claude/agent-memory/class/<class>/mtm.md` (secondary, dual-write)
 - **Cross-project**: `~/.claude/agent-memory/shared/global/ltm.md`
 - **Tool patterns**: `~/.claude/rules/20-tool-conventions.md` (promotable)
-- Write scopes: rule 12. Class writes are layer 2 only — never write to `shared/global/ltm.md` (reserved for v3 /lt-mem).
+- Write scopes: rule 12. Class writes are layer 2 only — never write to `shared/global/ltm.md` directly. Promotion to global is handled by `/lt-mem`.

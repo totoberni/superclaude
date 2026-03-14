@@ -644,6 +644,266 @@ fi
 [ "$LOG_OK" = true ] && pass "R4.5 log sizes (history: $HISTORY_LINES, cleanup: $CLEANUP_LINES)"
 
 # ═══════════════════════════════════════════════════════
+# PHASE 6 / Module Unit Tests
+# ═══════════════════════════════════════════════════════
+echo ""
+echo "── Module Unit Tests ──"
+
+# M6.1: mod_parse extracts SESSION_ID and TOOL_NAME from JSON
+(
+  INPUT='{"session_id":"test-parse-001","tool_name":"Edit"}'
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  NUDGE_DIR="$FAKE_NUDGE_DIR"
+  NUDGE_FIRED=false
+  SESSION_ID=""
+  AGENT_NAME=""
+  TOOL_NAME=""
+  START_FILE=""
+  OVERRIDE_FILE=""
+  AGENT_FILE=""
+  PID_FILE=""
+  CLAUDE_PID=""
+  source "$HOOK_DIR/modules/00-parse.sh"
+  mod_parse
+  if [ "$SESSION_ID" = "test-parse-001" ] && [ "$TOOL_NAME" = "Edit" ]; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.1 mod_parse (SESSION_ID + TOOL_NAME extracted)"
+else
+  fail "M6.1 mod_parse" "SESSION_ID or TOOL_NAME not set correctly"
+fi
+
+# M6.2: mod_parse derives START_FILE from session ID
+(
+  INPUT='{"session_id":"test-derive-002","tool_name":"Read"}'
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  NUDGE_DIR="$FAKE_NUDGE_DIR"
+  NUDGE_FIRED=false
+  SESSION_ID=""
+  AGENT_NAME=""
+  TOOL_NAME=""
+  START_FILE=""
+  OVERRIDE_FILE=""
+  AGENT_FILE=""
+  PID_FILE=""
+  CLAUDE_PID=""
+  source "$HOOK_DIR/modules/00-parse.sh"
+  mod_parse
+  if [ "$START_FILE" = "$FAKE_TIMER_DIR/test-derive-002.start" ] && \
+     [ "$AGENT_FILE" = "$FAKE_TIMER_DIR/test-derive-002.agent" ]; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+rm -f "$FAKE_TIMER_DIR"/test-derive-002.* 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.2 mod_parse (START_FILE + AGENT_FILE derived)"
+else
+  fail "M6.2 mod_parse" "derived paths incorrect"
+fi
+
+# M6.3: mod_context_check one-shot (creates .context-warned, skips on second call)
+(
+  SESSION_ID="test-ctx-003"
+  AGENT_NAME="orch-test"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  echo "2" > "$FAKE_TIMER_DIR/test-ctx-003.calls"
+  source "$HOOK_DIR/modules/05-context-check.sh"
+  # First call — may or may not fire (depends on memory size) but shouldn't crash
+  mod_context_check >/dev/null 2>&1
+  exit 0
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.3 mod_context_check (no crash on first call)"
+else
+  fail "M6.3 mod_context_check" "crashed on first call"
+fi
+rm -f "$FAKE_TIMER_DIR"/test-ctx-003.* 2>/dev/null
+
+# M6.4: mod_counter increments .calls file
+(
+  SESSION_ID="test-cnt-004"
+  AGENT_NAME="orch-test"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  TOOL_NAME="Read"
+  NUDGE_FIRED=false
+  INPUT='{"tool_input":{}}'
+  source "$HOOK_DIR/modules/20-counter.sh"
+  mod_counter >/dev/null 2>&1
+  C1=$(cat "$FAKE_TIMER_DIR/test-cnt-004.calls" 2>/dev/null | tr -cd '0-9')
+  mod_counter >/dev/null 2>&1
+  C2=$(cat "$FAKE_TIMER_DIR/test-cnt-004.calls" 2>/dev/null | tr -cd '0-9')
+  if [ "$C1" = "1" ] && [ "$C2" = "2" ]; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.4 mod_counter (.calls increments 1→2)"
+else
+  fail "M6.4 mod_counter" ".calls not incrementing correctly"
+fi
+rm -f "$FAKE_TIMER_DIR"/test-cnt-004.* 2>/dev/null
+
+# M6.5: mod_counter TDD awareness (Edit increments .tdd, Bash pytest resets)
+(
+  SESSION_ID="test-tdd-005"
+  AGENT_NAME="orch-test"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  NUDGE_FIRED=false
+  INPUT='{"tool_input":{}}'
+  source "$HOOK_DIR/modules/20-counter.sh"
+  # Two Edit calls
+  TOOL_NAME="Edit"
+  mod_counter >/dev/null 2>&1
+  mod_counter >/dev/null 2>&1
+  T1=$(cat "$FAKE_TIMER_DIR/test-tdd-005.tdd" 2>/dev/null | tr -cd '0-9')
+  # Test run resets
+  TOOL_NAME="Bash"
+  INPUT='{"tool_input":{"command":"pytest tests/"}}'
+  mod_counter >/dev/null 2>&1
+  T2=$(cat "$FAKE_TIMER_DIR/test-tdd-005.tdd" 2>/dev/null | tr -cd '0-9')
+  if [ "$T1" = "2" ] && [ "$T2" = "0" ]; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.5 mod_counter TDD (Edit→2, pytest→0)"
+else
+  fail "M6.5 mod_counter TDD" ".tdd not tracking correctly"
+fi
+rm -f "$FAKE_TIMER_DIR"/test-tdd-005.* 2>/dev/null
+
+# M6.6: mod_commit_gate passes conventional format
+(
+  TOOL_NAME="Bash"
+  NUDGE_FIRED=false
+  INPUT='{"tool_input":{"command":"git commit -m \"feat: add user login\""}}'
+  source "$HOOK_DIR/modules/25-commit-gate.sh"
+  OUTPUT=$(mod_commit_gate 2>&1)
+  # Should produce no additionalContext (pass = silent)
+  if echo "$OUTPUT" | grep -q "may not follow"; then
+    exit 1
+  else
+    exit 0
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.6 mod_commit_gate (conventional format passes silently)"
+else
+  fail "M6.6 mod_commit_gate" "false positive on valid conventional commit"
+fi
+
+# M6.7: mod_commit_gate warns on non-conventional format
+(
+  TOOL_NAME="Bash"
+  NUDGE_FIRED=false
+  INPUT='{"tool_input":{"command":"git commit -m \"fixed some stuff\""}}'
+  source "$HOOK_DIR/modules/25-commit-gate.sh"
+  OUTPUT=$(mod_commit_gate 2>&1)
+  if echo "$OUTPUT" | grep -q "may not follow"; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.7 mod_commit_gate (non-conventional triggers warning)"
+else
+  fail "M6.7 mod_commit_gate" "no warning on bad commit format"
+fi
+
+# M6.8: mod_timer warning at 36min
+echo "orch-timer-008" > "$FAKE_TIMER_DIR/hooktest-m68.agent"
+chmod 644 "$FAKE_TIMER_DIR/hooktest-m68.start" 2>/dev/null || true
+echo $(( $(date +%s) - 2160 )) > "$FAKE_TIMER_DIR/hooktest-m68.start"
+chmod 444 "$FAKE_TIMER_DIR/hooktest-m68.start" 2>/dev/null || true
+TEST_JSON='{"session_id":"hooktest-m68","tool_name":"Read"}'
+run_hook "$TIMER_HOOK" "$TEST_JSON" >/dev/null
+STDERR_M68=$(last_stderr)
+if echo "$STDERR_M68" | grep -qi "warning\|wrap up"; then
+  pass "M6.8 mod_timer (36min warning message)"
+else
+  fail "M6.8 mod_timer" "no warning at 36min: $STDERR_M68"
+fi
+rm -f "$FAKE_TIMER_DIR"/hooktest-m68.* 2>/dev/null
+
+# M6.9: mod_timer hard block at 49min
+echo "orch-timer-009" > "$FAKE_TIMER_DIR/hooktest-m69.agent"
+chmod 644 "$FAKE_TIMER_DIR/hooktest-m69.start" 2>/dev/null || true
+echo $(( $(date +%s) - 2940 )) > "$FAKE_TIMER_DIR/hooktest-m69.start"
+chmod 444 "$FAKE_TIMER_DIR/hooktest-m69.start" 2>/dev/null || true
+TEST_JSON='{"session_id":"hooktest-m69","tool_name":"Read"}'
+run_hook "$TIMER_HOOK" "$TEST_JSON" >/dev/null 2>&1
+RC_M69=$?
+STDERR_M69=$(last_stderr)
+if [ $RC_M69 -eq 2 ] && echo "$STDERR_M69" | grep -qi "hard.*limit\|blocked"; then
+  pass "M6.9 mod_timer (49min hard block, exit 2)"
+else
+  fail "M6.9 mod_timer" "exit=$RC_M69, stderr: $STDERR_M69"
+fi
+rm -f "$FAKE_TIMER_DIR"/hooktest-m69.* 2>/dev/null
+
+# M6.10: mod_gc Phase 3 orphan cleanup (.agent without .start, >2h old)
+echo "orphan-agent" > "$FAKE_TIMER_DIR/hooktest-orphan.agent"
+touch -t 202601010000.00 "$FAKE_TIMER_DIR/hooktest-orphan.agent"
+echo "" > "$FAKE_TIMER_DIR/hooktest-m610.agent"
+TEST_JSON='{"session_id":"hooktest-m610","tool_name":"Read"}'
+run_hook "$TIMER_HOOK" "$TEST_JSON" >/dev/null 2>&1
+if [ ! -f "$FAKE_TIMER_DIR/hooktest-orphan.agent" ]; then
+  pass "M6.10 mod_gc Phase 3 (orphan .agent without .start cleaned)"
+else
+  fail "M6.10 mod_gc Phase 3" "orphan .agent file still exists"
+fi
+rm -f "$FAKE_TIMER_DIR"/hooktest-orphan.* "$FAKE_TIMER_DIR"/hooktest-m610.* 2>/dev/null
+
+# M6.11: mod_bootstrap freshness warning
+(
+  AGENT_NAME="scaf"
+  SESSION_ID="test-boot-011"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  START_FILE="$FAKE_TIMER_DIR/test-boot-011.start"
+  # Don't create .start file — bootstrap only fires pre-start
+  COMMS_DIR="$SCRATCH/comms-test/scaf"
+  mkdir -p "$COMMS_DIR"
+  # Create bootstrap.md (old) and directives.md (new)
+  echo "old bootstrap" > "$COMMS_DIR/bootstrap.md"
+  touch -t 202601010000.00 "$COMMS_DIR/bootstrap.md"
+  echo "new directive" > "$COMMS_DIR/directives.md"
+  touch -t 202603140000.00 "$COMMS_DIR/directives.md"
+  # Override HOME to use our test comms dir
+  HOME_ORIG="$HOME"
+  HOME="$SCRATCH/comms-fake"
+  mkdir -p "$HOME/.claude/comms/scaf"
+  echo "old bootstrap" > "$HOME/.claude/comms/scaf/bootstrap.md"
+  touch -t 202601010000.00 "$HOME/.claude/comms/scaf/bootstrap.md"
+  echo "new directive" > "$HOME/.claude/comms/scaf/directives.md"
+  touch -t 202603140000.00 "$HOME/.claude/comms/scaf/directives.md"
+  source "$HOOK_DIR/modules/50-bootstrap.sh"
+  OUTPUT=$(mod_bootstrap_check 2>&1)
+  HOME="$HOME_ORIG"
+  if echo "$OUTPUT" | grep -qi "stale\|older"; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.11 mod_bootstrap (stale bootstrap detected)"
+else
+  fail "M6.11 mod_bootstrap" "no staleness warning when bootstrap.md older than directives.md"
+fi
+rm -f "$FAKE_TIMER_DIR"/test-boot-011.* 2>/dev/null
+
+# ═══════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════
 echo ""

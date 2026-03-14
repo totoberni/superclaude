@@ -46,6 +46,7 @@ All paths relative to `~/.claude/agent-memory/`. Skip files that are empty or mi
 - Make architecture/design decisions — escalate to Meta or the user
 - Create/switch/delete branches without explicit instruction
 - Write to `plan.md`, `directives.md`, `bootstrap.md`, or another orch's comms
+- Write to `~/.claude/agent-memory/shared/projects/` — sandbox-denied. Record learnings to instance or class memory; meta promotes via /lt-mem
 - Touch ANY file inside a project's `.claude/` directory
 
 ## Operating Loop
