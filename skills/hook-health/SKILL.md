@@ -84,7 +84,19 @@ Any match = that file scores 0 for this criterion.
 
 Known temp file types: `.start`, `.agent`, `.pid`, `.override`, `.context-warned`, `.tdd`, `.calls`
 
-Check `session-cleanup.sh` covers all of these.
+Check `session-cleanup.sh` covers all of these (both standalone `.ext` patterns and brace-expansion `{ext,...}` patterns):
+
+```bash
+TEMP_EXTS="start agent pid override context-warned tdd calls"
+for ext in $TEMP_EXTS; do
+  # Check both standalone ".ext" and brace-expansion "ext" (inside {})
+  if grep -qE "\.$ext|[{,]${ext}([},])" "$HOOKS_DIR/session-cleanup.sh" 2>/dev/null; then
+    echo "OK: $ext"
+  else
+    echo "MISS: $ext"
+  fi
+done
+```
 
 #### 6. Module Naming (5 pts)
 
@@ -125,19 +137,22 @@ Binary: exit 0 = 10 pts, non-zero = 0 pts.
 
 #### 8. Test Coverage (15 pts)
 
-Cross-reference hooks/modules against test-hooks.sh test cases:
+Count hooks/modules referenced by name in test-hooks.sh:
 
 ```bash
-# List all hooks and modules
+# Count hooks/modules referenced by name in test-hooks.sh
+TESTED=0
+TOTAL=0
 for f in "$HOOKS_DIR"/*.sh "$HOOKS_DIR"/modules/*.sh; do
-  [ -f "$f" ] && basename "$f" .sh
-done | sort > /tmp/hook-list.txt
-
-# List tested items in test-hooks.sh
-grep -oP 'test_\w+' "$HOME/.claude/scripts/test-hooks.sh" 2>/dev/null | sort -u > /tmp/tested-list.txt
+  [ -f "$f" ] || continue
+  TOTAL=$((TOTAL + 1))
+  NAME=$(basename "$f" .sh)
+  grep -q "$NAME" "$HOME/.claude/scripts/test-hooks.sh" 2>/dev/null && TESTED=$((TESTED + 1))
+done
+echo "Coverage: $TESTED / $TOTAL"
 ```
 
-Score = tested items / total items * 15.
+Score = TESTED / TOTAL * 15.
 
 ### Deep Checks (--deep only)
 

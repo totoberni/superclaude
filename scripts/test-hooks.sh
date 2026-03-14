@@ -903,6 +903,156 @@ else
 fi
 rm -f "$FAKE_TIMER_DIR"/test-boot-011.* 2>/dev/null
 
+# M6.12: mod_nudge fires on valid nudge file (tests 10-nudge module)
+mkdir -p "$FAKE_NUDGE_DIR"
+(
+  AGENT_NAME="orch-nudge-test"
+  NUDGE_DIR="$FAKE_NUDGE_DIR"
+  NUDGE_FIRED=false
+  echo "200" > "$NUDGE_DIR/$AGENT_NAME"
+  source "$HOOK_DIR/modules/10-nudge.sh"
+  mod_nudge > "$NUDGE_DIR/nudge_output.tmp" 2>&1
+  if [ "$NUDGE_FIRED" = true ] && grep -q "NUDGE" "$NUDGE_DIR/nudge_output.tmp" && [ ! -f "$NUDGE_DIR/$AGENT_NAME" ]; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.12 mod_nudge (fires on valid file, 10-nudge)"
+else
+  fail "M6.12 mod_nudge" "nudge not fired or file not consumed"
+fi
+
+# M6.13: mod_nudge no-op without nudge file (tests 10-nudge module)
+(
+  AGENT_NAME="orch-no-nudge"
+  NUDGE_DIR="$FAKE_NUDGE_DIR"
+  NUDGE_FIRED=false
+  rm -f "$NUDGE_DIR/$AGENT_NAME" 2>/dev/null
+  source "$HOOK_DIR/modules/10-nudge.sh"
+  mod_nudge >/dev/null 2>&1
+  if [ "$NUDGE_FIRED" = false ]; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.13 mod_nudge (no-op without file, 10-nudge)"
+else
+  fail "M6.13 mod_nudge" "NUDGE_FIRED should remain false"
+fi
+
+# M6.14: mod_nudge cleans empty nudge file (tests 10-nudge module)
+mkdir -p "$FAKE_NUDGE_DIR"
+(
+  AGENT_NAME="orch-empty-nudge"
+  NUDGE_DIR="$FAKE_NUDGE_DIR"
+  NUDGE_FIRED=false
+  echo "" > "$NUDGE_DIR/$AGENT_NAME"
+  source "$HOOK_DIR/modules/10-nudge.sh"
+  mod_nudge >/dev/null 2>&1
+  if [ ! -f "$NUDGE_DIR/$AGENT_NAME" ] && [ "$NUDGE_FIRED" = false ]; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.14 mod_nudge (cleans empty file, 10-nudge)"
+else
+  fail "M6.14 mod_nudge" "empty nudge file not cleaned"
+fi
+
+# M6.15: mod_timer creates .start on first call (tests 30-timer module)
+rm -f "$FAKE_TIMER_DIR/test-timer-015.start" 2>/dev/null
+(
+  SESSION_ID="test-timer-015"
+  AGENT_NAME="orch-test"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  START_FILE="$FAKE_TIMER_DIR/test-timer-015.start"
+  OVERRIDE_FILE="$FAKE_TIMER_DIR/test-timer-015.override"
+  TOOL_NAME="Read"
+  INPUT='{"tool_input":{}}'
+  source "$HOOK_DIR/modules/30-timer.sh"
+  mod_timer
+) 2>/dev/null
+if [ -f "$FAKE_TIMER_DIR/test-timer-015.start" ]; then
+  pass "M6.15 mod_timer (creates .start on first call, 30-timer)"
+else
+  fail "M6.15 mod_timer" ".start not created"
+fi
+rm -f "$FAKE_TIMER_DIR"/test-timer-015.* 2>/dev/null
+
+# M6.16: mod_timer skips enforcement for meta agent (tests 30-timer module)
+(
+  SESSION_ID="test-timer-016"
+  AGENT_NAME="meta"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  START_FILE="$FAKE_TIMER_DIR/test-timer-016.start"
+  OVERRIDE_FILE="$FAKE_TIMER_DIR/test-timer-016.override"
+  TOOL_NAME="Read"
+  INPUT='{"tool_input":{}}'
+  # Create "very old" start file — would hard-block a non-meta agent
+  echo $(( $(date +%s) - 3600 )) > "$START_FILE"
+  chmod 444 "$START_FILE" 2>/dev/null || true
+  source "$HOOK_DIR/modules/30-timer.sh"
+  mod_timer
+) 2>/dev/null
+RC=$?
+if [ $RC -eq 0 ]; then
+  pass "M6.16 mod_timer (meta exempt from enforcement, 30-timer)"
+else
+  fail "M6.16 mod_timer" "meta agent blocked (exit=$RC)"
+fi
+chmod 644 "$FAKE_TIMER_DIR/test-timer-016.start" 2>/dev/null || true
+rm -f "$FAKE_TIMER_DIR"/test-timer-016.* 2>/dev/null
+
+# M6.17: mod_gc Phase 1 removes stale sessions (tests 40-gc module)
+(
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  SESSION_ID="test-gc-017"
+  echo "1000000000" > "$TIMER_DIR/test-gc-stale.start"
+  echo "stale-agent" > "$TIMER_DIR/test-gc-stale.agent"
+  touch -t 202601010000.00 "$TIMER_DIR/test-gc-stale.start"
+  source "$HOOK_DIR/modules/40-gc.sh"
+  mod_gc
+  if [ ! -f "$TIMER_DIR/test-gc-stale.start" ]; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.17 mod_gc Phase 1 (stale session removed, 40-gc)"
+else
+  fail "M6.17 mod_gc Phase 1" "stale files not cleaned"
+fi
+rm -f "$FAKE_TIMER_DIR"/test-gc-stale.* "$FAKE_TIMER_DIR"/test-gc-017.* 2>/dev/null
+
+# M6.18: mod_gc Phase 2 cleans dead PIDs (tests 40-gc module)
+(
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  SESSION_ID="test-gc-018"
+  echo "99999" > "$TIMER_DIR/test-gc-dead.pid"
+  echo "$(date +%s)" > "$TIMER_DIR/test-gc-dead.start"
+  echo "dead-agent" > "$TIMER_DIR/test-gc-dead.agent"
+  source "$HOOK_DIR/modules/40-gc.sh"
+  mod_gc
+  if [ ! -f "$TIMER_DIR/test-gc-dead.pid" ]; then
+    exit 0
+  else
+    exit 1
+  fi
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "M6.18 mod_gc Phase 2 (dead PID cleaned, 40-gc)"
+else
+  fail "M6.18 mod_gc Phase 2" "dead PID files not cleaned"
+fi
+rm -f "$FAKE_TIMER_DIR"/test-gc-dead.* "$FAKE_TIMER_DIR"/test-gc-018.* 2>/dev/null
+
 # ═══════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════
