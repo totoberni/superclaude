@@ -2,10 +2,10 @@
 # Reads: AGENT_NAME, SESSION_ID, START_FILE, OVERRIDE_FILE, TOOL_NAME, INPUT, TIMER_DIR
 #
 # Timeline:
-#   0-35 min  — normal operation
-#   35-40 min — WARNING (non-blocking, tells agent to wrap up)
-#   40-48 min — GRACE PERIOD (only shutdown ops: state/report/memory writes, git commits)
-#   48+ min   — HARD BLOCK (all tool calls rejected)
+#   0-45 min  — normal operation
+#   45-48 min — WARNING (non-blocking, tells agent to wrap up)
+#   48-53 min — GRACE PERIOD (only shutdown ops: state/report/memory writes, git commits)
+#   53+ min   — HARD BLOCK (all tool calls rejected)
 #
 # Exempt: meta agent, bare claude (no --agent).
 # Override: touch ~/.claude/session-timers/<session_id>.override
@@ -40,9 +40,9 @@ mod_timer() {
   fi
   CURRENT_TIME=$(date +%s)
   ELAPSED=$((CURRENT_TIME - START_TIME))
-  WARN_SECONDS=$((35 * 60))   # 35 min
-  SOFT_SECONDS=$((40 * 60))   # 40 min — grace period starts
-  HARD_SECONDS=$((48 * 60))   # 48 min — hard block
+  WARN_SECONDS=$((45 * 60))   # 45 min
+  SOFT_SECONDS=$((48 * 60))   # 48 min — grace period starts
+  HARD_SECONDS=$((53 * 60))   # 53 min — hard block
 
   MINUTES=$((ELAPSED / 60))
 
@@ -95,7 +95,7 @@ mod_timer() {
   if [ $ELAPSED -gt $WARN_SECONDS ]; then
     REMAINING=$(( (SOFT_SECONDS - ELAPSED) / 60 ))
     echo "TIME WARNING (${MINUTES} min, ~${REMAINING} min until grace period)." >&2
-    echo "Wrap up current task. After 40 min: shutdown ops only. After 48 min: blocked." >&2
+    echo "Wrap up current task. After 48 min: shutdown ops only. After 53 min: blocked." >&2
   fi
 
   exit 0

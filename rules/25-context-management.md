@@ -100,16 +100,16 @@ The `pre-compact.sh` hook auto-snapshots state files. After compaction, resume i
 
 | Time | Phase | Behavior |
 |------|-------|----------|
-| **35 min** | Warning | Non-blocking. Start wrapping up current task. |
-| **40 min** | Grace period | Only shutdown ops allowed (8 min window). See shutdown procedure. |
-| **48 min** | Hard block | ALL tool calls blocked. Session is over. |
+| **45 min** | Warning | Non-blocking. Start wrapping up current task. |
+| **48 min** | Grace period | Only shutdown ops allowed (5 min window). See shutdown procedure. |
+| **53 min** | Hard block | ALL tool calls blocked. Session is over. |
 
 - Override: `touch ~/.claude/session-timers/<session_id>.override`
 - Meta exempt
 
-**At the 35-min warning**: do NOT start new long-running work (especially parallel test batches). Finish current atomic task, then start shutdown.
+**At the 45-min warning**: do NOT start new long-running work (especially parallel test batches). Finish current atomic task, then start shutdown.
 
-**During grace period (40-48 min)** — execute the shutdown procedure in order:
+**During grace period (48-53 min)** — execute the shutdown procedure in order:
 1. Commit outstanding work
 2. Update state file + write RPT to reports.md
 3. Run `/mistake <project>` and `/good-idea <project>` (captures learnings to shared memory)
