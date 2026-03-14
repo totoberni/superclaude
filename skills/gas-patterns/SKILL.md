@@ -1,6 +1,7 @@
 ---
 name: gas-patterns
-description: "Google Apps Script conventions, clasp workflow, and critical gotchas. Auto-loaded by w-debugger agent."
+description: "Google Apps Script conventions and gotchas. For w-debugger."
+category: domain
 user-invocable: false
 ---
 

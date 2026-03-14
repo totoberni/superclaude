@@ -1,0 +1,90 @@
+# Security Review GitHub Action — Claude Code
+#
+# Purpose: Automated security review on pull requests using Claude Code.
+# Adapted from: anthropics/claude-code-security-review
+#
+# Setup:
+#   1. Add ANTHROPIC_API_KEY to repo Settings → Secrets → Actions
+#   2. Copy this file to .github/workflows/security-review.yml in your repo
+#   3. Adjust trigger paths and model as needed
+#
+# Cost: ~$0.05-0.50 per PR depending on diff size and model
+#   - sonnet: cheaper, good for most reviews
+#   - opus: thorough, use for security-critical repos
+#
+# Customization:
+#   - Adjust 'paths' to target security-sensitive directories
+#   - Modify the prompt for project-specific security concerns
+#   - Add 'paths-ignore' to skip non-code files (docs, configs)
+#   - Set 'max_turns' lower for faster/cheaper reviews
+
+name: Security Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'src/**'
+      - 'lib/**'
+      - 'api/**'
+      - 'server/**'
+      - '*.ts'
+      - '*.js'
+      - '*.py'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  security-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        id: diff
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > pr_diff.txt
+          echo "diff_size=$(wc -l < pr_diff.txt)" >> $GITHUB_OUTPUT
+
+      - name: Run Claude Security Review
+        if: steps.diff.outputs.diff_size > 0
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: sonnet
+          max_turns: 5
+          prompt: |
+            Review this PR diff for security issues. Focus on:
+
+            1. **Authentication & Authorization**: Missing auth checks, broken access control, privilege escalation
+            2. **Input Validation**: SQL injection, XSS, command injection, path traversal, SSRF
+            3. **Secrets Management**: Hardcoded credentials, API keys in code, insecure token handling
+            4. **Data Protection**: Sensitive data in logs, missing encryption, insecure storage
+            5. **Dependencies**: Known vulnerable patterns, unsafe deserialization
+
+            For each finding, provide:
+            - Severity: CRITICAL / HIGH / MEDIUM / LOW
+            - STRIDE category: [S]poofing, [T]ampering, [R]epudiation, [I]nfo Disclosure, [D]oS, [E]levation
+            - File and line reference
+            - Suggested fix
+
+            If no security issues found, confirm the review passed.
+
+            PR diff is in pr_diff.txt.
+          allowed_tools: "Read,Bash(cat:*),Bash(wc:*),Bash(grep:*)"
+
+      - name: Post review comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // The Claude action posts its own comment.
+            // This step is a fallback for logging.
+            console.log('Security review completed');

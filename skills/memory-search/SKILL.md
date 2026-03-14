@@ -1,6 +1,7 @@
 ---
 name: memory-search
-description: "Search across all agent memory files for a keyword or topic. /memory-search <query>"
+description: "Search across all agent memory files for a keyword or topic."
+category: memory
 user-invocable: true
 argument-hint: "<search-query>"
 allowed-tools: Read, Grep, Glob, Bash
@@ -25,7 +26,7 @@ Use the Grep tool to search across these locations (run in parallel):
 1. **Per-agent memories**: `~/.claude/agent-memory/*/MEMORY.md`
 2. **Project memories**: `~/.claude/agent-memory/shared/projects/*.md`
 3. **Compact snapshots**: `~/.claude/agent-memory/_compact-snapshots/*`
-4. **Cross-project wins**: `~/.claude/agent-memory/shared/wins.md`
+4. **Cross-project wins**: `~/.claude/agent-memory/shared/global/ltm.md`
 
 For each search, use:
 - `output_mode: "content"` to show matching lines
@@ -43,7 +44,7 @@ Group results by source file:
 - M-4: [FAILURE] P3 — Dismissed test failures as pre-existing...
 - W-7: [WORKING_SOLUTION] P2 — Dependency-ordered merges...
 
-### ~/.claude/agent-memory/scaffolder/MEMORY.md
+### ~/.claude/agent-memory/scaf/MEMORY.md
 - Hook arithmetic: validate with [[ "$VAR" =~ ^[0-9]+$ ]]...
 
 ### No matches in:

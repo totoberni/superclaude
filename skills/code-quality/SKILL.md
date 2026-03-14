@@ -1,6 +1,7 @@
 ---
 name: code-quality
-description: "Comprehensive code quality checklist based on the user's programming principles. Preloaded into w-reviewer and w-refactorer agents for systematic evaluation."
+description: "Code quality checklist based on programming principles. For w-reviewer."
+category: meta
 user-invocable: false
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: status
-description: "Shows current project status by reading state files, git status, and plan progress."
+description: "Show project status from state files, git status, and plan."
+category: orchestration
 user-invocable: true
 allowed-tools: Read, Glob, Bash
 ---

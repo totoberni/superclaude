@@ -1,6 +1,7 @@
 ---
 name: pleh
 description: "Spawn parallel help. /pleh = self-help (2x). /pleh agent-name = cross-help (3x)."
+category: orchestration
 user-invocable: true
 argument-hint: "[target-agent]"
 allowed-tools: Read, Glob, Grep, Agent, Bash
@@ -111,4 +112,4 @@ Return findings in ≤300 words. Focus on actionable insights."
 
 - `/pleh` → self-help: spawn 1 helper for your current task (2x)
 - `/pleh orch-example-project-p3` → cross-help: spawn helper + helper's sub for orch-example-project-p3's task (3x)
-- `/pleh scaffolder` → cross-help: spawn helper chain for scaffolder's current work (3x)
+- `/pleh scaf` → cross-help: spawn helper chain for scaf's current work (3x)

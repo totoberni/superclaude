@@ -1,6 +1,7 @@
 ---
 name: compact-mem
-description: "Compress memory files: shorten prose, merge related entries, enforce line budgets, archive completed orch data."
+description: "Compress memory files: shorten prose, merge entries, enforce budgets."
+category: memory
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[scope: 'all' | 'agent <name>' | 'comms <orch-name>']"
@@ -15,22 +16,44 @@ Compress and tighten superclaude memory files for: $ARGUMENTS (default: all)
 
 Reduces memory file sizes while preserving all useful information. Shortens verbose prose, merges related entries, enforces line budgets, and archives completed orch communications.
 
-## Line Budgets
+## Line Budgets (Memory Matrix)
 
-| File | Max Lines | Rationale |
-|------|-----------|-----------|
-| `agent-memory/meta/MEMORY.md` | 80 | Loaded into system prompt — every line costs context |
-| `agent-memory/orch/MEMORY.md` | 40 | Base orch protocol — should be concise |
-| `agent-memory/<named-orch>/MEMORY.md` | 30 | Session-specific — minimal useful state |
-| `shared/projects/<project>.md` | 60 | Shared across orchs — dense, no prose |
-| `shared/wins.md` | 30 | Index table only |
+### Row 1: Shared (cross-agent)
+
+| Cell | Path | Max Lines |
+|------|------|-----------|
+| Global LTM | `shared/global/ltm.md` | 60 |
+| Project memory | `shared/projects/<project>.md` | 60 each |
+
+### Row 2: Class (per agent type)
+
+| Cell | Path | Max Lines |
+|------|------|-----------|
+| Class MTM | `class/<class>/mtm.md` | 40 |
+| Class project | `class/projects/<class>/<project>.md` | 30 each |
+
+### Row 3: Instance (per agent)
+
+| Cell | Path | Max Lines |
+|------|------|-----------|
+| Meta | `instance/meta/MEMORY.md` | 80 |
+| Orch/named-orch | `instance/<orch>/MEMORY.md` | 40 |
+| Other (workers, scaf) | `instance/<name>/MEMORY.md` | 30 |
 
 ## Procedure
 
 ### 1. Measure Current State
 
+Scan all three rows of the memory matrix:
+
 ```bash
-wc -l ~/.claude/agent-memory/*/MEMORY.md ~/.claude/agent-memory/shared/**/*.md
+MEM="$HOME/.claude/agent-memory"
+echo "=== Row 1: Shared ==="
+wc -l "$MEM"/shared/global/ltm.md "$MEM"/shared/projects/*.md 2>/dev/null
+echo "=== Row 2: Class ==="
+wc -l "$MEM"/class/*/mtm.md "$MEM"/class/projects/*/*.md 2>/dev/null
+echo "=== Row 3: Instance ==="
+wc -l "$MEM"/instance/*/MEMORY.md 2>/dev/null
 ```
 
 Flag any file over its budget.
@@ -68,12 +91,19 @@ Flag any file over its budget.
 - `comms/<orch>/reports.md` → keep final RPT only (drop intermediate reports)
 - `comms/<orch>/escalations.md` → wipe if all resolved
 
+**ARCHIVE (for memory matrix cells):**
+- Move stale entries to cell-specific `archive/` subdir (e.g., `shared/global/archive/`, `class/<class>/archive/`)
+- Archive dirs already exist for seeded class cells
+- Instance memories: archive to `instance/<name>/archive/` (create if needed)
+- Archived content keeps its filename + date suffix: `ltm-2026-03.md`
+
 ### 4. Verify Post-Compaction
 
 After compacting, verify:
-1. `wc -l` — all files within budget
+1. `wc -l` — all files within budget (use cell-specific budgets from tables above)
 2. No broken references — grep for paths mentioned in compacted files, verify they exist
 3. No lost lessons — every gotcha/mistake still has its fix recipe
+4. Run `/memory-prune all` to confirm no new issues introduced
 
 ### 5. Report
 
@@ -82,14 +112,18 @@ After compacting, verify:
 
 ### Before / After
 
-| File | Before (lines) | After (lines) | Budget | Status |
-|------|----------------|---------------|--------|--------|
-| meta/MEMORY.md | N | N | 80 | OK/OVER |
-| ... | ... | ... | ... | ... |
+| Row | Cell | Before | After | Budget | Status |
+|-----|------|--------|-------|--------|--------|
+| 1 | shared/global/ltm.md | N | N | 60 | OK/OVER |
+| 1 | shared/projects/X.md | N | N | 60 | OK/OVER |
+| 2 | class/orch/mtm.md | N | N | 40 | OK/OVER |
+| 3 | instance/meta/MEMORY.md | N | N | 80 | OK/OVER |
+| ... | ... | ... | ... | ... | ... |
 
 ### Total savings: N lines removed across M files
 
 ### Archived
+- [list of entries moved to archive/ subdirs]
 - [list of completed orch comms archived]
 
 ### Verification

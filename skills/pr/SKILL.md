@@ -1,6 +1,7 @@
 ---
 name: pr
-description: "Creates a GitHub pull request with structured title, summary, and test plan using gh CLI."
+description: "Create a GitHub pull request with structured summary using gh CLI."
+category: workflow
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[base-branch]"

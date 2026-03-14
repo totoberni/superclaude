@@ -1,6 +1,7 @@
 ---
 name: wsl-gotchas
-description: "Common WSL2 pitfalls for process management, filesystems, networking, and Git. Auto-loaded by w-debugger agent."
+description: "WSL2 pitfalls for process, filesystem, networking, Git. For w-debugger."
+category: domain
 user-invocable: false
 ---
 

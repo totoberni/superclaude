@@ -244,7 +244,7 @@ check_comms() {
     # Cross-reference: check for matching agent
     if [ ! -f "$CLAUDE_DIR/agents/$DIR_NAME.md" ]; then
       # Could be a named orch or special dir
-      if ! echo "$DIR_NAME" | grep -qE "^(orch-|scaffolder|meta)"; then
+      if ! echo "$DIR_NAME" | grep -qE "^(orch-|scaf|meta)"; then
         warn "$DIR_NAME: no matching agent definition"
       fi
     fi
@@ -389,9 +389,9 @@ check_memory() {
     [ -d "$dir" ] || continue
     local DIR_NAME
     DIR_NAME=$(basename "$dir")
-    # Skip special dirs
+    # Skip structural and special dirs
     case "$DIR_NAME" in
-      _archive|_compact-snapshots) continue ;;
+      _archive|_compact-snapshots|_system|class|instance|shared) continue ;;
     esac
     MEM_COUNT=$((MEM_COUNT + 1))
 
@@ -422,7 +422,76 @@ check_memory() {
     local PROJECT_COUNT
     PROJECT_COUNT=$(ls "$MEM_DIR/shared/projects/"*.md 2>/dev/null | wc -l)
     pass "Shared project memory: $PROJECT_COUNT files"
+
+    # Row 1: shared/projects line budget (60 lines each)
+    for pfile in "$MEM_DIR"/shared/projects/*.md; do
+      [ -f "$pfile" ] || continue
+      local PNAME PLINES
+      PNAME=$(basename "$pfile")
+      PLINES=$(wc -l < "$pfile" 2>/dev/null || echo "0")
+      if [[ "$PLINES" =~ ^[0-9]+$ ]] && [ "$PLINES" -gt 60 ]; then
+        warn "shared/projects/$PNAME: $PLINES lines (budget: 60)"
+        MEM_ISSUES=$((MEM_ISSUES + 1))
+      fi
+    done
+
+    # Row 1: shared/global/ltm.md budget (60 lines)
+    if [ -f "$MEM_DIR/shared/global/ltm.md" ]; then
+      local LTM_LINES
+      LTM_LINES=$(wc -l < "$MEM_DIR/shared/global/ltm.md" 2>/dev/null || echo "0")
+      if [[ "$LTM_LINES" =~ ^[0-9]+$ ]] && [ "$LTM_LINES" -gt 60 ]; then
+        warn "shared/global/ltm.md: $LTM_LINES lines (budget: 60)"
+        MEM_ISSUES=$((MEM_ISSUES + 1))
+      fi
+    fi
+
+    # Stale project check (>30 days since file modification)
+    local NOW_EPOCH
+    NOW_EPOCH=$(date +%s)
+    local STALE_DAYS=30
+    for pfile in "$MEM_DIR"/shared/projects/*.md; do
+      [ -f "$pfile" ] || continue
+      local PNAME MTIME AGE_DAYS
+      PNAME=$(basename "$pfile" .md)
+      MTIME=$(stat -c %Y "$pfile" 2>/dev/null || echo "$NOW_EPOCH")
+      if [[ "$MTIME" =~ ^[0-9]+$ ]]; then
+        AGE_DAYS=$(( (NOW_EPOCH - MTIME) / 86400 ))
+        if [ "$AGE_DAYS" -gt "$STALE_DAYS" ]; then
+          warn "shared/projects/$PNAME.md: not updated in ${AGE_DAYS}d (>${STALE_DAYS}d)"
+        fi
+      fi
+    done
   fi
+
+  # Row 2: class mtm.md budget (40 lines each)
+  for mtm in "$MEM_DIR"/class/*/mtm.md; do
+    [ -f "$mtm" ] || continue
+    local CNAME CLINES
+    CNAME=$(basename "$(dirname "$mtm")")
+    CLINES=$(wc -l < "$mtm" 2>/dev/null || echo "0")
+    if [[ "$CLINES" =~ ^[0-9]+$ ]] && [ "$CLINES" -gt 40 ]; then
+      warn "class/$CNAME/mtm.md: $CLINES lines (budget: 40)"
+      MEM_ISSUES=$((MEM_ISSUES + 1))
+    fi
+  done
+
+  # Row 3: instance MEMORY.md cell-specific budgets
+  for imem in "$MEM_DIR"/instance/*/MEMORY.md; do
+    [ -f "$imem" ] || continue
+    local INAME ILINES IBUDGET
+    INAME=$(basename "$(dirname "$imem")")
+    ILINES=$(wc -l < "$imem" 2>/dev/null || echo "0")
+    # Budget: 80 for meta, 40 for orch-type, 30 for others
+    case "$INAME" in
+      meta) IBUDGET=80 ;;
+      orch*|o-*) IBUDGET=40 ;;
+      *) IBUDGET=30 ;;
+    esac
+    if [[ "$ILINES" =~ ^[0-9]+$ ]] && [ "$ILINES" -gt "$IBUDGET" ]; then
+      warn "instance/$INAME/MEMORY.md: $ILINES lines (budget: $IBUDGET)"
+      MEM_ISSUES=$((MEM_ISSUES + 1))
+    fi
+  done
 
   if [ "$MEM_ISSUES" -gt 0 ]; then
     SUMMARY_MEMORY="⚠️  memory ($MEM_COUNT dirs) | $MEM_ISSUES issues"

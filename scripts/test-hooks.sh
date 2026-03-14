@@ -200,12 +200,11 @@ mkdir -p "$FAKE_NUDGE_DIR"
 echo "150" > "$FAKE_NUDGE_DIR/orch-test"
 echo "orch-test" > "$FAKE_TIMER_DIR/hooktest-p11.agent"
 TEST_JSON='{"session_id":"hooktest-p11","tool_name":"Read"}'
-run_hook "$TIMER_HOOK" "$TEST_JSON"
-STDERR=$(last_stderr)
-if [ ! -f "$FAKE_NUDGE_DIR/orch-test" ] && echo "$STDERR" | grep -q "NUDGE"; then
+NUDGE_STDOUT=$(run_hook "$TIMER_HOOK" "$TEST_JSON")
+if [ ! -f "$FAKE_NUDGE_DIR/orch-test" ] && echo "$NUDGE_STDOUT" | grep -q "NUDGE"; then
   pass "P1.1 nudge delivery (file consumed, message emitted)"
 else
-  fail "P1.1 nudge delivery" "file not consumed or no NUDGE in stderr"
+  fail "P1.1 nudge delivery" "file not consumed or no NUDGE in output"
 fi
 rm -f "$FAKE_TIMER_DIR"/hooktest-p11.* 2>/dev/null
 

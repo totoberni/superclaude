@@ -1,6 +1,7 @@
 ---
 name: good-idea
-description: "Post-session retrospective: identifies effective solutions and patterns, records them for reuse."
+description: "Record effective solutions and patterns for reuse across sessions."
+category: memory
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[project-name or 'all']"
@@ -14,6 +15,19 @@ Run a post-session retrospective to identify and record effective solutions, pat
 **Scope**: $ARGUMENTS (project name, or "all" for cross-project patterns)
 
 ## Procedure
+
+### 0. Agent Class Detection
+
+Determine your agent class for dual-write:
+
+1. Infer class from your agent name:
+   - Names starting with `o-` or `orch` → class `orch`
+   - `scaf` or `scaffolder` → class `scaf`
+   - `meta` → class `meta`
+   - `w-<type>` prefix → class `w-<type>` (e.g., `w-debugger-1` → `w-debugger`)
+2. Check if `~/.claude/agent-memory/class/<class>/mtm.md` exists
+   - **Yes**: dual-write enabled — class-applicable wins go here too
+   - **No**: primary write only (don't create class dirs)
 
 ### 1. Gather Evidence
 
@@ -61,7 +75,8 @@ Look for patterns in these categories:
 | Category | Scope | Storage Location |
 |----------|-------|------------------|
 | **Project win** | One project | `~/.claude/agent-memory/shared/projects/<project>.md` → Wins table |
-| **Cross-project win** | 2+ projects | `~/.claude/agent-memory/shared/wins.md` → Index |
+| **Cross-project win** | 2+ projects | `~/.claude/agent-memory/shared/global/ltm.md` → Index |
+| **Class-level win** | Applies as this agent class on any project | `~/.claude/agent-memory/class/<class>/mtm.md` → Wins table |
 | **Promotable pattern** | All agents, all projects | `~/.claude/rules/20-tool-conventions.md` (if tool-related) |
 
 **Important**: Project wins go to `shared/projects/`, NOT to any orch-specific memory. This ensures all orch instances (current and future) working on the same project can see past wins.
@@ -70,7 +85,8 @@ Look for patterns in these categories:
 
 Before recording, search existing files for the same pattern:
 - Read `~/.claude/agent-memory/shared/projects/<project>.md` — already recorded?
-- Read `~/.claude/agent-memory/shared/wins.md` — already a cross-project win?
+- Read `~/.claude/agent-memory/shared/global/ltm.md` — already a cross-project win?
+- Read `~/.claude/agent-memory/class/<class>/mtm.md` — already a class-level win?
 - Read `~/.claude/rules/20-tool-conventions.md` — already a rule?
 
 If already recorded, skip. Don't duplicate.
@@ -103,16 +119,26 @@ If the project file doesn't exist yet, create it with the standard template:
 (none yet)
 ```
 
-**For cross-project wins** — append to `~/.claude/agent-memory/shared/wins.md` Index:
+**For cross-project wins** — append to `~/.claude/agent-memory/shared/global/ltm.md` Index:
 
 ```markdown
 | CW-<N> | <Pattern> | <Source Projects> | No |
 ```
 
+**Dual-write to class memory** (secondary, additive) — for each win, ask: "Is this specific to this project's codebase, or would it help any agent of my class on any project?" If class-applicable AND dual-write is enabled (Step 0), append to `~/.claude/agent-memory/class/<class>/mtm.md` Wins table:
+
+```markdown
+| <next-ID> | <Pattern> | <One-liner> [<project>] | <Source ref> |
+```
+
+- Tag with `[<project>]` to track origin
+- If `--universal` flag was passed, prefix the one-liner with `[PROMOTE]` — signals v3 /lt-mem for promotion to global LTM
+- If class dir doesn't exist, skip secondary write silently
+
 ### 7. Check Promotion Threshold
 
 For any project win marked `Reusable? = Yes` and seen in 2+ projects:
-1. Add to `~/.claude/agent-memory/shared/wins.md` as a cross-project win
+1. Add to `~/.claude/agent-memory/shared/global/ltm.md` as a cross-project win
 2. If it's a tool pattern, promote to `~/.claude/rules/20-tool-conventions.md`
 3. Mark as `Promoted` in the source project files
 
@@ -136,4 +162,8 @@ Present a summary table:
 
 ## Memory Locations
 
-Same as `/mistake` skill. Project wins → `shared/projects/<project>.md`. Cross-project → `shared/wins.md`. Write scopes: rule 12.
+- **Project**: `~/.claude/agent-memory/shared/projects/<project>.md` (primary)
+- **Class**: `~/.claude/agent-memory/class/<class>/mtm.md` (secondary, dual-write)
+- **Cross-project**: `~/.claude/agent-memory/shared/global/ltm.md`
+- **Tool patterns**: `~/.claude/rules/20-tool-conventions.md` (promotable)
+- Write scopes: rule 12. Class writes are layer 2 only — never write to `shared/global/ltm.md` (reserved for v3 /lt-mem).

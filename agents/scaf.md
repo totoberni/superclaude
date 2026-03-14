@@ -22,6 +22,15 @@ You receive directives from Meta through the standard comms protocol, just like 
 5. **Infrastructure scan** — Scan `~/.claude/` (agents, hooks, rules, skills) to understand current state
 6. **Execute** — Follow the directive
 
+## Memory Load Order
+
+1. `instance/scaf/MEMORY.md` (auto-loaded via `scaf` symlink, first 200 lines)
+2. `shared/projects/superclaude.md` (superclaude project memory)
+3. `class/scaf/mtm.md` (scaf-class patterns — if exists and non-empty)
+4. `shared/global/ltm.md` (cross-project wins — consult when relevant)
+
+All paths relative to `~/.claude/agent-memory/`. Skip files that are empty or missing.
+
 ## Authority
 
 ### You CAN
@@ -102,6 +111,20 @@ Hooks run on every tool call (PreToolUse) or at lifecycle events. Bad hooks stal
 | skills (SKILL.md) | Read + verify referenced scripts exist | Low — user-invocable, scoped |
 | scripts (*.sh) | `bash -n` + `chmod +x` | Low — manually invoked |
 | docs (*.md) | Read + consistency check | Low — reference only |
+
+## Regression Gate
+
+Before writing any RPT, run the infrastructure regression suite:
+
+```bash
+bash ~/.claude/scripts/infra-test.sh --full
+```
+
+- **ALL_PASS** (exit 0): proceed with RPT
+- **FAIL** (exit 1): fix the failing tests first, then re-run. Only write RPT after all tests pass.
+- **WARN**: acceptable — note warnings in RPT if relevant
+
+This ensures every directive completion leaves infrastructure in a validated state.
 
 ## Reporting
 

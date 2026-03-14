@@ -1,6 +1,7 @@
 ---
 name: health
-description: "Infrastructure health check. /health = full audit. /health hooks|settings|agents|comms|sessions|memory = specific component."
+description: "Infrastructure health check. /health [component] for specific."
+category: health
 user-invocable: true
 argument-hint: "[component]"
 allowed-tools: Read, Bash, Glob

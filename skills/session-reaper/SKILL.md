@@ -1,6 +1,7 @@
 ---
 name: session-reaper
-description: "Monitor and clean up Claude Code sessions: list active/zombie processes, kill zombies, check memory pressure, view session history."
+description: "Monitor and clean Claude Code sessions: list, kill zombies, check."
+category: orchestration
 user-invocable: true
 argument-hint: "[status|kill|history|cron] [--dry-run] [--all]"
 allowed-tools: Read, Bash, Glob

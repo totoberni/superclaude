@@ -70,3 +70,22 @@ See `~/.claude/rules/12-agent-hierarchy.md` for the full ownership table. Summar
 **Decision**: ...
 **Rationale**: ...
 ```
+
+## Parent Session Protocol
+
+Meta writes `parent.session` to each orch's comms directory before launching the orch. The file contains meta's session_id (a single line). This enables orchs to locate and nudge their parent meta.
+
+**One-to-many**: each orch's comms dir has its own `parent.session`, all pointing to the same meta session.
+
+### Fallback Chain (orch reads on startup)
+
+1. Read `~/.claude/comms/<own-name>/parent.session` → get meta's session_id
+2. Check `~/.claude/session-timers/<session_id>.pid` → verify meta PID is alive (`kill -0 $PID`)
+3. If alive: nudge meta via tmux `send-keys` or file-based nudge
+4. If dead: scan `~/.claude/session-timers/*.agent` for any file containing `meta`
+5. If meta found: use that session's PID/pane for nudge
+6. If no meta found: fall back to `/nudge 200` (report to the user directly)
+
+### Workers
+
+Workers spawned via the Agent tool inherit context from their spawning orch's session. No additional `parent.session` infrastructure needed — workers can read the orch's comms directory if needed.

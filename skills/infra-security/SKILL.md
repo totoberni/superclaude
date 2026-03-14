@@ -1,6 +1,7 @@
 ---
 name: infra-security
-description: "Security checklist for ~/.claude/ infrastructure changes. Loaded by w-reviewer for infra reviews."
+description: "Security checklist for ~/.claude/ changes. For w-reviewer infra."
+category: meta
 user-invocable: false
 ---
 

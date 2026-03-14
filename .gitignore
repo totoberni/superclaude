@@ -36,15 +36,21 @@ comms/orch-*/
 comms/_archive/
 
 # Meta memory (cross-project operational context)
+# Covers both legacy flat path and v2 matrix path
 agent-memory/meta/
+agent-memory/instance/meta/
 
-# Auto-generated snapshots and archives
+# Auto-generated snapshots and archives (both symlink and actual paths)
 agent-memory/_compact-snapshots/
 agent-memory/_archive/
+agent-memory/_system/_compact-snapshots/
+agent-memory/_system/_archive/
 
-# Project-orch instance memory
+# Project-orch instance memory (both legacy flat and v2 matrix paths)
 agent-memory/o-*/
 agent-memory/orch-*/
+agent-memory/instance/o-*/
+agent-memory/instance/orch-*/
 
 # Project-specific shared knowledge (keep only superclaude.md)
 agent-memory/shared/projects/*

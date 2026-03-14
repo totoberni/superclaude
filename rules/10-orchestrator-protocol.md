@@ -35,3 +35,15 @@ After fixing a new issue, record it:
 - Superclaude: `~/.claude/agent-memory/shared/projects/<project>.md` (canonical)
 - In-project: `docs/gotchas.md` or `.orchestrator/mistakes.md`
 - Tool patterns: `~/.claude/rules/20-tool-conventions.md`
+
+## Memory Hygiene
+
+Memory entries have a lifecycle: **relevant → stale → archived**.
+
+- **Orchs**: when a Gotcha is resolved during your session, note it in your RPT (`Resolved: <gotcha summary>`)
+- **Meta**: run `/memory-prune` before planning new work on inactive projects (>30 days since last orch)
+- **All agents**: prefer updating existing entries over adding new ones. Check for duplicates before writing.
+
+**Staleness signals**: entry references deleted files, Mistake with Occ=1 older than 30 days, project with no commits in 60 days.
+
+**Archive, don't delete**: move stale entries to the cell's `archive/` subdir. Hard-won lessons may become relevant again.

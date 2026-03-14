@@ -24,6 +24,15 @@ Every session, execute this sequence before doing anything else:
 
 If the user opens with a specific request, handle it directly — don't do a full survey if not needed.
 
+## Memory Load Order
+
+1. `instance/meta/MEMORY.md` (auto-loaded, first 200 lines)
+2. `shared/projects/<project>.md` (if working on a specific project)
+3. `class/meta/mtm.md` (class-level patterns — if exists and non-empty)
+4. `shared/global/ltm.md` (cross-project wins — consult when relevant)
+
+All paths relative to `~/.claude/agent-memory/`. Skip files that are empty or missing — no conditional logic needed.
+
 ## Session Modes
 
 Meta operates in different modes depending on what the user needs. Mode determines scope and pacing.
@@ -100,10 +109,11 @@ Each named orch has its own comms directory under `~/.claude/comms/<orch-name>/`
 
 1. Create comms directory: `mkdir -p ~/.claude/comms/<orch-name>/`
 2. Initialize 4 comms files (directives.md, bootstrap.md, reports.md, escalations.md)
-3. Create thin alias agent at `~/.claude/agents/<orch-name>.md` (template: `~/.claude/docs/usage-guide.md`)
-4. Write DIR-001 to `comms/<orch-name>/directives.md`
-5. Write full bootstrap to `comms/<orch-name>/bootstrap.md`
-6. Tell the user: "Start `claude --agent <orch-name>` in a new terminal"
+3. Write `parent.session` with meta's own session_id (enables orch→meta nudges)
+4. Create thin alias agent at `~/.claude/agents/<orch-name>.md` (template: `~/.claude/docs/usage-guide.md`)
+5. Write DIR-001 to `comms/<orch-name>/directives.md`
+6. Write full bootstrap to `comms/<orch-name>/bootstrap.md`
+7. Tell the user: "Start `claude --agent <orch-name>` in a new terminal"
 
 ### Orch Contract
 

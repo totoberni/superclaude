@@ -1,6 +1,7 @@
 ---
 name: plan
-description: "Creates or updates a project plan, either in ~/.claude/plans/ (superclaude) or .orchestrator/ (standalone)."
+description: "Create or update a project plan (superclaude or in-project)."
+category: orchestration
 user-invocable: true
 argument-hint: "<project-goal>"
 context: fork

@@ -1,6 +1,7 @@
 ---
 name: orchestrator-patterns
-description: "Provides templates and conventions for orchestrated projects. Supports both superclaude (~/.claude/plans/) and in-project (.orchestrator/) patterns."
+description: "Templates and conventions for orchestrated projects."
+category: meta
 user-invocable: true
 argument-hint: "[project-name]"
 ---

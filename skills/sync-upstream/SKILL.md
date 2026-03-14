@@ -1,6 +1,7 @@
 ---
 name: sync-upstream
-description: "Sync upstream Claude Code reference library. /sync-upstream = pull + diff. /sync-upstream audit = full comparison."
+description: "Sync upstream Claude Code reference library and diff changes."
+category: meta
 user-invocable: true
 argument-hint: "[audit]"
 allowed-tools: Read, Bash, Glob, Grep
@@ -81,6 +82,6 @@ Full comparison of our infrastructure against the upstream catalog.
 
 - The upstream clone is **READ-ONLY** — never modify files in `~/.claude/upstream/`
 - This skill is **informational** — report but do NOT auto-implement features
-- Implementation decisions go through Meta -> directive -> scaffolder flow
+- Implementation decisions go through Meta -> directive -> scaf flow
 - Don't read the entire CSV — use targeted grep for relevant categories
 - If the upstream dir doesn't exist, tell the user to run: `git clone --depth 1 https://github.com/hesreallyhim/awesome-claude-code.git ~/.claude/upstream/awesome-claude-code`

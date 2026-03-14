@@ -1,6 +1,7 @@
 ---
 name: commit
-description: "Creates a well-formed conventional commit by analyzing staged changes and drafting a message."
+description: "Creates a conventional commit with auto-detected type and TDD check."
+category: workflow
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[optional message override]"
@@ -15,26 +16,36 @@ Create a conventional commit for staged changes.
 
 1. Run `git status` to see all changes
 2. Run `git diff --cached` to analyze staged changes (if nothing staged, run `git diff` for unstaged)
-3. Analyze the nature of changes:
-   - New feature → `feat:`
-   - Bug fix → `fix:`
-   - Tests → `test:`
-   - Documentation → `docs:`
-   - Refactoring → `refactor:`
-   - Build/deps → `chore:`
-4. Draft a concise commit message (1-2 sentences, focus on WHY not WHAT)
-5. If $ARGUMENTS provided, use it as the message instead
-6. Present the message for the user's approval before committing
-7. Stage relevant files by name (never `git add -A`)
-8. Commit with:
-   ```
-   git commit -m "$(cat <<'EOF'
-   <type>: <message>
+3. **TDD check**: check if the session's TDD counter (`~/.claude/session-timers/*.tdd`) is >0. If edits happened without tests, warn before committing.
+4. Auto-detect change type from diff:
+   - New files with business logic → `feat:`
+   - Modified files fixing behavior → `fix:`
+   - Test files only → `test:`
+   - Markdown/docs only → `docs:`
+   - Config/deps/build files → `chore:`
+   - Restructuring without behavior change → `refactor:`
+   - Formatting only → `style:`
+   - CI/CD files → `ci:`
+   - Performance improvements → `perf:`
+5. Draft a concise commit message (1-2 sentences, focus on WHY not WHAT)
+6. **Format**: `<type>(<optional scope>): <description>` — enforce conventional format
+7. If $ARGUMENTS provided, use it as the message instead (still validate format)
+8. Present the message for the user's approval before committing
+9. Stage relevant files by name (never `git add -A`)
+10. Check for WSL permission-only diffs (`git diff --cached --summary` for mode changes with 0 insertions/deletions) — unstage those
+11. Commit with:
+    ```
+    git commit -m "$(cat <<'EOF'
+    <type>: <message>
 
-   Co-Authored-By: Claude <noreply@anthropic.com>
-   EOF
-   )"
-   ```
-9. Run `git status` to verify
+    Co-Authored-By: Claude <noreply@anthropic.com>
+    EOF
+    )"
+    ```
+12. Run `git status` to verify
 
-IMPORTANT: Never commit .env, credentials, or secret files. Warn if detected.
+## Guards
+
+- Never commit .env, credentials, or secret files. Warn if detected.
+- Never commit mode-only diffs (WSL permission changes)
+- Warn if no tests ran this session (TDD counter > 0)

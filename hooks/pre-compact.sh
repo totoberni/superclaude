@@ -11,7 +11,7 @@ INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null) || SESSION_ID="unknown"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 
-SNAPSHOT_DIR="$HOME/.claude/agent-memory/_compact-snapshots"
+SNAPSHOT_DIR="$HOME/.claude/agent-memory/_system/_compact-snapshots"
 mkdir -p "$SNAPSHOT_DIR"
 
 SNAPSHOT_FILE="$SNAPSHOT_DIR/compact-${TIMESTAMP}-${SESSION_ID:0:8}.md"

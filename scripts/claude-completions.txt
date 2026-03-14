@@ -1,0 +1,37 @@
+# Auto-generated from ~/.claude/skills/ — do not edit manually
+# Regenerate: bash ~/.claude/scripts/generate-completions.sh
+# Usage: rlwrap -f ~/.claude/scripts/claude-completions.txt claude
+
+/brainstorm
+/commit
+/compact-mem
+/design-review
+/experiment
+/fix-issue
+/good-idea
+/handoff
+/health
+/hpc
+/memory-search
+/mistake
+/nudge
+/orchestrator-patterns
+/plan
+/pleh
+/portfolio
+/pr
+/push
+/rb
+/remember
+/research
+/review
+/sanitize-mem
+/sanity-check
+/session-reaper
+/status
+/sync-upstream
+/tdd
+/test-infra
+/test-scaffold
+/threat-model
+/wrap-up

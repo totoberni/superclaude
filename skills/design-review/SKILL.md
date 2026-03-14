@@ -1,6 +1,7 @@
 ---
 name: design-review
 description: "Invoke a design review of frontend changes. /design-review [PR#|branch|path]"
+category: meta
 user-invocable: true
 argument-hint: "[PR-number | branch-name | file-path]"
 allowed-tools: Read, Glob, Grep, Bash, Agent

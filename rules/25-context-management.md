@@ -27,6 +27,7 @@ Timer files per session in `~/.claude/session-timers/`:
 - `<session_id>.agent` — agent name
 - `<session_id>.pid` — claude process PID (for liveness checks)
 - `<session_id>.override` — timer bypass (created manually by the user)
+- `<session_id>.context-warned` — one-shot flag for memory footprint warning
 
 ## Periodic Checkpointing (Orchs)
 
@@ -69,7 +70,7 @@ Context compaction can happen at any time when the conversation grows large. Aut
 
 ### Stash Procedure
 
-Write recovery context to `~/.claude/agent-memory/<your-agent-name>/MEMORY.md`:
+Write recovery context to `~/.claude/agent-memory/instance/<your-agent-name>/MEMORY.md` (or via your root symlink `~/.claude/agent-memory/<your-agent-name>/MEMORY.md`):
 
 ```markdown
 ## Recovery Context (auto-stash)
@@ -89,7 +90,7 @@ Then update your state file (`state-<X>.md`) with current task progress.
 
 The `pre-compact.sh` hook auto-snapshots state files. After compaction, resume in this order:
 
-1. `~/.claude/agent-memory/_compact-snapshots/` (latest snapshot)
+1. `~/.claude/agent-memory/_system/_compact-snapshots/` (latest snapshot)
 2. Your `MEMORY.md` recovery context
 3. Your state file
 4. Your latest report
@@ -113,6 +114,18 @@ The `pre-compact.sh` hook auto-snapshots state files. After compaction, resume i
 2. Update state file + write RPT to reports.md
 3. Run `/mistake <project>` and `/good-idea <project>` (captures learnings to shared memory)
 4. Write recovery context to MEMORY.md
+
+## Context Estimation Response
+
+When the context estimation hook (05-context-check.sh) fires a memory footprint warning, respond by agent type:
+
+| Agent | Action |
+|-------|--------|
+| **Orch / Scaffolder** | Run `/nudge <parent meta>` requesting `/mem-health` on their behalf |
+| **Meta** | Request the user's permission to run `/mem-health` (meta cannot self-authorize health checks) |
+| **Worker** | Report to spawning orch, which escalates if needed |
+
+The warning is informational — don't stop current work. Address it at the next natural break point.
 
 ## Efficiency
 

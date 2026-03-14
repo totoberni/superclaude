@@ -1,6 +1,7 @@
 ---
 name: debugging
 description: "Systematic debugging methodology. Loaded by w-debugger agent."
+category: meta
 user-invocable: false
 ---
 

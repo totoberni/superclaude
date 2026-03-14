@@ -238,7 +238,7 @@ if [ -d "$TIMER_DIR" ]; then
       else
         # Record session history before deleting
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] ended: agent=$AGENT duration=$DURATION pid=$TRACKED_PID session=${SID:0:8} exit=reaped" >> "$TIMER_DIR/session-history.log" 2>/dev/null || true
-        rm -f "$TIMER_DIR/${SID}".{start,agent,pid,override,calls}
+        rm -f "$TIMER_DIR/${SID}".{start,agent,pid,override,calls,tdd,context-warned}
         echo "Cleaned timer files: session=${SID:0:8}... agent=$AGENT duration=$DURATION (PID=$TRACKED_PID dead)"
       fi
       CLEANED_FILES=$((CLEANED_FILES + 1))

@@ -41,7 +41,7 @@ When ready to enable, add to `~/.claude/settings.json` under a new `mcpServers` 
 }
 ```
 
-**Important**: Do NOT add this config until explicitly instructed by the user. The scaffolder must handle the settings.json edit with the standard backup/validate/restore protocol.
+**Important**: Do NOT add this config until explicitly instructed by the user. Scaf must handle the settings.json edit with the standard backup/validate/restore protocol.
 
 ## Agent Updates (when ready)
 

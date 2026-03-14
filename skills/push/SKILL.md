@@ -1,6 +1,7 @@
 ---
 name: push
 description: "Toggle git push permissions on/off in settings.json."
+category: workflow
 user-invocable: true
 argument-hint: "{true|false}"
 allowed-tools: Read, Bash, Edit

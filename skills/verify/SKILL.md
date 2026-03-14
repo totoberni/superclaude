@@ -1,6 +1,7 @@
 ---
 name: verify
-description: "Enforces evidence-before-claims. Loaded by orch agents before writing RPTs. NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE."
+description: "Enforce evidence-before-claims. Loaded by orch before writing RPTs."
+category: workflow
 user-invocable: false
 ---
 

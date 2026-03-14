@@ -1,6 +1,7 @@
 ---
 name: mistake
-description: "Post-session retrospective: identifies mistakes, records them, and promotes recurring patterns to rules."
+description: "Record mistakes and promote recurring patterns to prevention rules."
+category: memory
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[project-name or 'all']"
@@ -14,6 +15,19 @@ Run a post-session retrospective to identify and record mistakes.
 **Scope**: $ARGUMENTS (project name, or "all" for cross-project patterns)
 
 ## Procedure
+
+### 0. Agent Class Detection
+
+Determine your agent class for dual-write:
+
+1. Infer class from your agent name:
+   - Names starting with `o-` or `orch` → class `orch`
+   - `scaf` or `scaffolder` → class `scaf`
+   - `meta` → class `meta`
+   - `w-<type>` prefix → class `w-<type>` (e.g., `w-debugger-1` → `w-debugger`)
+2. Check if `~/.claude/agent-memory/class/<class>/mtm.md` exists
+   - **Yes**: dual-write enabled — class-applicable mistakes go here too
+   - **No**: primary write only (don't create class dirs)
 
 ### 1. Gather Evidence
 
@@ -51,6 +65,7 @@ For every mistake or pattern found, classify its scope:
 | Category | Scope | Storage Location |
 |----------|-------|------------------|
 | **Project mistake/gotcha** | One project's codebase/setup | `~/.claude/agent-memory/shared/projects/<project>.md` → Mistakes table |
+| **Class-level mistake** | Applies to any agent of this class | `~/.claude/agent-memory/class/<class>/mtm.md` → Mistakes table |
 | **Universal tool pattern** | All agents, all projects | `~/.claude/rules/20-tool-conventions.md` |
 | **Agent operational pattern** | One agent type | That agent's `~/.claude/agent-memory/<agent>/MEMORY.md` |
 
@@ -61,6 +76,7 @@ For every mistake or pattern found, classify its scope:
 Before recording, search existing files for the same pattern:
 - Read `~/.claude/rules/20-tool-conventions.md` — already a rule?
 - Read `~/.claude/agent-memory/shared/projects/<project>.md` — already recorded for this project?
+- Read `~/.claude/agent-memory/class/<class>/mtm.md` — already a class-level mistake?
 - Read `~/.claude/agent-memory/<current-agent>/MEMORY.md` — already in agent memory?
 
 If already recorded, increment the `Occurrences` count instead of adding a duplicate.
@@ -107,6 +123,16 @@ If the project file doesn't exist yet, create it with the standard template:
 
 **For agent operational patterns** — append to the relevant section in `~/.claude/agent-memory/<agent>/MEMORY.md`. Keep it to 1-2 lines. If MEMORY.md is approaching 200 lines, create a topic file (e.g., `~/.claude/agent-memory/<agent>/patterns.md`) and link from MEMORY.md.
 
+**Dual-write to class memory** (secondary, additive) — for each mistake, ask: "Is this specific to this project's codebase, or would any agent of my class hit this on any project?" If class-applicable AND dual-write is enabled (Step 0), append to `~/.claude/agent-memory/class/<class>/mtm.md` Mistakes table:
+
+```markdown
+| <next-ID> | <Summary> [<project>] | <Prevention Rule> | 1 |
+```
+
+- Tag with `[<project>]` to track origin
+- If `--universal` flag was passed, prefix the summary with `[PROMOTE]` — signals v3 /lt-mem for promotion to global LTM
+- If class dir doesn't exist, skip secondary write silently
+
 ### 6. Check Promotion Threshold
 
 For any project mistake with `Occurrences >= 2` (same pattern in different contexts):
@@ -134,9 +160,9 @@ Present a summary table:
 
 ## Memory Locations
 
-- **Project**: `~/.claude/agent-memory/shared/projects/<project>.md` (all agents)
-- **Cross-project**: `~/.claude/agent-memory/shared/wins.md` (all agents)
+- **Project**: `~/.claude/agent-memory/shared/projects/<project>.md` (primary)
+- **Class**: `~/.claude/agent-memory/class/<class>/mtm.md` (secondary, dual-write)
+- **Cross-project**: `~/.claude/agent-memory/shared/global/ltm.md`
 - **Tool patterns**: `~/.claude/rules/20-tool-conventions.md` (auto-loaded)
 - **Agent-specific**: `~/.claude/agent-memory/<agent>/MEMORY.md`
-
-Write scopes: see rule 12 (auto-loaded).
+- Write scopes: rule 12. Class writes are layer 2 only — never write to `shared/global/ltm.md` (reserved for v3 /lt-mem).

@@ -16,9 +16,9 @@ When a useful upstream pattern is identified:
 
 1. **Evaluate**: Does it solve a real problem we have? (Not just "cool to have")
 2. **Adapt**: Our infrastructure has specific conventions (comms protocol, hierarchy, memory filter). Upstream patterns must be adapted, not copy-pasted.
-3. **Directive**: Features requiring implementation go through the normal directive flow (Meta writes DIR -> scaffolder executes).
+3. **Directive**: Features requiring implementation go through the normal directive flow (Meta writes DIR -> scaf executes).
 4. **Propagate**: Features that apply to all agents go into rules or hooks. Features for specific agents go into their definitions or skills.
 
 ## Stay Current
 
-Feature updates and upgrades from the upstream reference must be applied to all available agents where applicable, unless explicitly excluded. The scaffolder is responsible for evaluating and implementing relevant updates.
+Feature updates and upgrades from the upstream reference must be applied to all available agents where applicable, unless explicitly excluded. The scaf is responsible for evaluating and implementing relevant updates.

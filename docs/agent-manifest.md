@@ -2,98 +2,120 @@
 
 Quick reference for all superclaude agents. Source of truth: the agent files themselves.
 
-## Active Agents
+## Active Agents (12)
 
 | File | Tier | Model | Purpose | Invocation |
 |------|------|-------|---------|------------|
 | `meta.md` | Strategic | opus | Cross-project supervision, plans, directives | `claude --agent meta` |
-| `scaffolder.md` | Infrastructure | opus | ~/.claude/ infrastructure edits | `claude --agent scaffolder` |
+| `scaf.md` | Infrastructure | opus | ~/.claude/ infrastructure edits | `claude --agent scaf` |
 | `orch.md` | Tactical (base) | opus | Project execution template | `claude --agent orch` |
-| `w-reviewer.md` | Worker | sonnet | Read-only code review | via Agent tool |
+| `w-reviewer.md` | Worker | sonnet | Read-only code review (3 modes) | via Agent tool |
 | `w-debugger.md` | Worker | sonnet | Runtime error diagnosis + fix | via Agent tool |
 | `w-refactorer.md` | Worker | sonnet | Targeted refactoring ops | via Agent tool |
 | `w-merger.md` | Worker | sonnet | Git merge conflict resolution | via Agent tool |
 | `w-planner.md` | Worker | opus | Plan creation/updates | via Agent tool |
 | `w-design-reviewer.md` | Worker | sonnet | Frontend design review (7-phase) | via Agent tool |
+| `o-example.md` | Named orch | opus | Example Project | `claude --agent o-example` |
+| `orch-example-course.md` | Named orch | opus | example-course-CWX | `claude --agent orch-example-course` |
+| `orch-example.md` | Named orch | opus | example-project Paper | `claude --agent orch-example` |
 
-## Named Orch Instances
+## Archived (4, in `_archive/`)
 
-| File | Project | Phase | Status |
-|------|---------|-------|--------|
-| `orch-example-project-p3.md` | EXAMPLE_PROJECT | P3 merge+tests | DIR-004 ready |
-| `orch-example-project-review-p3.1.md` | EXAMPLE_PROJECT | P3.1 review | Blocked |
-| `orch-example-project-review-p3.2.md` | EXAMPLE_PROJECT | P3.2 review | Blocked |
+| File | Reason |
+|------|--------|
+| `orch-example-project-p1.md` | P1 complete |
+| `orch-example-project-p2.md` | P2 complete |
+| `scaf2.md` | Track B complete, merged into scaf |
+| `o-example.md` | Decommissioned |
 
-## Archived (in `_archive/`)
+## Skills (46 total)
 
-| File | Project | Reason |
-|------|---------|--------|
-| `orch-example-project-p1.md` | EXAMPLE_PROJECT | P1 complete |
-| `orch-example-project-p2.md` | EXAMPLE_PROJECT | P2 complete |
+### By Category
 
-## Skills (30 total)
+| Category | Count | Skills |
+|----------|-------|--------|
+| workflow | 10 | brainstorm, commit, fix-issue, pr, push, rb, review, tdd, verify, wrap-up |
+| orchestration | 9 | delegate, handoff, nudge, observe, plan, pleh, portfolio, session-reaper, status |
+| meta | 9 | code-quality*, debugging*, design-review, infra-security*, orchestrator-patterns*, sanity-check, sync-upstream, test-infra*, test-scaffold |
+| memory | 8 | compact-mem, good-idea, mem-health, memory-prune, memory-search, mistake, remember, sanitize-mem |
+| domain | 6 | experiment, gas-patterns*, hpc, research, threat-model, wsl-gotchas* |
+| health | 4 | health, hook-health, skill-health, super-health |
 
-### User-Invocable (23)
+\* = agent-only (not user-invocable)
 
-| Skill | Purpose |
-|-------|---------|
-| `/brainstorm` | Design-before-implementation gate |
-| `/commit` | Draft conventional commit |
-| `/compact-mem` | Manual context stash |
-| `/design-review` | Frontend design review via w-design-reviewer |
-| `/fix-issue` | End-to-end GitHub issue fix pipeline |
-| `/good-idea` | Record wins to project memory (with learning type tags) |
-| `/handoff` | Session transition document |
-| `/health` | Infrastructure health check |
-| `/memory-search` | Search across all agent memory files |
-| `/mistake` | Record mistakes to project memory (with learning type tags) |
-| `/nudge` | Status report trigger (self or cross-agent) |
-| `/orchestrator-patterns` | Orch best practices reference |
-| `/plan` | Fork into w-planner agent |
-| `/pleh` | Fork read-only helper (self or cross-agent) |
-| `/pr` | Create GitHub PR |
-| `/push` | Toggle git push deny rules |
-| `/review` | Fork into w-reviewer agent |
-| `/sanitize-mem` | Clean auto-memory of stale entries |
-| `/sanity-check` | Code review an orch's changes |
-| `/session-reaper` | Monitor/clean claude processes |
-| `/status` | Dashboard: phase progress, git state |
-| `/sync-upstream` | Pull upstream reference updates |
-| `/tdd` | RED-GREEN-REFACTOR TDD cycle |
+### Agent-Only Skills (7)
 
-### Agent-Only (7)
+| Skill | Loaded By |
+|-------|-----------|
+| code-quality | w-reviewer, w-refactorer |
+| debugging | w-debugger |
+| delegate | orch |
+| gas-patterns | w-debugger |
+| infra-security | w-reviewer, scaf |
+| verify | orch |
+| wsl-gotchas | w-debugger |
 
-| Skill | Loaded By | Purpose |
-|-------|-----------|---------|
-| `code-quality` | w-reviewer | Code quality patterns |
-| `debugging` | w-debugger | Systematic debugging methodology + references |
-| `delegate` | orch | Fresh subagent per task with two-stage review |
-| `gas-patterns` | w-debugger | Google Apps Script patterns |
-| `infra-security` | scaffolder | Security patterns |
-| `verify` | orch | Evidence-before-claims gate |
-| `wsl-gotchas` | w-debugger | WSL-specific gotchas |
+## Hooks
+
+| Script | Event | Purpose |
+|--------|-------|---------|
+| `session-timer.sh` | SessionStart, PreToolUse | Dispatcher -> 8 modules |
+| `pre-compact.sh` | PreCompact | Snapshot state files |
+| `session-cleanup.sh` | SessionEnd | Clean timer files |
+
+### Modules (in `hooks/modules/`)
+
+| Module | Function |
+|--------|----------|
+| `00-parse.sh` | JSON input parsing |
+| `05-context-check.sh` | Context estimation |
+| `10-nudge.sh` | Advisory nudges |
+| `20-counter.sh` | TDD edit counter |
+| `25-commit-gate.sh` | Conventional commit check |
+| `30-timer.sh` | Session time enforcement |
+| `40-gc.sh` | PID-liveness GC |
+| `50-bootstrap.sh` | Bootstrap freshness |
+
+## Scripts (7)
+
+| Script | Purpose |
+|--------|---------|
+| `infra-test.sh` | Regression suite (25 tests) |
+| `test-hooks.sh` | Hook unit tests (33 tests) |
+| `infra-health.sh` | Infrastructure health check |
+| `session-reaper.sh` | Zombie session cleanup |
+| `session-status.sh` | Session status display |
+| `claude-completion.bash` | Bash completion for `--agent` |
+| `generate-completions.sh` | Regenerate slash command completions |
+
+## Memory Matrix
+
+| Row | Cell Count | Path Pattern |
+|-----|-----------|-------------|
+| Shared | 1 global + 7 projects | `shared/global/ltm.md`, `shared/projects/*.md` |
+| Class | 5 | `class/{meta,orch,scaf,w-debugger,w-reviewer}/mtm.md` |
+| Instance | 5 | `instance/{meta,scaf,o-example,orch-example-course,orch-example}/MEMORY.md` |
+
+Root symlinks: 5 instance shortcuts + `_archive`, `_compact-snapshots`.
 
 ## Infrastructure Counts
 
 | Category | Count |
 |----------|-------|
-| Agents (active) | 14 + 5 symlinks |
-| Agents (archived) | 2 |
-| Skills | 30 (23 user-invocable, 7 agent-only) |
+| Agents (active) | 12 |
+| Agents (archived) | 4 |
+| Skills | 46 (39 user-invocable, 7 agent-only) |
 | Rules | 8 |
-| Hooks | 3 scripts |
-| Scripts | 4 |
-| Comms dirs | 6 |
+| Hooks | 3 scripts + 8 modules |
+| Scripts | 7 |
+| Comms dirs | 4 active |
 | Allow rules | 47 |
 | Deny rules | 7 |
-
-## Backward Compatibility
-
-Old worker names (`code-reviewer`, `debugger`, `merge-resolver`, `refactorer`, `planner`) are symlinked to the new `w-` files. Both old and new names work with the Agent tool's `subagent_type` field.
+| Regression tests | 25 |
 
 ## Naming Convention
 
-- Singletons: bare name (`meta.md`, `scaffolder.md`, `orch.md`)
+- Singletons: bare name (`meta.md`, `scaf.md`, `orch.md`)
 - Workers: `w-{role}.md` (invoked via Agent tool, not `--agent`)
-- Named orchs: `orch-{project}-{phase}.md`
+- Named orchs: `o-{project}-{seq}.md` (e.g., `o-example`) or legacy `orch-{name}.md`
 - Archives: `_archive/{original-name}.md`

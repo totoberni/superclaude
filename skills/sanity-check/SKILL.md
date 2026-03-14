@@ -1,6 +1,7 @@
 ---
 name: sanity-check
-description: "Sanity-check an orch's changes: detect test-weakening, scope violations, generated file pollution, and semantic drift."
+description: "Detect test-weakening, scope violations, and drift in orch work."
+category: meta
 user-invocable: true
 argument-hint: "<orch-name>"
 context: fork

@@ -34,7 +34,7 @@ fi
 
 # Delete all timer files for this session (chmod first — start file may be read-only)
 chmod 644 "$TIMER_DIR/${SESSION_ID}.start" 2>/dev/null || true
-rm -f "$TIMER_DIR/${SESSION_ID}".{start,agent,pid,override,calls}
+rm -f "$TIMER_DIR/${SESSION_ID}".{start,agent,pid,override,calls,tdd,context-warned}
 
 # Record session history (structured log for analytics)
 HISTORY_FILE="$TIMER_DIR/session-history.log"

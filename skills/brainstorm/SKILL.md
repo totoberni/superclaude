@@ -1,6 +1,7 @@
 ---
 name: brainstorm
-description: "Design-before-implementation gate. Use before any creative work -- features, architecture, components. /brainstorm [topic]"
+description: "Design-before-implementation gate for features and architecture."
+category: workflow
 user-invocable: true
 argument-hint: "[topic or feature description]"
 allowed-tools: Read, Glob, Grep, Bash

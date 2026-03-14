@@ -1,6 +1,7 @@
 ---
 name: sanitize-mem
-description: "Audit and sanitize superclaude memory files: fix refs, dedup, move misplaced learnings, purge stale artifacts."
+description: "Audit memory files: fix refs, dedup, move misplaced entries."
+category: memory
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[scope: 'all' | 'project <name>' | 'agent <name>' | 'comms' | 'timers']"
@@ -34,7 +35,7 @@ Read all files in scope. Build a mental map of what each file contains.
 **File locations:**
 - Agent memories: `~/.claude/agent-memory/*/MEMORY.md`
 - Shared project memories: `~/.claude/agent-memory/shared/projects/*.md`
-- Cross-project wins: `~/.claude/agent-memory/shared/wins.md`
+- Cross-project wins: `~/.claude/agent-memory/shared/global/ltm.md`
 - Compact snapshots: `~/.claude/agent-memory/_compact-snapshots/*.md`
 - Comms: `~/.claude/comms/*/` (directives, bootstrap, reports, escalations per orch)
 - Session timers: `~/.claude/session-timers/`
@@ -58,7 +59,7 @@ Check each file for these problems (in priority order):
 |-------------|-------------------|-------------------|
 | Project-specific gotchas/patterns | `shared/projects/<project>.md` | Reference with path link |
 | Agent operational protocol | `agent-memory/<agent>/MEMORY.md` | Not duplicate rules/ content |
-| Cross-project wins | `shared/wins.md` | Reference, not duplicate |
+| Cross-project wins | `shared/global/ltm.md` | Reference, not duplicate |
 | Tool patterns | `rules/20-tool-conventions.md` | Reference, not duplicate |
 | Test quality standards | `agent-memory/orch/MEMORY.md` (base orch) | Inherit from base orch |
 

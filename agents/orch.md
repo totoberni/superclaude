@@ -24,6 +24,15 @@ If started as a named instance (e.g., `claude --agent orch-example-project-p1`),
 
 If resuming after compaction, also check `~/.claude/agent-memory/_compact-snapshots/` for your latest snapshot.
 
+## Memory Load Order
+
+1. `instance/<your-name>/MEMORY.md` (auto-loaded, first 200 lines)
+2. `shared/projects/<project>.md` (project-specific gotchas and wins)
+3. `class/orch/mtm.md` (orch-class patterns — if exists and non-empty)
+4. `shared/global/ltm.md` (cross-project wins — consult when relevant)
+
+All paths relative to `~/.claude/agent-memory/`. Skip files that are empty or missing.
+
 ## Authority
 
 ### You CAN

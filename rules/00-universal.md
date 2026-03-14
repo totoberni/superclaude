@@ -20,6 +20,12 @@
 - One logical commit per unit of work
 - WSL permission diffs (`755 → 644`): never commit — see `20-tool-conventions.md §WSL File Permissions`
 
+## Commit Protocol
+- **Format**: `<type>(<optional scope>): <description>` — type is one of: feat, fix, test, docs, chore, refactor, style, ci, perf, build
+- **Pre-commit check**: if no tests have run this session, consider running tests before committing
+- **Co-author**: all agent commits include `Co-Authored-By: Claude <noreply@anthropic.com>`
+- **Hook enforcement**: `25-commit-gate.sh` module soft-checks conventional format on every `git commit`
+
 ## Security
 - No secrets in code (check .env, credentials before committing)
 - No command injection, XSS, SQL injection
