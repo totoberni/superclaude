@@ -3,6 +3,7 @@ name: wsl-gotchas
 description: "WSL2 pitfalls for process, filesystem, networking, Git. For w-debugger."
 category: domain
 user-invocable: false
+disable-model-invocation: true
 ---
 
 # WSL Gotchas

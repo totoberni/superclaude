@@ -3,6 +3,7 @@ name: infra-security
 description: "Security checklist for ~/.claude/ changes. For w-reviewer infra."
 category: meta
 user-invocable: false
+disable-model-invocation: true
 ---
 
 # Infrastructure Security Checklist

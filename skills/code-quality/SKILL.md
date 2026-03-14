@@ -3,6 +3,7 @@ name: code-quality
 description: "Code quality checklist based on programming principles. For w-reviewer."
 category: meta
 user-invocable: false
+disable-model-invocation: true
 ---
 
 # Code Quality Checklist

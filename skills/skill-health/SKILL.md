@@ -80,19 +80,20 @@ Any output = 0 pts.
 
 ### 4. Referenced Scripts Exist (15 pts)
 
-Scan skill bodies for backtick-quoted paths and `$HOME`/`~/.claude` references:
+Scan skill bodies for backtick-quoted paths and `$HOME`/`~/.claude` references. Exclude template patterns (`<...>`, `$ARGUMENTS`, `*`), command-line arguments after paths, and runtime-created files (checkpoints, alerts):
 
 ```bash
 for d in "$SKILLS_DIR"/*/; do
   f="$d/SKILL.md"
   [ -f "$f" ] || continue
-  # Extract paths like ~/.claude/..., $HOME/.claude/..., scripts/*.sh
-  grep -oP '(?:`|")((?:\$HOME|~)/\.claude/[^`"]+)(?:`|")' "$f" 2>/dev/null | tr -d '`"'
-done | sort -u | while read -r p; do
+  grep -oP '(?:`|")((?:\$HOME|~)/\.claude/[^\s`"]+)(?:`|")' "$f" 2>/dev/null | tr -d '`"'
+done | sort -u | grep -vE '<[^>]+>|\$ARGUMENTS|\$\{|\*|^--|checkpoint|alert' | while read -r p; do
   expanded=$(echo "$p" | sed "s|~|$HOME|;s|\\\$HOME|$HOME|")
   [ -e "$expanded" ] || echo "BROKEN: $p"
 done
 ```
+
+Note: paths are extracted up to the first whitespace (`[^\s`"`]`), not just up to the quote/backtick. This prevents command arguments (e.g., `session-reaper.sh --dry-run`) from being treated as part of the path. Runtime files (checkpoints, alerts) are excluded — they exist only during execution.
 
 Score = `(total_refs - broken) / total_refs * 15`. Full 15 if no refs found.
 
@@ -129,16 +130,14 @@ done
 
 ### 7. Valid Agent References (10 pts)
 
-Skills that mention agent types (e.g., "spawn w-reviewer", "use w-debugger"):
+Skills that mention worker agent types (e.g., "spawn w-reviewer"). Uses word boundary to avoid false matches from compound words like "follow-up" or "new-ui":
 
 ```bash
 for d in "$SKILLS_DIR"/*/; do
   f="$d/SKILL.md"
   [ -f "$f" ] || continue
-  # Find references to w-* or agent names
-  grep -oP 'w-\w+|(?:spawn|use|delegate to) (\w+)' "$f" 2>/dev/null | while read -r ref; do
-    agent=$(echo "$ref" | grep -oP 'w-\w+' || echo "")
-    [ -z "$agent" ] && continue
+  # Extract full hyphenated worker names (word boundary prevents mid-word matches)
+  grep -oP '\bw-[\w-]+' "$f" 2>/dev/null | sort -u | while read -r agent; do
     [ -f "$HOME/.claude/agents/${agent}.md" ] || echo "BROKEN: $(basename "$d") -> $agent"
   done
 done
@@ -156,8 +155,9 @@ for d in "$SKILLS_DIR"/*/; do
   [ -f "$f" ] || continue
   UI=$(sed -n 's/^user-invocable: *//p' "$f" | tr -d ' ')
   [ "$UI" = "true" ] || continue
-  # Check for example/usage/procedure sections or code blocks
-  if grep -qiE '(## (Usage|Example|Procedure|How|Step)|```|^\$ARGUMENTS)' "$f" 2>/dev/null; then
+  # Check for example/usage/procedure/subcommand sections or code blocks
+  # Include domain-specific subcommand headers (e.g., ## paper, ## ablation)
+  if grep -qiE '(^## [A-Za-z]|```|\*\*Args\*\*:|\*\*Usage\*\*:|\$ARGUMENTS)' "$f" 2>/dev/null; then
     : # has examples
   else
     echo "NO_EXAMPLES: $(basename "$d")"

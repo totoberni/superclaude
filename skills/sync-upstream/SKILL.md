@@ -3,6 +3,7 @@ name: sync-upstream
 description: "Sync upstream Claude Code reference library and diff changes."
 category: meta
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "[audit]"
 allowed-tools: Read, Bash, Glob, Grep
 ---

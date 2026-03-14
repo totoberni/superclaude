@@ -3,6 +3,7 @@ name: plan
 description: "Create or update a project plan (superclaude or in-project)."
 category: orchestration
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "<project-goal>"
 context: fork
 agent: w-planner

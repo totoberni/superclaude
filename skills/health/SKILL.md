@@ -3,6 +3,7 @@ name: health
 description: "Infrastructure health check. /health [component] for specific."
 category: health
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "[component]"
 allowed-tools: Read, Bash, Glob
 ---

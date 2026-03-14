@@ -3,6 +3,7 @@ name: portfolio
 description: "Cross-orch dashboard: active orchs, status, escalations"
 category: orchestration
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "[--orch] [--worker] [--meta] [--scaf] [--all]"
 allowed-tools: Read, Glob, Grep, Bash
 ---

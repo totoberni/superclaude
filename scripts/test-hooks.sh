@@ -466,18 +466,18 @@ RC=$?
 STEP2=false
 [ $RC -eq 0 ] && STEP2=true
 
-# Step 3: Simulate 36-min session — warning
+# Step 3: Simulate 46-min session — warning (threshold: 45 min)
 chmod 644 "$FAKE_TIMER_DIR/hooktest-life.start" 2>/dev/null || true
-echo $(( $(date +%s) - 2160 )) > "$FAKE_TIMER_DIR/hooktest-life.start"
+echo $(( $(date +%s) - 2760 )) > "$FAKE_TIMER_DIR/hooktest-life.start"
 chmod 444 "$FAKE_TIMER_DIR/hooktest-life.start" 2>/dev/null || true
 run_hook "$TIMER_HOOK" "$TEST_JSON"
 STDERR=$(last_stderr)
 STEP3=false
 echo "$STDERR" | grep -qi "warning\|wrap up" && STEP3=true
 
-# Step 4: Simulate 42-min session — grace period, Read allowed
+# Step 4: Simulate 49-min session — grace period (threshold: 48 min), Read allowed
 chmod 644 "$FAKE_TIMER_DIR/hooktest-life.start" 2>/dev/null || true
-echo $(( $(date +%s) - 2520 )) > "$FAKE_TIMER_DIR/hooktest-life.start"
+echo $(( $(date +%s) - 2940 )) > "$FAKE_TIMER_DIR/hooktest-life.start"
 chmod 444 "$FAKE_TIMER_DIR/hooktest-life.start" 2>/dev/null || true
 run_hook "$TIMER_HOOK" "$TEST_JSON"
 RC4=$?
@@ -821,32 +821,32 @@ else
   fail "M6.7 mod_commit_gate" "no warning on bad commit format"
 fi
 
-# M6.8: mod_timer warning at 36min
+# M6.8: mod_timer warning at 46min (threshold: 45 min)
 echo "orch-timer-008" > "$FAKE_TIMER_DIR/hooktest-m68.agent"
 chmod 644 "$FAKE_TIMER_DIR/hooktest-m68.start" 2>/dev/null || true
-echo $(( $(date +%s) - 2160 )) > "$FAKE_TIMER_DIR/hooktest-m68.start"
+echo $(( $(date +%s) - 2760 )) > "$FAKE_TIMER_DIR/hooktest-m68.start"
 chmod 444 "$FAKE_TIMER_DIR/hooktest-m68.start" 2>/dev/null || true
 TEST_JSON='{"session_id":"hooktest-m68","tool_name":"Read"}'
 run_hook "$TIMER_HOOK" "$TEST_JSON" >/dev/null
 STDERR_M68=$(last_stderr)
 if echo "$STDERR_M68" | grep -qi "warning\|wrap up"; then
-  pass "M6.8 mod_timer (36min warning message)"
+  pass "M6.8 mod_timer (46min warning message)"
 else
-  fail "M6.8 mod_timer" "no warning at 36min: $STDERR_M68"
+  fail "M6.8 mod_timer" "no warning at 46min: $STDERR_M68"
 fi
 rm -f "$FAKE_TIMER_DIR"/hooktest-m68.* 2>/dev/null
 
-# M6.9: mod_timer hard block at 49min
+# M6.9: mod_timer hard block at 54min (threshold: 53 min)
 echo "orch-timer-009" > "$FAKE_TIMER_DIR/hooktest-m69.agent"
 chmod 644 "$FAKE_TIMER_DIR/hooktest-m69.start" 2>/dev/null || true
-echo $(( $(date +%s) - 2940 )) > "$FAKE_TIMER_DIR/hooktest-m69.start"
+echo $(( $(date +%s) - 3240 )) > "$FAKE_TIMER_DIR/hooktest-m69.start"
 chmod 444 "$FAKE_TIMER_DIR/hooktest-m69.start" 2>/dev/null || true
 TEST_JSON='{"session_id":"hooktest-m69","tool_name":"Read"}'
 run_hook "$TIMER_HOOK" "$TEST_JSON" >/dev/null 2>&1
 RC_M69=$?
 STDERR_M69=$(last_stderr)
 if [ $RC_M69 -eq 2 ] && echo "$STDERR_M69" | grep -qi "hard.*limit\|blocked"; then
-  pass "M6.9 mod_timer (49min hard block, exit 2)"
+  pass "M6.9 mod_timer (54min hard block, exit 2)"
 else
   fail "M6.9 mod_timer" "exit=$RC_M69, stderr: $STDERR_M69"
 fi

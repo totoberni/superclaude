@@ -3,6 +3,7 @@ name: status
 description: "Show project status from state files, git status, and plan."
 category: orchestration
 user-invocable: true
+disable-model-invocation: true
 allowed-tools: Read, Glob, Bash
 ---
 

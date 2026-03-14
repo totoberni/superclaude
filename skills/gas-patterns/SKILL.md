@@ -3,6 +3,7 @@ name: gas-patterns
 description: "Google Apps Script conventions and gotchas. For w-debugger."
 category: domain
 user-invocable: false
+disable-model-invocation: true
 ---
 
 # Google Apps Script Patterns

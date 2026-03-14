@@ -3,6 +3,7 @@ name: experiment
 description: "Track ML experiments: list, add, compare metrics, suggest next."
 category: domain
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "<list|add|compare|status|next> [args]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

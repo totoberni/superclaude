@@ -3,6 +3,7 @@ name: hpc
 description: "HPC workflow: generate SLURM scripts, rsync, parse job output."
 category: domain
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "<job|sync|status|env> [args]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

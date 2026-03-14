@@ -3,6 +3,7 @@ name: tdd
 description: "RED-GREEN-REFACTOR cycle for features and bugfixes."
 category: workflow
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "[task-description]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

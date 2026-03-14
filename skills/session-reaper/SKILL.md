@@ -3,6 +3,7 @@ name: session-reaper
 description: "Monitor and clean Claude Code sessions: list, kill zombies, check."
 category: orchestration
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "[status|kill|history|cron] [--dry-run] [--all]"
 allowed-tools: Read, Bash, Glob
 ---

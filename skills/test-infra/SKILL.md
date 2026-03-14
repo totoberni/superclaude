@@ -3,6 +3,7 @@ name: test-infra
 description: "Run infrastructure regression tests. --quick for fast subset."
 category: meta
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "[--quick | --component <name>]"
 allowed-tools: Read, Bash
 ---

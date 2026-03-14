@@ -3,6 +3,7 @@ name: pleh
 description: "Spawn parallel help. /pleh = self-help (2x). /pleh agent-name = cross-help (3x)."
 category: orchestration
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "[target-agent]"
 allowed-tools: Read, Glob, Grep, Agent, Bash
 ---

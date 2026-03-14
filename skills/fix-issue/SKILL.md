@@ -3,6 +3,7 @@ name: fix-issue
 description: "End-to-end GitHub issue fix pipeline. /fix-issue <owner/repo#number>"
 category: workflow
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "<owner/repo#number> or <issue-url>"
 allowed-tools: Read, Edit, Write, Bash, Glob, Grep, Agent
 ---

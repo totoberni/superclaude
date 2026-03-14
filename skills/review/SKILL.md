@@ -3,6 +3,7 @@ name: review
 description: "Invoke w-reviewer on staged changes. Modes: general/infra/security."
 category: workflow
 user-invocable: true
+disable-model-invocation: true
 argument-hint: "[mode] [file-or-commit-range]"
 context: fork
 agent: w-reviewer
