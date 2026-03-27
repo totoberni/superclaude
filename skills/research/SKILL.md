@@ -49,6 +49,7 @@ Detect project from args or conversation context. Check `shared/projects/<projec
 3. Score: X/Y match per category
 4. Flag critical gaps + acceptable deviations
 5. `--strict` flags ALL deviations; default only critical gaps
+6. **Divergence log**: for each deviation found, check if a `docs/reprod-notes.md` (or equivalent) exists in the project. If yes, cross-reference. If no, recommend creating one. Each entry needs: what changed, why (hardware constraint / missing artifact / intentional extension), and impact assessment (none / negligible / measured). This living document prevents re-discovery of known deviations and gives reviewers a single place to audit reproduction fidelity
 
 ## Constraints
 

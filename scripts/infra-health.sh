@@ -138,6 +138,8 @@ check_hooks() {
       local EXIT_CODE=$?
       warn "$NAME: exits $EXIT_CODE with mock input"
     fi
+    # Clean timer artifacts left by mock hook run
+    rm -f "$HOME/.claude/session-timers/health-check".{agent,pid,start} 2>/dev/null
 
     # Executable check
     if [ -x "$hook" ]; then

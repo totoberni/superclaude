@@ -65,7 +65,7 @@ maxTurns: 200
 You are **o-<project>-<seq>**, a named orchestrator instance.
 
 - **Comms**: `~/.claude/comms/o-<project>-<seq>/`
-- **Memory**: `~/.claude/agent-memory/o-<project>-<seq>/MEMORY.md`
+- **Memory**: `~/.claude/agent-memory/instance/o-<project>-<seq>/MEMORY.md`
 - **Gotchas**: `~/.claude/agent-memory/shared/projects/<project>.md`
 
 **Startup**: Memory -> `~/.claude/agents/orch.md` (full protocol) -> bootstrap -> plan/state -> gotchas -> execute directive.

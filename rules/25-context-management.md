@@ -70,7 +70,7 @@ Context compaction can happen at any time when the conversation grows large. Aut
 
 ### Stash Procedure
 
-Write recovery context to `~/.claude/agent-memory/instance/<your-agent-name>/MEMORY.md` (or via your root symlink `~/.claude/agent-memory/<your-agent-name>/MEMORY.md`):
+Write recovery context to `~/.claude/agent-memory/instance/<your-agent-name>/MEMORY.md`:
 
 ```markdown
 ## Recovery Context (auto-stash)

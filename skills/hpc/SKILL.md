@@ -16,136 +16,126 @@ Generate SLURM scripts, rsync commands, parse job output, and display HPC enviro
 
 ## Cluster Profiles
 
-### cluster (University of UNIVERSITY)
+SSH aliases defined in `~/.ssh/config`. Never hardcode hostnames — read the config.
+
+| Cluster | SSH Alias | Purpose | GPUs | CPU |
+|---------|-----------|---------|------|-----|
+| cluster X | `cluster` | GPU compute (example-project, ML) | A100, 1080Ti | AMD EPYC |
+| cluster 6 | `example-hpc` | CPU-only (example-tool sims, parallel batch) | None | example-cpu (192 cores/node) |
+| EDA | `eda` | Synopsys DC synthesis (example project) | None | — |
+
+### cluster 6
 
 | Property | Value |
 |----------|-------|
-| Scheduler | SLURM |
-| Partitions | `batch`, `gpu`, `gtx1080`, `a100` |
-| Module system | `module load` (Lmod) |
+| Partitions | `batch` (134 nodes, 192 cores, 750GB RAM), `highmem` (4 nodes, 192 cores, 3TB RAM) |
+| Max walltime | 72h |
+| Interconnect | HDR 100 InfiniBand |
 | Storage | `$HOME` (quota), `/scratch/$USER` (temp, no backup) |
-| Internet | **None on compute nodes** — all downloads must happen on login node |
-| GPU types | GTX 1080 Ti, A100 |
+| Internet | **None on compute nodes** |
+
+### cluster X
+
+| Property | Value |
+|----------|-------|
 | Max walltime | 72h (batch), 48h (gpu) |
+| Storage | `$HOME` (quota), `/scratch/$USER` (temp, no backup) |
+| Internet | **None on compute nodes** — pip install on login node |
+| SSH note | Use `cluster-gpu1`/`gpu2` login nodes for SLURM GPU jobs |
 
-### Generic SLURM
+**GPU partitions** (use `--gres=gpu:N`):
 
-Fallback profile for any SLURM cluster. Uses conservative defaults.
+| Partition | GPUs/Node | CPU | RAM | Access |
+|-----------|-----------|-----|-----|--------|
+| `a100` | 2x A100 (NVLink) | 2x24-core Xeon 6336Y | 512GB | Staff + PGR |
+| `swarm_a100` | 4x A100 (NVLink) | 2x24-core EPYC 7413 | 1TB | ECS only |
+| `swarm_h100` | 8x H100 (NVSwitch) | 2x48-core Xeon 8468 | 2TB | ECS only |
+| `scavenger_4a100` | 4x A100 | (as swarm_a100) | 1TB | All users (preemptible) |
+| `scavenger_8h100` | 8x H100 | (as swarm_h100) | 2TB | All users (preemptible) |
+| `gtx1080` | 4x GTX 1080 Ti | 28 cores | 128GB | All users |
+
+Note: `gpu`/`gtx1080` allocate the **entire node** — submit multiple single-GPU jobs via job arrays to avoid wasting GPUs.
+
+**Shared**: Both clusters use SLURM, `module load` (Lmod), two-phase workflow (prep on login, execute on compute). Use `module spider <name>` to search available modules. Check queue with `squeue -u $USER`.
+
+## Compilers & Key Modules
+
+| Software | cluster 6 | cluster X |
+|----------|----------|----------|
+| GCC | 13.2.0 (D), 12.1.0, 10.3.0 | 14.1.0 (D), 13.2.0 |
+| Intel | 2024.1.0 (D), 2023.2.0 | 2023.0.0, 2020.4.304 |
+| Nvidia HPC | — | nvhpc (CUDA Fortran, OpenACC) |
+| CUDA | — | 12.1, 11.8 |
+| Python | — | 3.11, 3.10 |
+| AOCC (AMD) | 4.2 | — |
+
+`(D)` = default version. Load with `module load <name>/<version>`.
+
+## GPU Job Tips
+
+- **Request GPUs**: `#SBATCH --gres=gpu:N` (required — omitting causes `QOSMinGres` block)
+- **No `libcuda.so.1` on login nodes**: compile/test in batch jobs or `sinteractive -p a100 --gres=gpu:1`
+- **PyTorch DDP**: use `torchrun` with `--nproc_per_node=N` matching `--gres=gpu:N`
+- **ECS students**: prefer `swarm_a100`/`swarm_h100` (dedicated), fall back to `scavenger_*` (preemptible)
 
 ## Subcommands
 
 ### `job` — Generate SLURM submission script
 
-**Args**: `job <script.py> [--cluster example-hpc|generic] [--partition <name>] [--gpus <N>] [--time <HH:MM:SS>] [--mem <size>] [--name <jobname>]`
+**Args**: `job <script> [--cluster cluster|example-hpc|generic] [--partition <name>] [--gpus <N>] [--time HH:MM:SS] [--mem <size>] [--name <jobname>]`
 
-Generate a SLURM batch script. Detect cluster from args or project context.
-
-**cluster template**:
+Auto-detect cluster from context. cluster 6 jobs omit `--gres=gpu`. Template:
 
 ```bash
 #!/bin/bash
 #SBATCH --job-name=<name>
 #SBATCH --partition=<partition>
-#SBATCH --gres=gpu:<N>
-#SBATCH --time=<time>
-#SBATCH --mem=<mem>
-#SBATCH --output=slurm-%j.out
-#SBATCH --error=slurm-%j.err
+#SBATCH --nodes=<N> --ntasks-per-node=<T>
+#SBATCH --time=<time> --mem=<mem>
+#SBATCH --output=slurm-%j.out --error=slurm-%j.err
 
 module purge
-module load python/3.11
-module load cuda/12.1
-
+module load <modules>
 source $HOME/.venv/bin/activate
-
 cd $SLURM_SUBMIT_DIR
-python <script.py>
+<command>
 ```
 
-**Generic template**: Same structure, no module load lines. Add `# TODO: configure modules for your cluster`.
-
-Write the script to `$PROJECT/job_<name>.sh`. Do NOT execute it.
+Write to `$PROJECT/job_<name>.sh`. Do NOT execute.
 
 ### `sync` — Generate rsync command
 
-**Args**: `sync <direction> [--cluster example-hpc|generic] [--host <hostname>] [--exclude <pattern>...]`
+**Args**: `sync <up|down> [--cluster cluster|example-hpc] [--exclude <pattern>...]`
 
-Directions:
-- `up`: local → remote (push code/data to cluster)
-- `down`: remote → local (pull results from cluster)
-
-Generate the rsync command with sensible defaults:
+Read SSH alias from `~/.ssh/config`. Default remote base: `/scratch/$USER/`.
 
 ```bash
-# UP: push to cluster
-rsync -avz --progress \
-  --exclude '.git' --exclude '__pycache__' --exclude '*.pyc' \
-  --exclude '.venv' --exclude 'wandb/' --exclude '*.pt' \
-  <local_path>/ <user>@<host>:<remote_path>/
-
-# DOWN: pull results
-rsync -avz --progress \
-  --include 'results/***' --include 'slurm-*.out' --include 'slurm-*.err' \
-  --include 'summary.json' --exclude '*' \
-  <user>@<host>:<remote_path>/ <local_path>/results/
+# UP: rsync -avz --progress --exclude '.git' --exclude '__pycache__' ...
+# DOWN: rsync -avz --progress --include 'results/***' --include 'slurm-*' ...
 ```
 
-**Output the command only** — do NOT execute SSH or rsync. Print with explanation of what it will do.
-
-For cluster: default host is `example-hpc5.university.ac.uk`, remote base is `/scratch/$USER/`.
+**Output only** — never execute SSH or rsync.
 
 ### `status` — Parse SLURM output files
 
 **Args**: `status [--job <slurm-ID>] [--project <path>]`
 
-1. Find SLURM output files: `$PROJECT/slurm-*.out` and `$PROJECT/slurm-*.err`
-2. Parse each output file for:
-   - Job start/end time (from SLURM header lines)
-   - Exit status (success/failure/OOM/timeout)
-   - GPU utilization (if `nvidia-smi` output present)
-   - Training progress (epoch/step counts, loss values from last N lines)
-   - Error messages (scan .err files, last 20 lines of .out for tracebacks)
-3. If `--job` specified, show only that job's details
-4. Summary table:
+Find `slurm-*.out`/`.err`, parse: start/end time, exit status, GPU util, training progress, errors. Summary table:
 
 ```
 | Job ID | Status | Runtime | GPU | Final Metric | Error |
 ```
 
-Handle missing files gracefully — report "No SLURM output files found."
-
 ### `env` — Display HPC environment info
 
-**Args**: `env [--cluster example-hpc|generic]`
+**Args**: `env [--cluster cluster|example-hpc|generic]`
 
-Display reference information for the target cluster:
-
-```
-## HPC Environment: cluster
-
-### Available Partitions
-| Partition | Max Nodes | Max Time | GPUs |
-|-----------|-----------|----------|------|
-
-### Key Modules
-- python/3.11, python/3.10
-- cuda/12.1, cuda/11.8
-- gcc/12.2
-
-### Storage
-- $HOME: 50GB quota, backed up
-- /scratch/$USER: 1TB temp, NOT backed up, 30-day purge
-
-### Tips
-- No internet on compute nodes — pip install on login node
-- Use `module spider <name>` to search available modules
-- Use `squeue -u $USER` to check job queue
-```
+Display partitions, modules, storage, and tips for the target cluster.
 
 ## Constraints
 
 - Never execute SSH or rsync — only generate commands
 - Never submit jobs — only generate scripts
 - All file paths absolute
-- Support cluster (UNIVERSITY) + generic SLURM
+- Read `~/.ssh/config` for hostnames (DRY — single source of truth)
 - Respect two-phase HPC workflow: prepare on login node, execute on compute

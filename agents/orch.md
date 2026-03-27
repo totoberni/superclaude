@@ -15,7 +15,7 @@ If started as a named instance (e.g., `claude --agent orch-example-project-p1`),
 
 ## Startup
 
-1. **Memory** — Read `~/.claude/agent-memory/<your-name>/MEMORY.md` for recovery context from prior sessions
+1. **Memory** — Read `~/.claude/agent-memory/instance/<your-name>/MEMORY.md` for recovery context from prior sessions
 2. **Identity** — Determine your name and comms directory (from your agent file or the user's first message)
 3. **Bootstrap** — Read `~/.claude/comms/<your-dir>/bootstrap.md` for session context and directive
 4. **Plan + State** — Read the plan and state files referenced in the bootstrap

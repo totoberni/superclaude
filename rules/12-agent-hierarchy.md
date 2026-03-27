@@ -35,9 +35,12 @@ Named orchs (`orch-<name>.md`) are thin aliases referencing `orch.md`. Template 
 | File | Meta | Orch | Workers |
 |------|------|------|---------|
 | `plans/*/plan.md` | **WRITE** | READ | -- |
-| `plans/*/state*.md` | READ (write if no Orch active) | **WRITE** | -- |
+| `comms/<name>/state.md` | READ | **WRITE** | -- |
+| `plans/*/state.md` (master) | **WRITE** (no Orch active) | READ | -- |
 | `plans/*/context.md` | **WRITE** | READ | -- |
 | `plans/*/mistakes.md` | READ | **WRITE** | -- |
+
+Per-orch state files live in `comms/<orch-name>/state.md` — colocated with the orch's directives and reports. The master `plans/*/state.md` is Meta's consolidated summary, written only after all orchs complete.
 
 ### Communication
 

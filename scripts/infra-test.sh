@@ -512,8 +512,9 @@ test_comms() {
     [ -d "$dir" ] || continue
     local NAME
     NAME=$(basename "$dir")
-    # Skip special files
+    # Skip special dirs (meta has non-standard comms structure — writes TO orch dirs)
     [ "$NAME" = "_archive" ] && continue
+    [ "$NAME" = "meta" ] && continue
     COMMS_COUNT=$((COMMS_COUNT + 1))
     local MISSING=""
     for req in $REQUIRED_FILES; do
@@ -559,11 +560,15 @@ test_comms() {
     [ "$NAME" = "_archive" ] && continue
     local DIRECTIVES_FILE="$dir/directives.md"
     [ -f "$DIRECTIVES_FILE" ] || continue
+    # Skip decommissioned orchs — their directives are intentionally cleared
+    if grep -qi "decommissioned" "$DIRECTIVES_FILE" 2>/dev/null; then
+      continue
+    fi
     # Check that DIR-NNN entries exist and use consistent numbering
     local DIR_ENTRIES
     DIR_ENTRIES=$(grep -oP 'DIR-\d+' "$DIRECTIVES_FILE" 2>/dev/null | sort -u)
     if [ -z "$DIR_ENTRIES" ]; then
-      # Some comms dirs may have placeholder directives — just warn
+      # Active orchs should have at least one directive
       warn "C3 DIR numbering" "$NAME: no DIR-NNN entries in directives.md"
       continue
     fi
@@ -664,6 +669,7 @@ test_matrix() {
     [ -d "$idir" ] || continue
     local INAME
     INAME=$(basename "$idir")
+    [ "$INAME" = "archive" ] && continue  # archive is a container, not an orch instance
     if [ ! -f "$idir/MEMORY.md" ]; then
       ALL_POPULATED=false
       fail "M3 orphan dirs" "instance/$INAME: no MEMORY.md"

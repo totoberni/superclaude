@@ -56,7 +56,7 @@ List active workers by checking `~/.claude/session-timers/*.agent` for `w-*` pre
 
 ## Mode: --scaf
 
-1. Read `~/.claude/comms/scaf/directives.md` + `~/.claude/comms/scaf2/directives.md` (if exists)
+1. Read `~/.claude/comms/scaf/directives.md`
 2. Output status table from directive index (DIR | Title | Status)
 3. Show next pending directive
 

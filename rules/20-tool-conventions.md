@@ -48,8 +48,26 @@ Universal tool-usage patterns learned from past mistakes. Applies to ALL agents.
 - All EXAMPLE_PROJECT project repos on WSL should have `core.fileMode=false` set (repo-local, not global) to ignore permission-only diffs.
 - **Never commit mode-only diffs** — scripts need `+x` for Docker/VPS deployment. If you see `0 insertions, 0 deletions` staged changes, check `git diff --cached --summary` for mode changes and discard them with `git restore --staged . && git checkout -- .`
 
+## Empirical Verification Before Prescribing
+
+- Before writing a root-cause analysis or fix directive, run a diagnostic command that confirms the hypothesis. Never prescribe from structural reasoning alone.
+- For code that constructs file paths from config/args: substitute the ACTUAL runtime values through the construction logic and verify the resulting path string. "It uses `os.path.join`" is not verification.
+- Source: GM-1 (4 occurrences across EXAMPLE_PROJECT, VPS, example-project)
+
 ## Python Namespace Gotchas
 
 - When a function is imported via `from module_a import func` into `module_b`, patching `module_a.func` does NOT affect `module_b.func` — it has its own reference. You must patch BOTH: `monkeypatch.setattr("module_a.func", ...)` AND `monkeypatch.setattr("module_b.func", ...)`.
 - Prefer `monkeypatch` over `@patch` decorators in test fixtures — monkeypatch auto-restores and doesn't leak between tests. `@patch` can leak if the test errors before the decorator's cleanup runs.
 - `del sys.modules["X"]; import X` creates a NEW module object. Code that already imported from the old module still holds OLD references. The fix is save/restore in sys.modules, not re-import.
+
+## HDL Register-Lag in NBA Blocks
+
+- In Verilog non-blocking assignment (NBA) `always @(posedge clk)` blocks, `reg_a <= x; reg_b <= reg_a` reads the OLD value of `reg_a` (pre-clock-edge). This is by design but causes bugs when the intent is to use the newly-computed value.
+- Fix: add a PREPARE/SETTLE pipeline state between the register write and the dependent read. Never read a register in the same clock cycle it's written via NBA.
+- Source: example-project M-2 (4 occurrences)
+
+## HDL Forward References (Synopsys DC)
+
+- Synopsys DC PRESTO processes Verilog files top-to-bottom. Forward-referenced wires and regs cause elaboration failures that simulators (VCS, Icarus) silently accept.
+- Declare ALL wires/regs BEFORE first use in the file. Declare regs/wires BEFORE `generate` blocks.
+- Source: example-project M-12 (3 occ) + M-12a (4 occ)

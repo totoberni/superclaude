@@ -305,12 +305,12 @@ else
   warn "P1.8 upstream reference" "clone not found (offline?)"
 fi
 
-# P1.9: Infra-security skill exists and is loaded by code-reviewer
+# P1.9: Infra-security skill exists and is loaded by w-reviewer
 if [ -f "$HOME/.claude/skills/infra-security/SKILL.md" ]; then
-  if grep -q "infra-security" "$HOME/.claude/agents/code-reviewer.md" 2>/dev/null; then
-    pass "P1.9 infra-security (skill exists, code-reviewer loads it)"
+  if grep -q "infra-security" "$HOME/.claude/agents/w-reviewer.md" 2>/dev/null; then
+    pass "P1.9 infra-security (skill exists, w-reviewer loads it)"
   else
-    warn "P1.9 infra-security" "skill exists but code-reviewer doesn't reference it"
+    warn "P1.9 infra-security" "skill exists but w-reviewer doesn't reference it"
   fi
 else
   fail "P1.9 infra-security" "SKILL.md not found"
