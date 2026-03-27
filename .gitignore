@@ -2,6 +2,7 @@
 .credentials.json
 settings.local.json
 settings.json.bak
+ide/
 
 # === Claude Code platform internals (auto-managed) ===
 history.jsonl
