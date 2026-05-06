@@ -209,7 +209,7 @@ test_agents() {
   done
   [ "$ALL_FM" = true ] && pass "A1 all agents have YAML frontmatter"
 
-  # A2: All agents have valid model values
+  # A2: All agents have valid model values (bare or qualified with [1m]/[200k])
   local ALL_MODELS=true
   for agent in "$AGENT_DIR"/*.md; do
     [ -f "$agent" ] || continue
@@ -225,12 +225,43 @@ test_agents() {
       fail "A2 model values" "$NAME: missing model field"
     else
       case "$MODEL_VAL" in
-        opus|sonnet|haiku) ;;  # valid
+        opus|sonnet|haiku|opus\[1m\]|sonnet\[1m\]|opus\[200k\]|sonnet\[200k\]) ;;  # valid
         *) ALL_MODELS=false; fail "A2 model values" "$NAME: unknown model '$MODEL_VAL'" ;;
       esac
     fi
   done
-  [ "$ALL_MODELS" = true ] && pass "A2 all agents have valid model (opus/sonnet/haiku)"
+  [ "$ALL_MODELS" = true ] && pass "A2 all agents have valid model (opus/sonnet/haiku, optionally [1m]/[200k])"
+
+  # A2b: Tiered model policy (main=opus[1m], sub=opus)
+  # Source: agent-memory/shared/projects/superclaude.md §W-1 (2026-04-16)
+  # Naming convention: w-* → subagent; everything else → main agent.
+  local ALL_TIER=true
+  for agent in "$AGENT_DIR"/*.md; do
+    [ -f "$agent" ] || continue
+    [ -L "$agent" ] && continue
+    local NAME
+    NAME=$(basename "$agent" .md)
+    local FM
+    FM=$(sed -n '2,/^---$/p' "$agent" 2>/dev/null | head -20)
+    local MODEL_VAL
+    MODEL_VAL=$(echo "$FM" | grep "^model:" | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")
+    [ -z "$MODEL_VAL" ] && continue  # A2 already flagged missing field
+    case "$NAME" in
+      w-*)
+        if [ "$MODEL_VAL" != "opus" ]; then
+          ALL_TIER=false
+          fail "A2b tier policy" "$NAME: subagent should be 'opus' (found '$MODEL_VAL')"
+        fi
+        ;;
+      *)
+        if [ "$MODEL_VAL" != "opus[1m]" ]; then
+          ALL_TIER=false
+          fail "A2b tier policy" "$NAME: main agent should be 'opus[1m]' (found '$MODEL_VAL')"
+        fi
+        ;;
+    esac
+  done
+  [ "$ALL_TIER" = true ] && pass "A2b tier policy (main=opus[1m], sub=opus)"
 
   # A3: Backward-compat symlinks resolve to real files
   local ALL_LINKS=true
@@ -651,14 +682,16 @@ test_matrix() {
   [ "$ALL_LOAD" = true ] && pass "M2 inline load-order paths in agents resolve"
 
   # M3: No orphan matrix directories (dir exists but no .md inside)
+  # Skip structural/archive containers recursively — they hold decommissioned cells by design.
   local ALL_POPULATED=true
   # Row 2: class dirs must have mtm.md
   for cdir in "$MEM_DIR"/class/*/; do
     [ -d "$cdir" ] || continue
     local CNAME
     CNAME=$(basename "$cdir")
-    [ "$CNAME" = "projects" ] && continue  # v3 tier
-    [ "$CNAME" = "archive" ] && continue
+    case "$CNAME" in
+      projects|archive|_archive) continue ;;  # v3 tier + archive containers
+    esac
     if [ ! -f "$cdir/mtm.md" ]; then
       ALL_POPULATED=false
       fail "M3 orphan dirs" "class/$CNAME: no mtm.md"
@@ -669,7 +702,9 @@ test_matrix() {
     [ -d "$idir" ] || continue
     local INAME
     INAME=$(basename "$idir")
-    [ "$INAME" = "archive" ] && continue  # archive is a container, not an orch instance
+    case "$INAME" in
+      archive|_archive) continue ;;  # archive containers, not orch instances
+    esac
     if [ ! -f "$idir/MEMORY.md" ]; then
       ALL_POPULATED=false
       fail "M3 orphan dirs" "instance/$INAME: no MEMORY.md"

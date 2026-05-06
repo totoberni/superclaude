@@ -58,6 +58,7 @@ run_mod mod_context_check
 run_mod mod_nudge
 run_mod mod_counter
 run_mod mod_commit_gate
+run_mod mod_notebook_guard
 run_mod mod_timer
 
 exit 0

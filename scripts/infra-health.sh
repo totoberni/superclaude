@@ -197,7 +197,7 @@ check_agents() {
       local MODEL_VAL
       MODEL_VAL=$(echo "$FM" | grep "^model:" | head -1 | awk '{print $2}' | tr -d '"')
       case "$MODEL_VAL" in
-        opus|sonnet|haiku) pass "$NAME: model=$MODEL_VAL" ;;
+        opus|sonnet|haiku|opus\[1m\]|sonnet\[1m\]|opus\[200k\]|sonnet\[200k\]) pass "$NAME: model=$MODEL_VAL" ;;
         *) warn "$NAME: unknown model '$MODEL_VAL'" ;;
       esac
     else
