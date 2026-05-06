@@ -37,7 +37,7 @@ Apply this checklist when reviewing changes to files under `~/.claude/` (agents,
 ## 4. Agent Authority Compliance
 
 - [ ] Agent's tool list matches its hierarchy tier (workers don't have Write, orchs don't have settings access)
-- [ ] Agent's model field is appropriate for its role (workers on sonnet, strategic on opus)
+- [ ] Agent's model field is appropriate for its role (main agents on opus[1m], workers on opus)
 - [ ] No agent bypasses the comms protocol (writing directly to another agent's comms dir)
 - [ ] Skills reference only tools their invoking agent has access to
 

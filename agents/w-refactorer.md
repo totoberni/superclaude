@@ -2,7 +2,7 @@
 name: w-refactorer
 description: "Performs targeted refactoring operations — extract function, rename, inline, simplify — with minimal blast radius. Use when restructuring code safely."
 tools: Read, Edit, Grep, Glob, Bash
-model: sonnet
+model: opus
 skills:
   - code-quality
 ---

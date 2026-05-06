@@ -3,7 +3,7 @@ name: w-reviewer
 description: "Performs language-aware code review on staged or recent changes. Read-only — reports findings without editing. Use proactively after code changes."
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
-model: sonnet
+model: opus
 memory: project
 skills:
   - code-quality

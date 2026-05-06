@@ -160,9 +160,23 @@ Write progress to `~/.claude/agent-memory/_system/lt-mem-checkpoint.md`:
 
 Resume from checkpoint on next `--complete` invocation. Delete checkpoint when all cells done.
 
+### Step 7: Chain into `/compact-mem` (MANDATORY unless `--skip-compact`)
+
+`/lt-mem` and `/compact-mem` are designed as a pair. `/lt-mem` promotes/archives; `/compact-mem` re-budgets the resulting cells. Running `/lt-mem` alone leaves cells that may be over-budget after promotions have been merged in.
+
+**Default behaviour**: after Step 5 (report) and Step 6 (checkpoint), execute `/compact-mem <same scope>` automatically. Use the same scope flags: if the user invoked `/lt-mem --complete project example-project`, chain into `/compact-mem project example-project`. If the user invoked `/lt-mem all`, chain into `/compact-mem all`.
+
+**Skip conditions** (DO NOT chain if ANY applies):
+- User's invocation included `--skip-compact`
+- User explicitly asked to skip compaction in the prompt
+- The Step 5 Cell Health table reports ALL cells within budget (no compaction needed)
+
+**Report format when chained**: append a "Compaction follow-up" section to the /lt-mem report, then invoke `/compact-mem` and merge its report at the end.
+
 ## Constraints
 
 - Destructive ops (delete source after promotion, archive cleanup >90 days) require the user confirmation unless `--auto` flag
 - Process at most 5 cells per session in --complete mode
 - Never create new memory directories (archive/ subdirs are OK via `mkdir -p`)
 - Never delete source entries before promoted copy is confirmed written
+- ALWAYS chain into `/compact-mem` after Step 6 unless a skip condition applies (see Step 7)

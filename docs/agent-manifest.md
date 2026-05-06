@@ -9,15 +9,15 @@ Quick reference for all superclaude agents. Source of truth: the agent files the
 | `meta.md` | Strategic | opus | Cross-project supervision, plans, directives | `claude --agent meta` |
 | `scaf.md` | Infrastructure | opus | ~/.claude/ infrastructure edits | `claude --agent scaf` |
 | `orch.md` | Tactical (base) | opus | Project execution template | `claude --agent orch` |
-| `w-reviewer.md` | Worker | sonnet | Read-only code review (3 modes) | via Agent tool |
-| `w-debugger.md` | Worker | sonnet | Runtime error diagnosis + fix | via Agent tool |
-| `w-refactorer.md` | Worker | sonnet | Targeted refactoring ops | via Agent tool |
-| `w-merger.md` | Worker | sonnet | Git merge conflict resolution | via Agent tool |
+| `w-reviewer.md` | Worker | opus | Read-only code review (3 modes) | via Agent tool |
+| `w-debugger.md` | Worker | opus | Runtime error diagnosis + fix | via Agent tool |
+| `w-refactorer.md` | Worker | opus | Targeted refactoring ops | via Agent tool |
+| `w-merger.md` | Worker | opus | Git merge conflict resolution | via Agent tool |
 | `w-planner.md` | Worker | opus | Plan creation/updates | via Agent tool |
-| `w-design-reviewer.md` | Worker | sonnet | Frontend design review (7-phase) | via Agent tool |
+| `w-design-reviewer.md` | Worker | opus | Frontend design review (7-phase) | via Agent tool |
 | `o-example.md` | Named orch | opus | <Project> | `claude --agent o-example` |
-| `o-<course-cw>-1.md` | Named orch | opus | example-course-CWX | `claude --agent o-<course-cw>-1` |
-| `o-example.md` | Named orch | opus | example-project Paper | `claude --agent o-example` |
+| `o-<course-cw>-1.md` | Named orch | opus | <COURSE-CW> | `claude --agent o-<course-cw>-1` |
+| `o-example.md` | Named orch | opus | <PROJECT> Paper | `claude --agent o-example` |
 
 ## Archived (4, in `_archive/`)
 

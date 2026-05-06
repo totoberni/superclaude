@@ -24,7 +24,7 @@ Multi-agent CLI infrastructure for [Claude Code](https://docs.anthropic.com/en/d
 | Strategic | `meta` | opus | Cross-project supervision, directives, plan authoring |
 | Infrastructure | `scaf` | opus | `~/.claude/` specialist: agents, hooks, rules, skills, settings |
 | Tactical | `orch` | opus | Project execution, worker delegation, git, code editing |
-| Worker | `w-*` | sonnet | Scoped tasks: review, debug, merge, refactor, plan |
+| Worker | `w-*` | opus | Scoped tasks: review, debug, merge, refactor, plan |
 
 Workers are spawned by orchs via the Agent tool — not launched directly.
 

@@ -2,7 +2,7 @@
 name: w-merger
 description: "Resolves git merge conflicts by analyzing both sides, understanding intent from commit history, and producing correct resolutions. Use when merging branches produces conflicts."
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: sonnet
+model: opus
 maxTurns: 30
 ---
 

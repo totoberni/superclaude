@@ -22,7 +22,7 @@ SSH aliases defined in `~/.ssh/config`. Never hardcode hostnames — read the co
 |---------|-----------|---------|------|-----|
 | <Cluster> | `<cluster>` | GPU compute (<PROJECT>, ML) | A100, 1080Ti | AMD EPYC |
 | <cluster-cpu> | `example-hpc` | CPU-only (example-tool sims, parallel batch) | None | example-cpu (192 cores/node) |
-| EDA | `eda` | Synopsys DC synthesis (example project) | None | — |
+| EDA | `eda` | Synopsys DC synthesis (<PROJECT> project) | None | — |
 
 ### <cluster-cpu>
 

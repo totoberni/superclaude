@@ -2,7 +2,7 @@
 name: orch
 description: "Project-level tactical orchestrator. Delegates to workers, manages merges, updates state. CAN edit project files for corrections. Reports to meta and the user."
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent
-model: opus
+model: opus[1m]
 memory: user
 maxTurns: 200
 ---

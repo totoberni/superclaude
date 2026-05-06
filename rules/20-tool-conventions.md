@@ -2,6 +2,29 @@
 
 Universal tool-usage patterns learned from past mistakes. Applies to ALL agents.
 
+## Single Source of Truth Across Tool Boundaries
+
+- When a value can be computed in two places (bash vs Python, template vs runtime config, client vs server), pick ONE site as canonical. The other must consume the canonical value directly or not exist.
+- **Never mirror a computation for "early failure detection", "clarity", or "documentation"** — the mirror will drift. Sometimes silently (when both sites happen to agree), sometimes catastrophically.
+- Classic case: example-project `main.py` constructs `ckpt_path = results_base_folder / dataset / model / exp_name` and creates it via `os.makedirs`. Job scripts that add a bash `CKPT_DIR` variable to pre-create the path "for early permission failure detection" inevitably diverge — and when they do, bash creates a ghost directory and Python writes checkpoints to a different location. 3 occurrences across 4 weeks cost nearly a full training run.
+- Rule: if you catch yourself writing a bash formula that mirrors an application-side formula, STOP. Delete the bash mirror, let the application-side error surface at runtime with a clear traceback, fix the root cause (social — chmod/permissions — or structural — choose a distinctive leaf name to avoid the collision).
+- Source: G-25 (example-project M-9 3x, session 33 retrospective).
+
+## Superclaude ↔ Local Codebase Firewall
+
+Bidirectional isolation rule — meta-tier agent memory must stay invisible from inside any user project.
+
+- **Local codebase files** (`*.sh`, `*.md`, `*.py`, `*.tex`, `*.cpp`, etc. anywhere under `~/projects/*`) must NOT reference superclaude-internal artefacts by name. Forbidden patterns inside project files include:
+  - File/path: `~/.claude/`, `.claude/rules`, `agent-memory`, `shared/projects/`, `class/meta`, `MEMORY.md`, `mtm.md`, `ltm.md`, any project memory filename (`example-project.md`, `example-project.md`, etc.)
+  - Identifiers: `M-\d+`, `MM-\d+`, `GM-\d+`, `G-\d+`, `MT-\d+`, `CW-\d+`, `W-\d+` when used as agent-memory cell references (NOT when they are local section IDs like reprod-notes.md's own `C1`/`B4` etc. — those stay).
+  - Phrases: "meta says", "memory.md says", "according to the gotchas file", "see the project memory".
+- **Before any write to a local project file**, grep the draft for the forbidden patterns and strip them. Replace by:
+  - (a) a local file reference if the content exists locally (`docs/reprod-notes.md §C4`), or
+  - (b) inline paraphrase with no meta-structure reference.
+- **Superclaude memory files** (`~/.claude/agent-memory/**/*.md`, `~/.claude/rules/**/*.md`) MAY freely reference local project paths and content. The flow is one-way: meta reads local, local does not read meta.
+- **Why**: a teammate cloning the project repo, a reviewer reading a paper submission, or a future-you on a different machine sees the local files only. References to meta files resolve to nothing and leak internal tooling.
+- Source: G-27 (example-project S33 retrospective, 4 contaminated files stripped).
+
 ## Git with `-C`
 
 - `git -C <dir>` sets the repo working directory. All pathspecs after it are **relative to the repo root**.
@@ -71,3 +94,20 @@ Universal tool-usage patterns learned from past mistakes. Applies to ALL agents.
 - Synopsys DC PRESTO processes Verilog files top-to-bottom. Forward-referenced wires and regs cause elaboration failures that simulators (VCS, Icarus) silently accept.
 - Declare ALL wires/regs BEFORE first use in the file. Declare regs/wires BEFORE `generate` blocks.
 - Source: <PROJECT> M-12 (3 occ) + M-12a (4 occ)
+
+## Large Image Handling via Read Tool
+
+- Images loaded via the Read tool consume context proportional to their pixel area. A single image wider than ~2000px OR taller than ~2000px can saturate a large fraction of the available context in a single tool call, especially inside a parallel batch that stacks several images.
+- **Protocol**: before Read-ing an image from disk, check its dimensions with `python3 -c "from PIL import Image; im = Image.open('<path>'); print(im.size)"`. If either axis exceeds ~1000px, PIL-crop into tiles each ≤ 1000px and Read each tile in a separate call.
+- Crop along natural panel boundaries for multi-panel figures (e.g., a 5-panel horizontal figure → 2-3 tiles at panel edges). Overlap adjacent tiles by ~50-100px so nothing is bisected at the seam and the reader can mentally stitch the view.
+- Standard pattern:
+  ```python
+  from PIL import Image
+  im = Image.open('<path>')
+  W, H = im.size  # confirm dimensions first
+  for i, (x0, x1) in enumerate([(0, 1000), (950, 2000), (1950, W)]):
+      im.crop((x0, 0, x1, H)).save(f'/tmp/tile_{i}.png')
+  ```
+  Then Read each `/tmp/tile_N.png` separately, ideally in parallel tool calls.
+- This is a context-preservation discipline, not a rendering-fidelity one — the cropped tiles lose no information, they just spread the context cost across multiple Read calls with room for the rest of the conversation in between.
+- Source: <PROJECT> Phase-2 hostile-review figure audits (17 figures at 800-1500px each); <PROJECT> session-43 figure-readability review (s1_2d_correlation_c_sweep.png at 2685×543).

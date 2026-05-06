@@ -22,7 +22,7 @@ Parse `$ARGUMENTS`: `--commission` | `--continue` | `--parallelize` | `--decommi
 
 | # | Artifact | Location |
 |---|----------|----------|
-| 1 | Agent alias | `~/.claude/agents/<name>.md` (template: `docs/usage-guide.md`, name: `o-<project>-<seq>`) |
+| 1 | Agent alias | `~/.claude/agents/<name>.md` (template: `docs/usage-guide.md`, name: `o-<project>-<seq>`). Main agents (`meta`, `orch`, `scaf`, `o-*`) use `opus[1m]` with `--effort max`; subagents (`w-*`) use `opus` with `--effort max`. |
 | 2 | Comms dir | `~/.claude/comms/<name>/` with `{directives,bootstrap,reports,escalations}.md` |
 | 3 | DIR-001 | `comms/<name>/directives.md` — include `### Known Pitfalls` (3-7 items) |
 | 4 | Bootstrap | `comms/<name>/bootstrap.md` — identity, env, top 3 pitfalls inline, plan/state refs |

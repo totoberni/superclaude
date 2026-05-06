@@ -3,6 +3,10 @@
 settings.local.json
 settings.json.bak
 ide/
+MEMORY.md
+ltm.md
+mtm.md
+stm.md
 
 # === Claude Code platform internals (auto-managed) ===
 history.jsonl

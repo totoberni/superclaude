@@ -61,7 +61,7 @@ Inline scoring — no separate skill needed:
 |-----------|--------|-------|
 | settings.json valid JSON | 25 | `jq . ~/.claude/settings.json > /dev/null 2>&1` |
 | Agent frontmatter valid | 25 | All agents have `---`, `name:`, `model:` |
-| Model values valid | 15 | All `model:` values are `sonnet`, `opus`, or `haiku` |
+| Model values valid | 15 | All `model:` values are `sonnet`, `opus`, `haiku`, or `[1m]` variant (e.g. `opus[1m]`) |
 | Deny rules >= 5 | 15 | `jq '.permissions.deny \| length' ~/.claude/settings.json` |
 | No orphan agents | 10 | Agent file without matching comms dir (excluding workers/base) |
 | No broken symlinks | 10 | `find ~/.claude/agents/ -maxdepth 1 -type l ! -exec test -e {} \; -print` |
@@ -92,7 +92,7 @@ for a in "$CLAUDE"/agents/*.md; do
   MODEL=$(sed -n 's/^model: *//p' "$a" | head -1 | tr -d '"')
   [ -z "$MODEL" ] && continue
   MODELS_TOTAL=$((MODELS_TOTAL + 1))
-  case "$MODEL" in opus|sonnet|haiku) MODELS_OK=$((MODELS_OK + 1)) ;; esac
+  case "$MODEL" in opus|sonnet|haiku|"opus[1m]"|"sonnet[1m]"|"haiku[1m]") MODELS_OK=$((MODELS_OK + 1)) ;; esac
 done
 [ "$MODELS_TOTAL" -gt 0 ] && SCORE=$((SCORE + MODELS_OK * 15 / MODELS_TOTAL))
 

@@ -2,7 +2,7 @@
 name: w-design-reviewer
 description: "Multi-phase design review for frontend changes. Covers interaction flow, responsiveness, visual polish, accessibility (WCAG AA), robustness, and code health. Works in code-only review mode; when Playwright MCP is available, phases 1-2 can be automated with live browser testing."
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
 ---
 
 # w-design-reviewer

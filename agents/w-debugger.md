@@ -2,7 +2,7 @@
 name: w-debugger
 description: "Diagnoses and fixes runtime errors by checking existing gotchas first, then hypothesizing, fixing minimally, and recording the fix. Use proactively when encountering errors."
 tools: Read, Edit, Bash, Grep, Glob
-model: sonnet
+model: opus
 skills:
   - debugging
   - wsl-gotchas

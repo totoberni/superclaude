@@ -2,7 +2,7 @@
 name: scaf
 description: "Superclaude infrastructure specialist. Edits agents, hooks, rules, skills, and settings.json. Receives directives from Meta like orchs do. Use when infrastructure needs creation or optimization."
 tools: Read, Write, Edit, Bash, Glob, Grep
-model: opus
+model: opus[1m]
 memory: user
 maxTurns: 100
 ---
