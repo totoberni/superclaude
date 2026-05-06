@@ -21,7 +21,7 @@ Consolidate the memory matrix: promote mature entries upward, archive stale ones
 | `--quick` | Targeted project or all (single pass) | ~10 min | After an orch wave, end of day |
 | `--complete` | Cell-by-cell with checkpointing | ~25 min | Monthly deep clean, project milestone |
 
-**Targeting**: `/lt-mem project example-project` processes only example-project cells across all 3 rows. `/lt-mem all` scans everything.
+**Targeting**: `/lt-mem project <project>` processes only <PROJECT> cells across all 3 rows. `/lt-mem all` scans everything.
 
 ## Procedure
 

@@ -4,7 +4,7 @@ description: "STRIDE threat analysis: map attack surface, rate, output model."
 category: domain
 user-invocable: true
 disable-model-invocation: true
-argument-hint: "<target-component-or-project> [--example-project]"
+argument-hint: "<target-component-or-project> [--<project>]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
@@ -12,7 +12,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 
 Perform a structured STRIDE threat analysis on a component or project.
 
-**Usage**: `/threat-model <target> [--example-project]`
+**Usage**: `/threat-model <target> [--<project>]`
 
 ## Procedure
 
@@ -23,7 +23,7 @@ Parse `$ARGUMENTS` for the target:
 - Project path: `/threat-model $HOME/projects/workspace/example-enterprise-app`
 - File scope: `/threat-model src/api/routes.ts`
 
-If `--example-project` flag present, activate EXAMPLE_PROJECT cross-referencing (see below).
+If `--<project>` flag present, activate <PROJECT> cross-referencing (see below).
 
 ### 2. Map Attack Surface
 
@@ -109,11 +109,11 @@ Use a 3-tier severity rating:
 1. [most critical first]
 ```
 
-## EXAMPLE_PROJECT Cross-Reference Mode
+## <PROJECT> Cross-Reference Mode
 
-When `--example-project` flag is set, additionally:
+When `--<project>` flag is set, additionally:
 
-1. Read `RISK_REGISTER.md` in the EXAMPLE_PROJECT project — map each identified threat to existing risk entries
+1. Read `RISK_REGISTER.md` in the <PROJECT> project — map each identified threat to existing risk entries
 2. Read `CONTROL_CATALOG.md` — check which threats are already covered by existing controls
 3. Add columns to the threat table:
 

@@ -82,7 +82,7 @@ For each memory file, extract path references (lines matching `~/.claude/` or ba
 ### Budget Status
 | Cell | Lines | Budget | Status |
 |------|-------|--------|--------|
-| shared/projects/example-project.md | 38 | 60 | OK |
+| shared/projects/<project>.md | 38 | 60 | OK |
 | ... | ... | ... | ... |
 
 ### Flagged Entries (N total)

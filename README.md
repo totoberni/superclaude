@@ -31,7 +31,7 @@ Workers are spawned by orchs via the Agent tool — not launched directly.
 ## Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/superclaude.git ~/.claude/
+git clone https://github.com/<YOUR_USERNAME>/superclaude.git ~/.claude/
 
 # Customize for your environment
 $EDITOR ~/.claude/CLAUDE.md       # Your profile and project inventory

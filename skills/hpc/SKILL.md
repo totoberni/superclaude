@@ -20,11 +20,11 @@ SSH aliases defined in `~/.ssh/config`. Never hardcode hostnames — read the co
 
 | Cluster | SSH Alias | Purpose | GPUs | CPU |
 |---------|-----------|---------|------|-----|
-| cluster X | `cluster` | GPU compute (example-project, ML) | A100, 1080Ti | AMD EPYC |
-| cluster 6 | `example-hpc` | CPU-only (example-tool sims, parallel batch) | None | example-cpu (192 cores/node) |
+| <Cluster> | `<cluster>` | GPU compute (<PROJECT>, ML) | A100, 1080Ti | AMD EPYC |
+| <cluster-cpu> | `example-hpc` | CPU-only (example-tool sims, parallel batch) | None | example-cpu (192 cores/node) |
 | EDA | `eda` | Synopsys DC synthesis (example project) | None | — |
 
-### cluster 6
+### <cluster-cpu>
 
 | Property | Value |
 |----------|-------|
@@ -34,14 +34,14 @@ SSH aliases defined in `~/.ssh/config`. Never hardcode hostnames — read the co
 | Storage | `$HOME` (quota), `/scratch/$USER` (temp, no backup) |
 | Internet | **None on compute nodes** |
 
-### cluster X
+### <Cluster>
 
 | Property | Value |
 |----------|-------|
 | Max walltime | 72h (batch), 48h (gpu) |
 | Storage | `$HOME` (quota), `/scratch/$USER` (temp, no backup) |
 | Internet | **None on compute nodes** — pip install on login node |
-| SSH note | Use `cluster-gpu1`/`gpu2` login nodes for SLURM GPU jobs |
+| SSH note | Use `<cluster>-gpu1`/`gpu2` login nodes for SLURM GPU jobs |
 
 **GPU partitions** (use `--gres=gpu:N`):
 
@@ -60,7 +60,7 @@ Note: `gpu`/`gtx1080` allocate the **entire node** — submit multiple single-GP
 
 ## Compilers & Key Modules
 
-| Software | cluster 6 | cluster X |
+| Software | <cluster-cpu> | <Cluster> |
 |----------|----------|----------|
 | GCC | 13.2.0 (D), 12.1.0, 10.3.0 | 14.1.0 (D), 13.2.0 |
 | Intel | 2024.1.0 (D), 2023.2.0 | 2023.0.0, 2020.4.304 |
@@ -82,9 +82,9 @@ Note: `gpu`/`gtx1080` allocate the **entire node** — submit multiple single-GP
 
 ### `job` — Generate SLURM submission script
 
-**Args**: `job <script> [--cluster cluster|example-hpc|generic] [--partition <name>] [--gpus <N>] [--time HH:MM:SS] [--mem <size>] [--name <jobname>]`
+**Args**: `job <script> [--cluster <cluster>|example-hpc|generic] [--partition <name>] [--gpus <N>] [--time HH:MM:SS] [--mem <size>] [--name <jobname>]`
 
-Auto-detect cluster from context. cluster 6 jobs omit `--gres=gpu`. Template:
+Auto-detect cluster from context. <cluster-cpu> jobs omit `--gres=gpu`. Template:
 
 ```bash
 #!/bin/bash
@@ -105,7 +105,7 @@ Write to `$PROJECT/job_<name>.sh`. Do NOT execute.
 
 ### `sync` — Generate rsync command
 
-**Args**: `sync <up|down> [--cluster cluster|example-hpc] [--exclude <pattern>...]`
+**Args**: `sync <up|down> [--cluster <cluster>|example-hpc] [--exclude <pattern>...]`
 
 Read SSH alias from `~/.ssh/config`. Default remote base: `/scratch/$USER/`.
 
@@ -128,7 +128,7 @@ Find `slurm-*.out`/`.err`, parse: start/end time, exit status, GPU util, trainin
 
 ### `env` — Display HPC environment info
 
-**Args**: `env [--cluster cluster|example-hpc|generic]`
+**Args**: `env [--cluster <cluster>|example-hpc|generic]`
 
 Display partitions, modules, storage, and tips for the target cluster.
 

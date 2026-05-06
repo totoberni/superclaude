@@ -20,7 +20,7 @@ mod_context_check() {
   [ -f "$WARNED_FILE" ] && return 0
 
   # ── Determine agent class (strip trailing digits/hyphens/instance suffix) ──
-  # orch-example-project-p1 -> orch, scaf2 -> scaf, meta -> meta
+  # orch-<project>-p1 -> orch, scaf2 -> scaf, meta -> meta
   local AGENT_CLASS
   AGENT_CLASS=$(echo "$AGENT_NAME" | sed 's/[-_][0-9]*$//; s/-[a-z]*[-_][a-z0-9]*$//' 2>/dev/null)
   # Fallback: strip trailing digits

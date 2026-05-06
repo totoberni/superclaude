@@ -1,0 +1,146 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Bash(git:*)",
+      "Bash(tree:*)",
+      "Bash(jq:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(touch:*)",
+      "Bash(chmod:*)",
+      "Bash(node:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(python3:*)",
+      "Bash(pip:*)",
+      "Bash(cmake:*)",
+      "Bash(make:*)",
+      "Bash(shellcheck:*)",
+      "Bash(lsof:*)",
+      "Bash(pgrep:*)",
+      "Bash(ss:*)",
+      "Bash(cat:*)",
+      "Bash(wc:*)",
+      "Bash(diff:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(file:*)",
+      "Bash(gh:*)",
+      "Bash(curl:*)",
+      "Bash(fmt:*)",
+      "Bash(seq:*)",
+      "Bash(test:*)",
+      "Bash(printf:*)",
+      "Bash(expr:*)",
+      "Bash(date:*)",
+      "Bash(rm:*)",
+      "Bash(ps:*)",
+      "Bash(kill:*)",
+      "Bash(crontab:*)",
+      "Bash(bash:*)",
+      "Bash(find:*)"
+    ],
+    "deny": [
+      "Bash(git branch -D *)",
+      "Bash(git checkout -- .)",
+      "Bash(git clean -f*)",
+      "Bash(git commit*)",
+      "Bash(git reset --hard*)",
+      "Bash(rm -rf /)",
+      "Bash(rm -rf ~/*)"
+    ],
+    "defaultMode": "default"
+  },
+  "model": "opus[1m]",
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/pre-compact.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/session-timer.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/session-timer.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/session-cleanup.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {},
+  "extraKnownMarketplaces": {},
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": true,
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "*.github.com",
+        "pypi.org",
+        "*.pypi.org",
+        "files.pythonhosted.org"
+      ],
+      "allowManagedDomainsOnly": false
+    },
+    "filesystem": {
+      "allowWrite": [
+        "~/projects",
+        "~/.claude",
+        "/tmp"
+      ],
+      "denyWrite": [
+        "~/.claude/settings.local.json",
+        "~/.claude/agent-memory/shared/projects"
+      ],
+      "denyRead": [
+        "~/.ssh",
+        "~/.gnupg"
+      ]
+    },
+    "excludedCommands": [
+      "docker",
+      "docker-compose",
+      "sg"
+    ]
+  },
+  "effortLevel": "high"
+}

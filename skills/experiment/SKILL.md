@@ -17,8 +17,8 @@ Manage ML experiment records via `experiments.md` in any project. File-based onl
 ## Project Detection
 
 Detect the ML project from `$ARGUMENTS` or infer from context:
-1. Explicit path: `/experiment add $HOME/projects/workspace/example-project ...`
-2. Named project: `/experiment list example-project` → resolve to `~/projects/workspace/example-project/`
+1. Explicit path: `/experiment add $HOME/projects/workspace/<project> ...`
+2. Named project: `/experiment list <project>` → resolve to `~/projects/workspace/<project>/`
 3. If ambiguous, ask the user
 
 Set `PROJECT` to the absolute project path. All file operations use absolute paths.
@@ -111,4 +111,4 @@ Default strategy: ablation (vary one thing at a time). Grid and random generate 
 - File management only — never import wandb, tensorboard, or ML libraries
 - All paths absolute
 - Handle missing `summary.json` gracefully (don't error, show "pending" or "N/A")
-- Respect project-specific gotchas (e.g., example-project denies git ops)
+- Respect project-specific gotchas (e.g., <PROJECT> denies git ops)

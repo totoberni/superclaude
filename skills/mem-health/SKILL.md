@@ -58,7 +58,7 @@ Scan cells for `~/.claude/` paths. Expand `~` to `$HOME`. Verify with `test -f`/
 ### Step 3: Cross-Cell Duplicates (20 pts)
 Skip if `--quick` (award 20). Compare Wins/Mistakes/Gotchas **content** across tiers. Flag redundant copies where lower-tier adds no context beyond higher-tier.
 
-**Important**: IDs (M-1, W-2, etc.) are project-scoped, not global. EXAMPLE_PROJECT M-1 ≠ VPS M-1. Do NOT flag same-numbered IDs in different project files as duplicates — compare the actual summary text instead.
+**Important**: IDs (M-1, W-2, etc.) are project-scoped, not global. <PROJECT> M-1 ≠ VPS M-1. Do NOT flag same-numbered IDs in different project files as duplicates — compare the actual summary text instead.
 
 ### Step 4: Load-Order Paths (15 pts)
 ```bash

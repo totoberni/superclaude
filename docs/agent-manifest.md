@@ -15,16 +15,16 @@ Quick reference for all superclaude agents. Source of truth: the agent files the
 | `w-merger.md` | Worker | sonnet | Git merge conflict resolution | via Agent tool |
 | `w-planner.md` | Worker | opus | Plan creation/updates | via Agent tool |
 | `w-design-reviewer.md` | Worker | sonnet | Frontend design review (7-phase) | via Agent tool |
-| `o-example.md` | Named orch | opus | Example Project | `claude --agent o-example` |
-| `o-example-course-1.md` | Named orch | opus | example-course-CWX | `claude --agent o-example-course-1` |
+| `o-example.md` | Named orch | opus | <Project> | `claude --agent o-example` |
+| `o-<course-cw>-1.md` | Named orch | opus | example-course-CWX | `claude --agent o-<course-cw>-1` |
 | `o-example.md` | Named orch | opus | example-project Paper | `claude --agent o-example` |
 
 ## Archived (4, in `_archive/`)
 
 | File | Reason |
 |------|--------|
-| `orch-example-project-p1.md` | P1 complete |
-| `orch-example-project-p2.md` | P2 complete |
+| `orch-<project>-p1.md` | P1 complete |
+| `orch-<project>-p2.md` | P2 complete |
 | `scaf2.md` | Track B complete, merged into scaf |
 | `o-example.md` | Decommissioned |
 
@@ -94,7 +94,7 @@ Quick reference for all superclaude agents. Source of truth: the agent files the
 |-----|-----------|-------------|
 | Shared | 1 global + 7 projects | `shared/global/ltm.md`, `shared/projects/*.md` |
 | Class | 5 | `class/{meta,orch,scaf,w-debugger,w-reviewer}/mtm.md` |
-| Instance | 5 | `instance/{meta,scaf,o-example,o-example-course-1,o-example}/MEMORY.md` |
+| Instance | 5 | `instance/{meta,scaf,o-example,o-<course-cw>-1,o-example}/MEMORY.md` |
 
 Root symlinks: 5 instance shortcuts + `_archive`, `_compact-snapshots`.
 
@@ -117,5 +117,5 @@ Root symlinks: 5 instance shortcuts + `_archive`, `_compact-snapshots`.
 
 - Singletons: bare name (`meta.md`, `scaf.md`, `orch.md`)
 - Workers: `w-{role}.md` (invoked via Agent tool, not `--agent`)
-- Named orchs: `o-{project}-{seq}.md` (e.g., `o-example`, `o-example-course-1`)
+- Named orchs: `o-{project}-{seq}.md` (e.g., `o-example`, `o-<course-cw>-1`)
 - Archives: `_archive/{original-name}.md`

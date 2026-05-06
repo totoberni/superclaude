@@ -2,7 +2,7 @@
 # Usage: copy to .github/workflows/ci.yml and adjust as needed
 #
 # Features: pytest + optional ruff/mypy, Python 3.11+3.12 matrix
-# Note: example-project needs PyTorch extra-index-url (see commented section)
+# Note: <PROJECT> needs PyTorch extra-index-url (see commented section)
 
 name: CI
 
@@ -35,7 +35,7 @@ jobs:
           # Uncomment for linting:
           # pip install ruff mypy
 
-          # For PyTorch projects (e.g., example-project):
+          # For PyTorch projects (e.g., <PROJECT>):
           # pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Run tests

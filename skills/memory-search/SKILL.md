@@ -41,7 +41,7 @@ Group results by source file:
 ```
 ## Results for "<query>"
 
-### ~/.claude/agent-memory/shared/projects/example-project.md
+### ~/.claude/agent-memory/shared/projects/<project>.md
 - M-4: [FAILURE] P3 — Dismissed test failures as pre-existing...
 - W-7: [WORKING_SOLUTION] P2 — Dependency-ordered merges...
 

@@ -44,7 +44,7 @@ Hierarchy, write scopes, CAN/CANNOT: `~/.claude/rules/12-agent-hierarchy.md`
 
 ### Orch Naming Convention
 
-New named orchs use `o-<project>-<seq>` (e.g., `o-example-project-1`, `o-example`). Legacy `orch-<name>` names continue to work.
+New named orchs use `o-<project>-<seq>` (e.g., `o-<project>-1`, `o-example`). Legacy `orch-<name>` names continue to work.
 
 ### Named Orch Alias Template
 

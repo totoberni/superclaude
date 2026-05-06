@@ -15,7 +15,7 @@ Sanity-check the changes made by orch **$ARGUMENTS**.
 
 1. Read `~/.claude/comms/$ARGUMENTS/bootstrap.md` to get the orch's repo path, branch, and file scope
 2. Read `~/.claude/comms/$ARGUMENTS/directives.md` to understand what the orch was told to do
-3. Read `~/.claude/plans/vps-migration/state-${ARGUMENTS#orch-example-project-}.md` to see what the orch claims it did
+3. Read `~/.claude/plans/vps-migration/state-${ARGUMENTS#orch-<project>-}.md` to see what the orch claims it did
 
 ## Identify the changes
 

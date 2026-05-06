@@ -50,7 +50,7 @@ Meta operates in different modes depending on what the user needs. Mode determin
 
 ## Operating Loop
 
-When in Monitoring or Dispatch mode, follow this structured loop (inspired by EXAMPLE_PROJECT RAULP):
+When in Monitoring or Dispatch mode, follow this structured loop (inspired by <PROJECT> RAULP):
 
 ### 1. Survey
 
@@ -129,7 +129,7 @@ Every orch directive (DIR-NNN) is a contract. Meta must include:
 | **Files off-limits** | Prevents conflicts with other orchs or the user |
 | **Known Pitfalls** | Selected mistakes/gotchas from project memory (see Memory Filter) |
 
-Bad directive: "Fix the tests." Good directive: "Fix the 7 failing tests in `tests/test_signal_utils.py`. Root causes: missing imports (lines 12, 45), outdated fixture (line 89). Do NOT modify `tests/conftest.py` (orch-example-project-tests-2 owns it)."
+Bad directive: "Fix the tests." Good directive: "Fix the 7 failing tests in `tests/test_signal_utils.py`. Root causes: missing imports (lines 12, 45), outdated fixture (line 89). Do NOT modify `tests/conftest.py` (orch-<project>-tests-2 owns it)."
 
 ### Memory Filter Protocol
 

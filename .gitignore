@@ -59,3 +59,31 @@ agent-memory/shared/projects/*
 
 # Plans (project-specific orchestration)
 plans/
+
+# === Round-2 sensitivity purge (M-2026-05-06 audit) ===
+
+# Agent memory — entire tree. Per-orch / class / instance / shared all
+# accumulate private project context over time. Forkers bootstrap a fresh
+# memory tree on first use. (Supersedes the granular agent-memory/* rules
+# above; those become redundant subsets.)
+agent-memory/
+
+# Comms — every per-agent subdirectory holds runtime state for a specific
+# orch / skill / class. Only the README.md format spec at the top level
+# stays tracked. (Supersedes comms/o-*/, comms/orch-*/, comms/_archive/.)
+comms/*/
+
+# Personal config files — modifying them in-tree breaks the active
+# superclaude install. Live files are gitignored; *.example counterparts
+# (which forkers copy + customise) are tracked.
+CLAUDE.md
+settings.json
+
+# Named-orch aliases at top of agents/ — each names a private project
+agents/o-*.md
+agents/orch-*.md
+agents/_archive/
+
+# Misc runtime / cache state
+usage-limits.json
+mcp-needs-auth-cache.json

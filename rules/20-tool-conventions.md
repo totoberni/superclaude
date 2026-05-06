@@ -31,7 +31,7 @@ Universal tool-usage patterns learned from past mistakes. Applies to ALL agents.
 ## Worktree Hygiene
 
 - **Meta** creates and deletes worktrees. **Orchs** keep them clean during use.
-- **Parallel orchs in the same repo MUST use separate worktrees.** Two orchs doing `git checkout -b` in the same working directory causes a checkout race — the second checkout changes HEAD, and the first orch's next commit lands on the wrong branch. This happened twice (M-001, example-project) and required cherry-pick + force-push to fix. Meta must include worktree setup in directives when dispatching parallel orchs to the same repo.
+- **Parallel orchs in the same repo MUST use separate worktrees.** Two orchs doing `git checkout -b` in the same working directory causes a checkout race — the second checkout changes HEAD, and the first orch's next commit lands on the wrong branch. This happened twice (M-001, <project>) and required cherry-pick + force-push to fix. Meta must include worktree setup in directives when dispatching parallel orchs to the same repo.
 - NEVER run generative scripts (`scan.py`, `render_html.py`, architecture pipelines) in worktrees — they produce large generated files (`model.json`, `diagram.mmd`, `index.html`) and stale `__pycache__` with worktree-specific paths.
 - Stale `.pyc` from worktree runs causes 30+ spurious test isolation failures that look like real bugs.
 - Before running tests in a worktree, if unsure of cleanliness: `find . -name "__pycache__" -type d -exec rm -rf {} +`
@@ -45,14 +45,14 @@ Universal tool-usage patterns learned from past mistakes. Applies to ALL agents.
 ## WSL File Permissions
 
 - WSL/Windows strips the Unix executable bit (`755 → 644`) on NTFS-mounted files, producing phantom `mode change` diffs with zero content changes.
-- All EXAMPLE_PROJECT project repos on WSL should have `core.fileMode=false` set (repo-local, not global) to ignore permission-only diffs.
+- All <PROJECT> project repos on WSL should have `core.fileMode=false` set (repo-local, not global) to ignore permission-only diffs.
 - **Never commit mode-only diffs** — scripts need `+x` for Docker/VPS deployment. If you see `0 insertions, 0 deletions` staged changes, check `git diff --cached --summary` for mode changes and discard them with `git restore --staged . && git checkout -- .`
 
 ## Empirical Verification Before Prescribing
 
 - Before writing a root-cause analysis or fix directive, run a diagnostic command that confirms the hypothesis. Never prescribe from structural reasoning alone.
 - For code that constructs file paths from config/args: substitute the ACTUAL runtime values through the construction logic and verify the resulting path string. "It uses `os.path.join`" is not verification.
-- Source: GM-1 (4 occurrences across EXAMPLE_PROJECT, VPS, example-project)
+- Source: GM-1 (4 occurrences across <PROJECT>, VPS, <PROJECT>)
 
 ## Python Namespace Gotchas
 
@@ -64,10 +64,10 @@ Universal tool-usage patterns learned from past mistakes. Applies to ALL agents.
 
 - In Verilog non-blocking assignment (NBA) `always @(posedge clk)` blocks, `reg_a <= x; reg_b <= reg_a` reads the OLD value of `reg_a` (pre-clock-edge). This is by design but causes bugs when the intent is to use the newly-computed value.
 - Fix: add a PREPARE/SETTLE pipeline state between the register write and the dependent read. Never read a register in the same clock cycle it's written via NBA.
-- Source: example-project M-2 (4 occurrences)
+- Source: <PROJECT> M-2 (4 occurrences)
 
 ## HDL Forward References (Synopsys DC)
 
 - Synopsys DC PRESTO processes Verilog files top-to-bottom. Forward-referenced wires and regs cause elaboration failures that simulators (VCS, Icarus) silently accept.
 - Declare ALL wires/regs BEFORE first use in the file. Declare regs/wires BEFORE `generate` blocks.
-- Source: example-project M-12 (3 occ) + M-12a (4 occ)
+- Source: <PROJECT> M-12 (3 occ) + M-12a (4 occ)

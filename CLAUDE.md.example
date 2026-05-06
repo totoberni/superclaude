@@ -1,0 +1,42 @@
+# <YOUR_NAME>'s Claude Code
+
+You are working for <YOUR_NAME>. Replace this paragraph with a one-sentence
+summary of your role and the kinds of projects this superclaude install supports
+(e.g. "a software engineer working across Python ML research, TypeScript web
+apps, and C++ simulations").
+
+## Superclaude Infrastructure
+
+All agent infrastructure lives at `~/.claude/` (global). Project-local `.claude/` dirs are internal to those projects and must NEVER be modified by superclaude agents.
+
+| Directory | Purpose |
+|-----------|---------|
+| `~/.claude/rules/` | Auto-loaded rules (numbered order) |
+| `~/.claude/agents/` | Specialist agents (available via /agents) |
+| `~/.claude/skills/` | Slash commands and agent-loaded skills |
+| `~/.claude/plans/` | Cross-project orchestration plans and state |
+| `~/.claude/comms/` | Meta <-> Orch(s) communication bus (namespaced per orch) |
+| `~/.claude/agent-memory/` | Persistent per-agent memory |
+| `~/.claude/docs/` | Usage guide and historical references |
+
+## Agent Hierarchy
+
+| Level | Agent | Invocation | Role |
+|-------|-------|------------|------|
+| Strategic | Meta | `claude --agent meta` | Cross-project supervision, brainstorms with the user, writes plans and directives, manages comms bus, triages orch health. The user launches/kills orchs manually. |
+| Infrastructure | Scaf | `claude --agent scaf` | Superclaude infrastructure specialist. Edits agents, hooks, rules, skills, settings.json. Receives directives from Meta. |
+| Tactical | Orch | `claude --agent orch` or `claude --agent orch-<name>` | Executes plans, spawns workers, edits code, manages git, reports progress. Named instances for parallel work. |
+| Worker | `w-merger`, `w-debugger`, `w-refactorer`, `w-reviewer`, `w-planner` | Via Agent tool | Scoped specialist tasks |
+
+### Multi-Orch & Workspace
+
+Full protocol: `~/.claude/rules/12-agent-hierarchy.md`. Comms format: `~/.claude/comms/README.md`. Named orch template: `~/.claude/docs/usage-guide.md`.
+
+**All agents run from `<YOUR_WORKSPACE_ROOT>` as CWD** (e.g. `~/projects/`) — never from inside project directories.
+
+## Key Rules (auto-loaded)
+- `00-universal.md` — Read before edit, minimal changes, git discipline, stop conditions
+- `05-coding-standards.md` — Language-specific standards (path-scoped)
+- `10-orchestrator-protocol.md` — Plan/state protocol (in-project and superclaude)
+- `12-agent-hierarchy.md` — Meta/Orch/Worker hierarchy, write scopes, multi-orch comms
+- `15-programming-principles.md` — 10 programming principles (DRY, KISS, etc.)

@@ -38,7 +38,7 @@ Parse `$ARGUMENTS` to determine mode (default: `--orch`):
 | Orch | Project | DIR | Last RPT | Status | Age | Escalation |
 |------|---------|-----|----------|--------|-----|------------|
 | o-x-1| workspace   | 012 | RPT-015  | DONE   | 2h  | --         |
-| o-y-1| example-project  | 008 | RPT-010  | ACTIVE | 15m | ESC-003    |
+| o-y-1| <project>  | 008 | RPT-010  | ACTIVE | 15m | ESC-003    |
 ```
 
 If no active orchs: `No active orchs. Use /handoff --commission to create one.`
