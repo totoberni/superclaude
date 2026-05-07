@@ -1,0 +1,14 @@
+# /notebook skill dependencies — merge into your project's requirements.txt.
+# Loose pinning per W4 (strict == on Colab forces downgrades + breaks transitively).
+nbformat>=5.10
+jupytext>=1.16
+nbclient>=0.10
+nbdime>=4.0
+pylatexenc>=2.10
+markdown-it-py>=3.0
+psutil>=6.0
+nbstripout>=0.9
+ruff>=0.9
+pre-commit>=4.0
+PyYAML>=6.0
+jupyter_client>=8.6
