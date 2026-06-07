@@ -89,3 +89,28 @@ Meta writes `parent.session` to each orch's comms directory before launching the
 ### Workers
 
 Workers spawned via the Agent tool inherit context from their spawning orch's session. No additional `parent.session` infrastructure needed — workers can read the orch's comms directory if needed.
+
+## Comms Search Store + HTML Reports (v3)
+
+Two comms stores coexist:
+
+- `.broker.db` — the live HCOM **message bus** (DIR/RPT/ESC/NUDGE/EVENT). Operational unread/unanswered state lives here in the `read_at` column. **This is the operational source of truth**: how meta/orchs detect unread DIR/RPT/ESC is unchanged.
+- `.comms.db` — a SEPARATE, forward-only **FTS5 + vector + HTML search index** built from the broker by `scripts/memory/comms_db.py sync` (reuses the memory-DB engine). It embeds every message and renders HTML on demand. Additive search/render layer, NOT a bus replacement.
+
+**When to use the search store**: historical or semantic queries across all comms history (e.g. "all ESCs about X", "what did orch Y report about Z"). For unread/unanswered state, use the broker (unchanged).
+
+`comms_db.py` CLI (run via `~/.claude/.venv/bin/python`):
+
+- `sync [--rebuild]` — forward-only refresh from the broker. Lazy/manual: run before searching to capture recent messages.
+- `search <query> [--mode hybrid|fts|vec]` — hybrid FTS5+vector over all comms history.
+- `html <id>` — render one entry.
+- `stats` — index stats.
+
+`comms_viewer.py` renders a standalone HTML report:
+
+- `--id N` — one entry.
+- `--agent X [--kind RPT]` — an orch's report bundle.
+- `--search Q` — search hits.
+- `--demo` — embedded Mermaid/Vega/TikZ sample.
+
+Terminal comms stay MD; HTML is for completion reports + browser review.

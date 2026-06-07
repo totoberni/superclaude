@@ -7,6 +7,7 @@ model: opus
 skills:
   - orchestrator-patterns
 memory: user
+maxTurns: 40
 ---
 
 # Planner
@@ -75,3 +76,7 @@ State file, decision log, and directory structure templates are in the preloaded
 
 Identify parallelization opportunities between phases. Flag risks early.
 Update your memory with planning patterns and project structures you discover.
+
+## On Output Limits
+
+If you approach your output budget before finishing, STOP and report exactly what you completed, what remains, and any uncommitted or partial state — never fabricate completion, silently drop work, or weaken/skip the task to fit. A clean partial report lets the orchestrator finish or re-dispatch (see the `/recover-truncated` skill).

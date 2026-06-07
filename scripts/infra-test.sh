@@ -232,9 +232,23 @@ test_agents() {
   done
   [ "$ALL_MODELS" = true ] && pass "A2 all agents have valid model (opus/sonnet/haiku, optionally [1m]/[200k])"
 
-  # A2b: Tiered model policy (main=opus[1m], sub=opus)
-  # Source: agent-memory/shared/projects/superclaude.md §W-1 (2026-04-16)
-  # Naming convention: w-* → subagent; everything else → main agent.
+  # A2b: Tiered model policy (main=opus[1m], w-* per DEC-002 matrix)
+  # Source: rules/13-worker-first-mandate.md § Per-Worker Defaults
+  # Naming convention: w-* → subagent (per-matrix model); everything else → main agent (opus[1m]).
+  # Workers not in the map are skipped (allows new w-* additions before policy update).
+  declare -A EXPECTED_MODEL=(
+    [w-explorer]=haiku
+    [w-committer]=haiku
+    [w-planner]=opus
+    [w-debugger]=sonnet
+    [w-design-reviewer]=sonnet
+    [w-doc]=sonnet
+    [w-implementer]=sonnet
+    [w-merger]=sonnet
+    [w-refactorer]=sonnet
+    [w-reviewer]=sonnet
+    [w-tester]=sonnet
+  )
   local ALL_TIER=true
   for agent in "$AGENT_DIR"/*.md; do
     [ -f "$agent" ] || continue
@@ -248,9 +262,11 @@ test_agents() {
     [ -z "$MODEL_VAL" ] && continue  # A2 already flagged missing field
     case "$NAME" in
       w-*)
-        if [ "$MODEL_VAL" != "opus" ]; then
+        local EXPECTED="${EXPECTED_MODEL[$NAME]:-}"
+        [ -z "$EXPECTED" ] && continue  # not in policy map yet — skip
+        if [ "$MODEL_VAL" != "$EXPECTED" ]; then
           ALL_TIER=false
-          fail "A2b tier policy" "$NAME: subagent should be 'opus' (found '$MODEL_VAL')"
+          fail "A2b tier policy" "$NAME: should be '$EXPECTED' per matrix (found '$MODEL_VAL')"
         fi
         ;;
       *)
@@ -261,7 +277,7 @@ test_agents() {
         ;;
     esac
   done
-  [ "$ALL_TIER" = true ] && pass "A2b tier policy (main=opus[1m], sub=opus)"
+  [ "$ALL_TIER" = true ] && pass "A2b tier policy (main=opus[1m], w-* per DEC-002 matrix)"
 
   # A3: Backward-compat symlinks resolve to real files
   local ALL_LINKS=true
@@ -591,6 +607,10 @@ test_comms() {
     [ "$NAME" = "_archive" ] && continue
     local DIRECTIVES_FILE="$dir/directives.md"
     [ -f "$DIRECTIVES_FILE" ] || continue
+    # Skip empty placeholder ledgers: a 0-byte directives.md is an idle infra dir,
+    # not an active orch with missing directives — warning on it is a false-positive.
+    # Files WITH content but no DIR-NNN still warn below (the real "forgot to number" case).
+    [ -s "$DIRECTIVES_FILE" ] || continue
     # Skip decommissioned orchs — their directives are intentionally cleared
     if grep -qi "decommissioned" "$DIRECTIVES_FILE" 2>/dev/null; then
       continue
@@ -622,6 +642,38 @@ test_comms() {
     fi
   done
   [ "$ALL_NUMS" = true ] && pass "C3 DIR numbering and files consistent"
+
+  # C4: Comms search-store deep integrity (v3 Phase 2, T2.4)
+  # The FTS5+sqlite-vec store at comms/.comms.db must satisfy rows==fts==vec.
+  # This is the DEEP check: it counts memories_vec, which needs the sqlite-vec
+  # extension and therefore the venv python (plain sqlite3 cannot). super-health's
+  # bash facet only checks rows==fts (+table presence) since it has no extension.
+  #   ABSENT → SKIP (warn, not fail) — fail-safe for pre-comms-DB systems.
+  #   PRESENT → run comms_db.py stats offline, assert rows==fts_rows==vec_rows.
+  local COMMS_DB="$COMMS_DIR/.comms.db"
+  local CDB_PY="$SCRIPT_DIR/memory/comms_db.py"
+  local CDB_VENV="$CLAUDE_DIR/.venv/bin/python"
+  if [ ! -f "$COMMS_DB" ]; then
+    warn "C4 comms search-store" "comms/.comms.db not built — skipping deep integrity check"
+  elif [ ! -x "$CDB_VENV" ] || [ ! -f "$CDB_PY" ]; then
+    warn "C4 comms search-store" "venv python or comms_db.py missing — cannot run stats"
+  else
+    local CDB_OUT CDB_RC CDB_ROWS CDB_FTS CDB_VEC
+    CDB_OUT=$(HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 "$CDB_VENV" "$CDB_PY" stats 2>&1)
+    CDB_RC=$?
+    CDB_ROWS=$(echo "$CDB_OUT" | grep -E '^[[:space:]]*rows[[:space:]]*:' | grep -oE '[0-9]+' | head -1)
+    CDB_FTS=$(echo "$CDB_OUT" | grep -E '^[[:space:]]*fts_rows[[:space:]]*:' | grep -oE '[0-9]+' | head -1)
+    CDB_VEC=$(echo "$CDB_OUT" | grep -E '^[[:space:]]*vec_rows[[:space:]]*:' | grep -oE '[0-9]+' | head -1)
+    if [ "$CDB_RC" -ne 0 ]; then
+      fail "C4 comms search-store" "comms_db.py stats exit $CDB_RC"
+    elif [ -z "$CDB_ROWS" ] || [ -z "$CDB_FTS" ] || [ -z "$CDB_VEC" ]; then
+      fail "C4 comms search-store" "could not parse rows/fts_rows/vec_rows from stats"
+    elif [ "$CDB_ROWS" = "$CDB_FTS" ] && [ "$CDB_ROWS" = "$CDB_VEC" ]; then
+      pass "C4 comms search-store integrity (rows==fts==vec==$CDB_ROWS)"
+    else
+      fail "C4 comms search-store" "rows/fts/vec mismatch: rows=$CDB_ROWS fts=$CDB_FTS vec=$CDB_VEC"
+    fi
+  fi
 }
 
 # ═══════════════════════════════════════════════════

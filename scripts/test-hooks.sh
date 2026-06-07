@@ -66,6 +66,9 @@ SCRATCH=$(mktemp -d /tmp/hooktest-XXXX)
 FAKE_TIMER_DIR="$SCRATCH/session-timers"
 FAKE_NUDGE_DIR="$SCRATCH/nudge"
 mkdir -p "$FAKE_TIMER_DIR" "$FAKE_NUDGE_DIR"
+# Redirect pre-compact snapshots into SCRATCH so hook tests never pollute the real dir.
+export COMPACT_SNAPSHOT_DIR="$SCRATCH/compact-snapshots"
+mkdir -p "$COMPACT_SNAPSHOT_DIR"
 
 # Cleanup trap — remove ALL test artifacts on exit
 cleanup() {
@@ -115,6 +118,15 @@ run_hook() {
 # Helper: get stderr from last run_hook
 last_stderr() {
   cat "$SCRATCH/stderr.tmp" 2>/dev/null || echo ""
+}
+
+# Helper: source lib.sh + a single module in a subshell.
+# Use this in M6 module-unit tests instead of bare `source $HOOK_DIR/modules/...`
+# to ensure lib.sh helpers (safe_int, get_bash_cmd, emit_context, etc.) are defined.
+# Production session-timer.sh sources lib.sh BEFORE iterating modules; this mirrors that.
+source_module() {
+  . "$HOOK_DIR/lib.sh"
+  source "$HOOK_DIR/modules/$1"
 }
 
 echo "=== Hook Test Suite ($(date '+%Y-%m-%d %H:%M:%S')) ==="
@@ -663,7 +675,7 @@ echo "── Module Unit Tests ──"
   AGENT_FILE=""
   PID_FILE=""
   CLAUDE_PID=""
-  source "$HOOK_DIR/modules/00-parse.sh"
+  source_module 00-parse.sh
   mod_parse
   if [ "$SESSION_ID" = "test-parse-001" ] && [ "$TOOL_NAME" = "Edit" ]; then
     exit 0
@@ -691,7 +703,7 @@ fi
   AGENT_FILE=""
   PID_FILE=""
   CLAUDE_PID=""
-  source "$HOOK_DIR/modules/00-parse.sh"
+  source_module 00-parse.sh
   mod_parse
   if [ "$START_FILE" = "$FAKE_TIMER_DIR/test-derive-002.start" ] && \
      [ "$AGENT_FILE" = "$FAKE_TIMER_DIR/test-derive-002.agent" ]; then
@@ -713,7 +725,7 @@ fi
   AGENT_NAME="orch-test"
   TIMER_DIR="$FAKE_TIMER_DIR"
   echo "2" > "$FAKE_TIMER_DIR/test-ctx-003.calls"
-  source "$HOOK_DIR/modules/05-context-check.sh"
+  source_module 05-context-check.sh
   # First call — may or may not fire (depends on memory size) but shouldn't crash
   mod_context_check >/dev/null 2>&1
   exit 0
@@ -733,7 +745,7 @@ rm -f "$FAKE_TIMER_DIR"/test-ctx-003.* 2>/dev/null
   TOOL_NAME="Read"
   NUDGE_FIRED=false
   INPUT='{"tool_input":{}}'
-  source "$HOOK_DIR/modules/20-counter.sh"
+  source_module 20-counter.sh
   mod_counter >/dev/null 2>&1
   C1=$(cat "$FAKE_TIMER_DIR/test-cnt-004.calls" 2>/dev/null | tr -cd '0-9')
   mod_counter >/dev/null 2>&1
@@ -758,7 +770,7 @@ rm -f "$FAKE_TIMER_DIR"/test-cnt-004.* 2>/dev/null
   TIMER_DIR="$FAKE_TIMER_DIR"
   NUDGE_FIRED=false
   INPUT='{"tool_input":{}}'
-  source "$HOOK_DIR/modules/20-counter.sh"
+  source_module 20-counter.sh
   # Two Edit calls
   TOOL_NAME="Edit"
   mod_counter >/dev/null 2>&1
@@ -783,31 +795,37 @@ fi
 rm -f "$FAKE_TIMER_DIR"/test-tdd-005.* 2>/dev/null
 
 # M6.6: mod_commit_gate passes conventional format
+# Strengthened: capture stderr separately, assert exit 0, assert no "command not found"
+# (catches future regressions where lib.sh fails to load and helpers are undefined)
 (
+  SESSION_ID="test-cg-006"
+  TIMER_DIR="$FAKE_TIMER_DIR"
   TOOL_NAME="Bash"
   NUDGE_FIRED=false
   INPUT='{"tool_input":{"command":"git commit -m \"feat: add user login\""}}'
-  source "$HOOK_DIR/modules/25-commit-gate.sh"
-  OUTPUT=$(mod_commit_gate 2>&1)
-  # Should produce no additionalContext (pass = silent)
-  if echo "$OUTPUT" | grep -q "may not follow"; then
-    exit 1
-  else
-    exit 0
-  fi
-) 2>/dev/null
-if [ $? -eq 0 ]; then
+  source_module 25-commit-gate.sh
+  mod_commit_gate
+) > "$SCRATCH/m66.stdout" 2> "$SCRATCH/m66.stderr"
+M66_RC=$?
+if [ "$M66_RC" = "0" ] \
+   && ! grep -q "command not found" "$SCRATCH/m66.stderr" 2>/dev/null \
+   && ! grep -q "may not follow" "$SCRATCH/m66.stdout" 2>/dev/null; then
   pass "M6.6 mod_commit_gate (conventional format passes silently)"
 else
-  fail "M6.6 mod_commit_gate" "false positive on valid conventional commit"
+  fail "M6.6 mod_commit_gate" "exit=$M66_RC stderr=$(cat "$SCRATCH/m66.stderr" 2>/dev/null)"
 fi
+rm -f "$SCRATCH/m66.stdout" "$SCRATCH/m66.stderr" "$FAKE_TIMER_DIR"/test-cg-006.* 2>/dev/null
 
 # M6.7: mod_commit_gate warns on non-conventional format
+# SESSION_ID required: mod_commit_gate calls already_warned "$SESSION_ID" "commit-gate"
+# which would error under `set -u` if SESSION_ID is unset.
 (
+  SESSION_ID="test-cg-007"
+  TIMER_DIR="$FAKE_TIMER_DIR"
   TOOL_NAME="Bash"
   NUDGE_FIRED=false
   INPUT='{"tool_input":{"command":"git commit -m \"fixed some stuff\""}}'
-  source "$HOOK_DIR/modules/25-commit-gate.sh"
+  source_module 25-commit-gate.sh
   OUTPUT=$(mod_commit_gate 2>&1)
   if echo "$OUTPUT" | grep -q "may not follow"; then
     exit 0
@@ -815,6 +833,7 @@ fi
     exit 1
   fi
 ) 2>/dev/null
+rm -f "$FAKE_TIMER_DIR"/test-cg-007.* 2>/dev/null
 if [ $? -eq 0 ]; then
   pass "M6.7 mod_commit_gate (non-conventional triggers warning)"
 else
@@ -887,7 +906,7 @@ rm -f "$FAKE_TIMER_DIR"/hooktest-orphan.* "$FAKE_TIMER_DIR"/hooktest-m610.* 2>/d
   touch -t 202601010000.00 "$HOME/.claude/comms/scaf/bootstrap.md"
   echo "new directive" > "$HOME/.claude/comms/scaf/directives.md"
   touch -t 202603140000.00 "$HOME/.claude/comms/scaf/directives.md"
-  source "$HOOK_DIR/modules/50-bootstrap.sh"
+  source_module 50-bootstrap.sh
   OUTPUT=$(mod_bootstrap_check 2>&1)
   HOME="$HOME_ORIG"
   if echo "$OUTPUT" | grep -qi "stale\|older"; then
@@ -910,7 +929,7 @@ mkdir -p "$FAKE_NUDGE_DIR"
   NUDGE_DIR="$FAKE_NUDGE_DIR"
   NUDGE_FIRED=false
   echo "200" > "$NUDGE_DIR/$AGENT_NAME"
-  source "$HOOK_DIR/modules/10-nudge.sh"
+  source_module 10-nudge.sh
   mod_nudge > "$NUDGE_DIR/nudge_output.tmp" 2>&1
   if [ "$NUDGE_FIRED" = true ] && grep -q "NUDGE" "$NUDGE_DIR/nudge_output.tmp" && [ ! -f "$NUDGE_DIR/$AGENT_NAME" ]; then
     exit 0
@@ -925,45 +944,49 @@ else
 fi
 
 # M6.13: mod_nudge no-op without nudge file (tests 10-nudge module)
+# Strengthened: capture stderr, assert exit 0 + no "command not found"
+# (NUDGE_FIRED=false would also be true if lib.sh failed silently to load)
 (
   AGENT_NAME="orch-no-nudge"
   NUDGE_DIR="$FAKE_NUDGE_DIR"
   NUDGE_FIRED=false
   rm -f "$NUDGE_DIR/$AGENT_NAME" 2>/dev/null
-  source "$HOOK_DIR/modules/10-nudge.sh"
-  mod_nudge >/dev/null 2>&1
-  if [ "$NUDGE_FIRED" = false ]; then
-    exit 0
-  else
-    exit 1
-  fi
-) 2>/dev/null
-if [ $? -eq 0 ]; then
+  source_module 10-nudge.sh
+  mod_nudge
+  # Communicate NUDGE_FIRED out of subshell via exit code
+  [ "$NUDGE_FIRED" = false ] || exit 99
+) > "$SCRATCH/m613.stdout" 2> "$SCRATCH/m613.stderr"
+M613_RC=$?
+if [ "$M613_RC" = "0" ] \
+   && ! grep -q "command not found" "$SCRATCH/m613.stderr" 2>/dev/null; then
   pass "M6.13 mod_nudge (no-op without file, 10-nudge)"
 else
-  fail "M6.13 mod_nudge" "NUDGE_FIRED should remain false"
+  fail "M6.13 mod_nudge" "exit=$M613_RC stderr=$(cat "$SCRATCH/m613.stderr" 2>/dev/null)"
 fi
+rm -f "$SCRATCH/m613.stdout" "$SCRATCH/m613.stderr" 2>/dev/null
 
 # M6.14: mod_nudge cleans empty nudge file (tests 10-nudge module)
+# Strengthened: capture stderr, assert exit 0 + no "command not found"
 mkdir -p "$FAKE_NUDGE_DIR"
 (
   AGENT_NAME="orch-empty-nudge"
   NUDGE_DIR="$FAKE_NUDGE_DIR"
   NUDGE_FIRED=false
   echo "" > "$NUDGE_DIR/$AGENT_NAME"
-  source "$HOOK_DIR/modules/10-nudge.sh"
-  mod_nudge >/dev/null 2>&1
-  if [ ! -f "$NUDGE_DIR/$AGENT_NAME" ] && [ "$NUDGE_FIRED" = false ]; then
-    exit 0
-  else
-    exit 1
-  fi
-) 2>/dev/null
-if [ $? -eq 0 ]; then
+  source_module 10-nudge.sh
+  mod_nudge
+  # Both invariants must hold: file consumed AND nudge not fired
+  [ ! -f "$NUDGE_DIR/$AGENT_NAME" ] || exit 98
+  [ "$NUDGE_FIRED" = false ] || exit 99
+) > "$SCRATCH/m614.stdout" 2> "$SCRATCH/m614.stderr"
+M614_RC=$?
+if [ "$M614_RC" = "0" ] \
+   && ! grep -q "command not found" "$SCRATCH/m614.stderr" 2>/dev/null; then
   pass "M6.14 mod_nudge (cleans empty file, 10-nudge)"
 else
-  fail "M6.14 mod_nudge" "empty nudge file not cleaned"
+  fail "M6.14 mod_nudge" "exit=$M614_RC stderr=$(cat "$SCRATCH/m614.stderr" 2>/dev/null)"
 fi
+rm -f "$SCRATCH/m614.stdout" "$SCRATCH/m614.stderr" 2>/dev/null
 
 # M6.15: mod_timer creates .start on first call (tests 30-timer module)
 rm -f "$FAKE_TIMER_DIR/test-timer-015.start" 2>/dev/null
@@ -975,7 +998,7 @@ rm -f "$FAKE_TIMER_DIR/test-timer-015.start" 2>/dev/null
   OVERRIDE_FILE="$FAKE_TIMER_DIR/test-timer-015.override"
   TOOL_NAME="Read"
   INPUT='{"tool_input":{}}'
-  source "$HOOK_DIR/modules/30-timer.sh"
+  source_module 30-timer.sh
   mod_timer
 ) 2>/dev/null
 if [ -f "$FAKE_TIMER_DIR/test-timer-015.start" ]; then
@@ -997,7 +1020,7 @@ rm -f "$FAKE_TIMER_DIR"/test-timer-015.* 2>/dev/null
   # Create "very old" start file — would hard-block a non-meta agent
   echo $(( $(date +%s) - 3600 )) > "$START_FILE"
   chmod 444 "$START_FILE" 2>/dev/null || true
-  source "$HOOK_DIR/modules/30-timer.sh"
+  source_module 30-timer.sh
   mod_timer
 ) 2>/dev/null
 RC=$?
@@ -1016,7 +1039,7 @@ rm -f "$FAKE_TIMER_DIR"/test-timer-016.* 2>/dev/null
   echo "1000000000" > "$TIMER_DIR/test-gc-stale.start"
   echo "stale-agent" > "$TIMER_DIR/test-gc-stale.agent"
   touch -t 202601010000.00 "$TIMER_DIR/test-gc-stale.start"
-  source "$HOOK_DIR/modules/40-gc.sh"
+  source_module 40-gc.sh
   mod_gc
   if [ ! -f "$TIMER_DIR/test-gc-stale.start" ]; then
     exit 0
@@ -1038,7 +1061,7 @@ rm -f "$FAKE_TIMER_DIR"/test-gc-stale.* "$FAKE_TIMER_DIR"/test-gc-017.* 2>/dev/n
   echo "99999" > "$TIMER_DIR/test-gc-dead.pid"
   echo "$(date +%s)" > "$TIMER_DIR/test-gc-dead.start"
   echo "dead-agent" > "$TIMER_DIR/test-gc-dead.agent"
-  source "$HOOK_DIR/modules/40-gc.sh"
+  source_module 40-gc.sh
   mod_gc
   if [ ! -f "$TIMER_DIR/test-gc-dead.pid" ]; then
     exit 0
@@ -1052,6 +1075,360 @@ else
   fail "M6.18 mod_gc Phase 2" "dead PID files not cleaned"
 fi
 rm -f "$FAKE_TIMER_DIR"/test-gc-dead.* "$FAKE_TIMER_DIR"/test-gc-018.* 2>/dev/null
+
+# ═══════════════════════════════════════════════════════
+# PHASE 7 / Standalone-hook + extra-module fail-safe coverage
+#   One representative-input test per hook NOT already exercised above.
+#   Contract for every test here: the hook must be FAIL-SAFE — exit 0 (or, for
+#   the deliberate hard-block guard, the documented exit 2) and emit no traceback.
+#   Log-writing hooks run under an ISOLATED $HOME so real telemetry logs
+#   (~/.claude/comms/_spawns*.log, _outcomes.log) are never polluted by tests.
+# ═══════════════════════════════════════════════════════
+echo ""
+echo "── Standalone-Hook + Extra-Module Tests ──"
+
+# Isolated, fully-writable HOME for log-emitting standalone hooks.
+ISO_HOME="$SCRATCH/isohome"
+mkdir -p "$ISO_HOME/.claude/comms" "$ISO_HOME/.claude/session-timers" \
+         "$ISO_HOME/.claude/agents/_ephemeral" \
+         "$ISO_HOME/.claude/agent-memory/_system/_stop-snapshots" 2>/dev/null
+
+# Helper: run a standalone hook under ISO_HOME, capture rc + stderr.
+run_iso_hook() {
+  local HOOK="$1" INPUT="$2"
+  printf '%s' "$INPUT" | HOME="$ISO_HOME" bash "$HOOK" >"$SCRATCH/iso.stdout" 2>"$SCRATCH/iso.stderr"
+  return $?
+}
+# Assert: exit 0 AND no shell traceback markers in stderr.
+iso_failsafe_ok() {
+  local rc="$1"
+  [ "$rc" = "0" ] || return 1
+  grep -qE 'line [0-9]+:|unbound variable|command not found|syntax error' "$SCRATCH/iso.stderr" 2>/dev/null && return 1
+  return 0
+}
+
+# P7.1: agent-outcome.sh — PostToolUse on Agent return → classifies + logs, exit 0.
+AGENT_HOOK="$HOOK_DIR/agent-outcome.sh"
+P71_IN='{"tool_name":"Agent","session_id":"hooktest-ao-071","tool_input":{"subagent_type":"w-explorer","description":"recon test"},"tool_response":"## Summary\nFound 3 files. Done."}'
+run_iso_hook "$AGENT_HOOK" "$P71_IN"
+P71_RC=$?
+if iso_failsafe_ok "$P71_RC" && grep -q "w-explorer" "$ISO_HOME/.claude/comms/_outcomes.log" 2>/dev/null; then
+  pass "P7.1 agent-outcome.sh (Agent return classified + logged, exit 0)"
+else
+  fail "P7.1 agent-outcome.sh" "rc=$P71_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.2: agent-outcome.sh — non-Agent tool → silent no-op, exit 0.
+run_iso_hook "$AGENT_HOOK" '{"tool_name":"Read","session_id":"hooktest-ao-072"}'
+P72_RC=$?
+if iso_failsafe_ok "$P72_RC"; then
+  pass "P7.2 agent-outcome.sh (non-Agent tool no-op, exit 0)"
+else
+  fail "P7.2 agent-outcome.sh" "rc=$P72_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.3: subagent-stop.sh — SubagentStop envelope → writes EXIT rows, exit 0.
+SUBSTOP_HOOK="$HOOK_DIR/subagent-stop.sh"
+P73_IN='{"hook_event_name":"SubagentStop","session_id":"hooktest-ss-073","agent_id":"abc123def","agent_type":"w-implementer","last_assistant_message":"## Verification\nAll tests pass."}'
+run_iso_hook "$SUBSTOP_HOOK" "$P73_IN"
+P73_RC=$?
+if iso_failsafe_ok "$P73_RC" \
+   && grep -q "EXIT" "$ISO_HOME/.claude/comms/_spawns.log" 2>/dev/null \
+   && grep -q "abc123def" "$ISO_HOME/.claude/comms/_spawns-rich.log" 2>/dev/null; then
+  pass "P7.3 subagent-stop.sh (EXIT rows written to both logs, exit 0)"
+else
+  fail "P7.3 subagent-stop.sh" "rc=$P73_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.4: subagent-stop.sh — empty stdin → fail-safe, exit 0.
+run_iso_hook "$SUBSTOP_HOOK" ''
+P74_RC=$?
+if iso_failsafe_ok "$P74_RC"; then
+  pass "P7.4 subagent-stop.sh (empty stdin, exit 0)"
+else
+  fail "P7.4 subagent-stop.sh" "rc=$P74_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.5: stop.sh — Stop event → snapshots ephemeral state, exit 0.
+STOP_HOOK="$HOOK_DIR/stop.sh"
+run_iso_hook "$STOP_HOOK" '{"session_id":"hooktest-stop-075","hook_event_name":"Stop"}'
+P75_RC=$?
+SNAP_MADE=$(ls -d "$ISO_HOME/.claude/agent-memory/_system/_stop-snapshots/hooktest-stop-075-"* 2>/dev/null | head -1)
+if iso_failsafe_ok "$P75_RC" && [ -n "$SNAP_MADE" ]; then
+  pass "P7.5 stop.sh (snapshot dir created, exit 0)"
+else
+  fail "P7.5 stop.sh" "rc=$P75_RC snapshot=$SNAP_MADE stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.6: stop.sh — empty session_id → no-op, exit 0.
+run_iso_hook "$STOP_HOOK" '{}'
+P76_RC=$?
+if iso_failsafe_ok "$P76_RC"; then
+  pass "P7.6 stop.sh (empty session_id no-op, exit 0)"
+else
+  fail "P7.6 stop.sh" "rc=$P76_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.7: comms-schema-lint.sh — non-comms file path → silent no-op, exit 0.
+LINT_HOOK="$HOOK_DIR/comms-schema-lint.sh"
+run_iso_hook "$LINT_HOOK" '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/notes.md"}}'
+P77_RC=$?
+if iso_failsafe_ok "$P77_RC"; then
+  pass "P7.7 comms-schema-lint.sh (non-comms path no-op, exit 0)"
+else
+  fail "P7.7 comms-schema-lint.sh" "rc=$P77_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.8: comms-schema-lint.sh — well-formed RPT entry in a comms reports.md → exit 0, no warning.
+LINT_COMMS_DIR="$ISO_HOME/.claude/comms/orch-test"
+mkdir -p "$LINT_COMMS_DIR" 2>/dev/null
+printf '## RPT-001\n**Time**: 2026-06-03\n**Directive**: DIR-001\n**Status**: DONE\n' > "$LINT_COMMS_DIR/reports.md"
+run_iso_hook "$LINT_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$LINT_COMMS_DIR/reports.md\"}}"
+P78_RC=$?
+if iso_failsafe_ok "$P78_RC" && ! grep -q "missing required fields" "$SCRATCH/iso.stdout" 2>/dev/null; then
+  pass "P7.8 comms-schema-lint.sh (valid RPT entry, no warning, exit 0)"
+else
+  fail "P7.8 comms-schema-lint.sh" "rc=$P78_RC stdout=$(cat "$SCRATCH/iso.stdout" 2>/dev/null)"
+fi
+
+# P7.9: latex-warn.sh — non-.tex edit → silent no-op, exit 0.
+LATEX_HOOK="$HOOK_DIR/latex-warn.sh"
+run_iso_hook "$LATEX_HOOK" '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/notes.md"}}'
+P79_RC=$?
+if iso_failsafe_ok "$P79_RC"; then
+  pass "P7.9 latex-warn.sh (non-.tex no-op, exit 0)"
+else
+  fail "P7.9 latex-warn.sh" "rc=$P79_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.10: latex-warn.sh — .tex edit but NO .log present (no build yet) → no-op, exit 0.
+LATEX_TEX="$SCRATCH/doc.tex"
+printf '\\documentclass{article}\\begin{document}hi\\end{document}\n' > "$LATEX_TEX"
+run_iso_hook "$LATEX_HOOK" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$LATEX_TEX\"}}"
+P710_RC=$?
+if iso_failsafe_ok "$P710_RC"; then
+  pass "P7.10 latex-warn.sh (.tex with no .log, no-op, exit 0)"
+else
+  fail "P7.10 latex-warn.sh" "rc=$P710_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.11: 14-agent-thinking-nudge.sh — Agent dispatch lacking a thinking keyword
+#        for a matrix-prescribed type → emits advisory, returns 0 (never blocks).
+(
+  TOOL_NAME="Agent"
+  SESSION_ID="test-tn-0711"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  INPUT='{"tool_input":{"subagent_type":"w-planner","prompt":"Plan the architectural migration across the whole subsystem."}}'
+  source_module 14-agent-thinking-nudge.sh
+  OUT=$(mod_thinking_nudge 2>&1)
+  RC=$?
+  [ $RC -eq 0 ] || exit 1
+  echo "$OUT" | grep -qi "matrix prescribes" || exit 1
+  exit 0
+) 2>/dev/null
+P711_RC=$?
+rm -f "$FAKE_TIMER_DIR"/test-tn-0711.* 2>/dev/null
+if [ $P711_RC -eq 0 ]; then
+  pass "P7.11 14-agent-thinking-nudge.sh (advisory emitted, returns 0)"
+else
+  fail "P7.11 14-agent-thinking-nudge.sh" "no advisory or non-zero return (rc=$P711_RC)"
+fi
+
+# P7.12: 14-agent-thinking-nudge.sh — non-Agent tool → no-op, returns 0.
+(
+  TOOL_NAME="Read"
+  SESSION_ID="test-tn-0712"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  INPUT='{"tool_input":{}}'
+  source_module 14-agent-thinking-nudge.sh
+  mod_thinking_nudge >/dev/null 2>&1
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "P7.12 14-agent-thinking-nudge.sh (non-Agent no-op, returns 0)"
+else
+  fail "P7.12 14-agent-thinking-nudge.sh" "non-zero return on non-Agent tool"
+fi
+
+# P7.13: 15-baseline-stash.sh — Edit in a NON-/commit-false cwd → sets marker, returns 0.
+(
+  TOOL_NAME="Edit"
+  SESSION_ID="test-bs-0713"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  INPUT='{"tool_input":{}}'
+  CLAUDE_COMMIT_POLICY="true"
+  source_module 15-baseline-stash.sh
+  mod_baseline_stash >/dev/null 2>&1
+  RC=$?
+  [ $RC -eq 0 ] || exit 1
+  [ -f "$FAKE_TIMER_DIR/test-bs-0713.baseline-stashed" ] || exit 1
+  exit 0
+) 2>/dev/null
+P713_RC=$?
+rm -f "$FAKE_TIMER_DIR"/test-bs-0713.* 2>/dev/null
+if [ $P713_RC -eq 0 ]; then
+  pass "P7.13 15-baseline-stash.sh (marker set on non-no-commit repo, returns 0)"
+else
+  fail "P7.13 15-baseline-stash.sh" "marker not set or non-zero return (rc=$P713_RC)"
+fi
+
+# P7.14: 15-baseline-stash.sh — non-mutating tool (Read) → no-op, returns 0.
+(
+  TOOL_NAME="Read"
+  SESSION_ID="test-bs-0714"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  INPUT='{"tool_input":{}}'
+  source_module 15-baseline-stash.sh
+  mod_baseline_stash >/dev/null 2>&1
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "P7.14 15-baseline-stash.sh (non-mutating tool no-op, returns 0)"
+else
+  fail "P7.14 15-baseline-stash.sh" "non-zero return on Read"
+fi
+
+# P7.15: 45-spawn-log.sh — Agent dispatch → appends a parent/type/desc row, returns 0.
+(
+  TOOL_NAME="Agent"
+  SESSION_ID="test-sl-0715"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  AGENT_NAME="orch-test"
+  HOME="$ISO_HOME"
+  INPUT='{"tool_input":{"subagent_type":"w-tester","description":"run the suite"}}'
+  source_module 45-spawn-log.sh
+  mod_spawn_log >/dev/null 2>&1
+  RC=$?
+  [ $RC -eq 0 ] || exit 1
+  grep -q "w-tester" "$ISO_HOME/.claude/comms/_spawns.log" 2>/dev/null || exit 1
+  exit 0
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "P7.15 45-spawn-log.sh (spawn row appended, returns 0)"
+else
+  fail "P7.15 45-spawn-log.sh" "row not appended or non-zero return"
+fi
+
+# P7.16: 45-spawn-log.sh — non-Agent tool → no-op, returns 0.
+(
+  TOOL_NAME="Read"
+  SESSION_ID="test-sl-0716"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  AGENT_NAME="orch-test"
+  HOME="$ISO_HOME"
+  INPUT='{"tool_input":{}}'
+  source_module 45-spawn-log.sh
+  mod_spawn_log >/dev/null 2>&1
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "P7.16 45-spawn-log.sh (non-Agent no-op, returns 0)"
+else
+  fail "P7.16 45-spawn-log.sh" "non-zero return on non-Agent tool"
+fi
+
+# P7.17: 30-notebook-guard.sh — safe tool (Read) → no block, returns 0.
+(
+  TOOL_NAME="Read"
+  INPUT='{"tool_input":{"file_path":"/tmp/foo.py"}}'
+  source_module 30-notebook-guard.sh
+  mod_notebook_guard >/dev/null 2>&1
+) 2>/dev/null
+if [ $? -eq 0 ]; then
+  pass "P7.17 30-notebook-guard.sh (safe tool no block, returns 0)"
+else
+  fail "P7.17 30-notebook-guard.sh" "blocked a safe Read (non-zero)"
+fi
+
+# P7.18: 30-notebook-guard.sh — Edit on .ipynb → HARD BLOCK (exit 2 by design).
+#        This is the ONE intentional non-zero exit in the suite; it is the hook's
+#        documented job (PreToolUse hard-block). Run in a subshell so exit 2 here
+#        does not abort the test runner.
+(
+  TOOL_NAME="Edit"
+  INPUT='{"tool_input":{"file_path":"/tmp/analysis.ipynb"}}'
+  source_module 30-notebook-guard.sh
+  mod_notebook_guard >/dev/null 2>&1
+)
+P718_RC=$?
+if [ $P718_RC -eq 2 ]; then
+  pass "P7.18 30-notebook-guard.sh (.ipynb Edit hard-blocked, exit 2)"
+else
+  fail "P7.18 30-notebook-guard.sh" "expected exit 2 on .ipynb Edit, got $P718_RC"
+fi
+
+# P7.19: hcom-pre-tool-use.sh — PreToolUse on every tool call. MUST be fail-safe
+#        (exit 0) regardless of broker/message state — it runs mid-turn and must
+#        never abort the CLI. Representative envelope; no agent resolvable here, so
+#        it falls through to exit 0 without touching the broker.
+HCOM_PRE_HOOK="$HOOK_DIR/hcom-pre-tool-use.sh"
+run_iso_hook "$HCOM_PRE_HOOK" '{"session_id":"hooktest-hcompre-0719","tool_name":"Read"}'
+P719_RC=$?
+if iso_failsafe_ok "$P719_RC"; then
+  pass "P7.19 hcom-pre-tool-use.sh (representative input, fail-safe exit 0)"
+else
+  fail "P7.19 hcom-pre-tool-use.sh" "rc=$P719_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.20: hcom-pre-tool-use.sh — empty stdin → fail-safe, exit 0 (no traceback).
+run_iso_hook "$HCOM_PRE_HOOK" ''
+P720_RC=$?
+if iso_failsafe_ok "$P720_RC"; then
+  pass "P7.20 hcom-pre-tool-use.sh (empty stdin, fail-safe exit 0)"
+else
+  fail "P7.20 hcom-pre-tool-use.sh" "rc=$P720_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.21: hcom-session-end.sh — SessionEnd. MUST be fail-safe (exit 0). No agent
+#        resolvable in ISO_HOME → early exit 0 without touching the broker.
+HCOM_END_HOOK="$HOOK_DIR/hcom-session-end.sh"
+run_iso_hook "$HCOM_END_HOOK" '{"session_id":"hooktest-hcomend-0721","reason":"user_exit"}'
+P721_RC=$?
+if iso_failsafe_ok "$P721_RC"; then
+  pass "P7.21 hcom-session-end.sh (representative input, fail-safe exit 0)"
+else
+  fail "P7.21 hcom-session-end.sh" "rc=$P721_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.22: hcom-session-end.sh — empty stdin → fail-safe, exit 0 (no traceback).
+run_iso_hook "$HCOM_END_HOOK" ''
+P722_RC=$?
+if iso_failsafe_ok "$P722_RC"; then
+  pass "P7.22 hcom-session-end.sh (empty stdin, fail-safe exit 0)"
+else
+  fail "P7.22 hcom-session-end.sh" "rc=$P722_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.23: env-inject.sh — representative JSON stdin → fail-safe, exit 0.
+ENV_INJECT_HOOK="$HOOK_DIR/env-inject.sh"
+run_iso_hook "$ENV_INJECT_HOOK" '{"session_id":"hooktest-ei-0723","hook_event_name":"SessionStart"}'
+P723_RC=$?
+if iso_failsafe_ok "$P723_RC"; then
+  pass "P7.23 env-inject.sh (representative input, fail-safe exit 0)"
+else
+  fail "P7.23 env-inject.sh" "rc=$P723_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.24: env-inject.sh — empty stdin → fail-safe, exit 0 (no traceback).
+run_iso_hook "$ENV_INJECT_HOOK" ''
+P724_RC=$?
+if iso_failsafe_ok "$P724_RC"; then
+  pass "P7.24 env-inject.sh (empty stdin, fail-safe exit 0)"
+else
+  fail "P7.24 env-inject.sh" "rc=$P724_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+
+# P7.25: env-inject.sh — CLAUDE_ENV_FILE set → injects HF_HUB_OFFLINE=1, exit 0.
+P725_ENV_FILE=$(mktemp)
+printf '%s' '{"session_id":"hooktest-ei-0725","hook_event_name":"SessionStart"}' \
+  | CLAUDE_ENV_FILE="$P725_ENV_FILE" HOME="$ISO_HOME" bash "$ENV_INJECT_HOOK" \
+    >"$SCRATCH/iso.stdout" 2>"$SCRATCH/iso.stderr"
+P725_RC=$?
+if iso_failsafe_ok "$P725_RC" && grep -qxF "HF_HUB_OFFLINE=1" "$P725_ENV_FILE" 2>/dev/null; then
+  pass "P7.25 env-inject.sh (CLAUDE_ENV_FILE populated with HF_HUB_OFFLINE=1, exit 0)"
+else
+  fail "P7.25 env-inject.sh" "rc=$P725_RC file=$(cat "$P725_ENV_FILE" 2>/dev/null) stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
+fi
+rm -f "$P725_ENV_FILE" 2>/dev/null
+
+rm -f "$SCRATCH/iso.stdout" "$SCRATCH/iso.stderr" 2>/dev/null
 
 # ═══════════════════════════════════════════════════════
 # Summary

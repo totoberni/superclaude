@@ -1,6 +1,7 @@
 ---
 name: skill-health
 description: "Score skill subsystem health /100. Frontmatter, refs, descriptions."
+model: haiku
 category: health
 user-invocable: true
 disable-model-invocation: true
@@ -28,6 +29,13 @@ Score the `~/.claude/skills/` subsystem health. Read-only assessment.
 | 8 | Usage examples present | 15 | User-invocable skills have examples in body. Score = `documented / user_invocable * 15` |
 
 ## Procedure
+
+## Implementation (canonical runner)
+
+`bash ~/.claude/scripts/skill-health.sh $ARGUMENTS` is the authoritative deterministic
+implementation of all 8 criteria below. It prints a per-criterion breakdown and a final
+`SCORE: <int>/100` line. Run it and present its output. The criteria table and per-step
+notes below document what the script implements.
 
 ### 1. Valid Frontmatter (20 pts)
 

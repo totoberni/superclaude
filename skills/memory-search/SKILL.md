@@ -1,6 +1,7 @@
 ---
 name: memory-search
 description: "Search across all agent memory files for a keyword or topic."
+model: haiku
 category: memory
 user-invocable: true
 disable-model-invocation: true
@@ -10,7 +11,9 @@ allowed-tools: Read, Grep, Glob, Bash
 
 # Memory Search
 
-Search across all superclaude memory files for a keyword or topic.
+Search across all superclaude memory files for a keyword or topic. Memory is DB-resident
+(v3): all tiers (instance, shared, class, global) are indexed in `~/.claude/agent-memory/.memory.db`.
+The canonical search tool is `memory_db.py`.
 
 **Query**: $ARGUMENTS
 
@@ -20,45 +23,45 @@ Search across all superclaude memory files for a keyword or topic.
 
 Extract the search query from `$ARGUMENTS`. If empty, ask the user what to search for.
 
-### 2. Search All Memory Locations
+### 2. Query the Memory DB
 
-Use the Grep tool to search across these locations (run in parallel):
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
+  search '<query>' -k 5 --mode hybrid
+```
 
-1. **Per-agent memories**: `~/.claude/agent-memory/*/MEMORY.md`
-2. **Project memories**: `~/.claude/agent-memory/shared/projects/*.md`
-3. **Compact snapshots**: `~/.claude/agent-memory/_compact-snapshots/*`
-4. **Cross-project wins**: `~/.claude/agent-memory/shared/global/ltm.md`
-
-For each search, use:
-- `output_mode: "content"` to show matching lines
-- `context: 2` to show 2 lines before/after each match
-- `head_limit: 20` to avoid flooding context
+- Default `--mode hybrid` (semantic + keyword). Use `--mode fts` for exact jargon / IDs
+  (e.g., `M-7`, hook names, exact error strings).
+- Add `--json` to get machine-readable output when the caller needs structured data.
+- Each result includes `id`, `name`, `tier`, `type`, `text`, and a relevance score.
+- To read the full entry as rendered HTML: `memory_db.py get --name <name> --html`
 
 ### 3. Display Results
 
-Group results by source file:
+Group results by tier:
 
 ```
 ## Results for "<query>"
 
-### ~/.claude/agent-memory/shared/projects/<project>.md
-- M-4: [FAILURE] P3 — Dismissed test failures as pre-existing...
-- W-7: [WORKING_SOLUTION] P2 — Dependency-ordered merges...
+### shared / project
+- [workspace] "rubber-stamp diagnostic" — Occ=3, …
+- [vps] "db migration gotcha" — …
 
-### ~/.claude/agent-memory/scaf/MEMORY.md
-- Hook arithmetic: validate with [[ "$VAR" =~ ^[0-9]+$ ]]...
+### instance / orch
+- "compilation loop pattern" — …
 
-### No matches in:
-- agent-memory/meta/MEMORY.md
-- agent-memory/_compact-snapshots/
+### No strong matches
 ```
+
+If the hybrid search misses something, retry with `--mode fts` for exact-match recall.
 
 ### 4. If No Results
 
-- Suggest related terms (e.g., "merge" if user searched "conflict")
-- Broaden the search to rules: `~/.claude/rules/*.md`
+- Try a shorter or synonym query (`--mode fts` for exact jargon).
+- Broaden to rules: `~/.claude/rules/*.md`
 - Check skill files: `~/.claude/skills/*/SKILL.md`
 
 ### 5. For Agent Use (non-interactive)
 
-Return a concise summary of top 5 matches with file paths and line context. No decoration, just facts.
+Run with `--json`, extract the top-N `text` fields. No decoration, just facts.

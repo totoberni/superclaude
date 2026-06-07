@@ -41,16 +41,16 @@ Execute steps in order (each depends on the previous):
 
 Invoke the `/mistake` skill for `$ARGUMENTS`:
 - Review session for errors, retries, failed approaches
-- **Primary**: record to `~/.claude/agent-memory/shared/projects/$ARGUMENTS.md`
-- **Dual-write**: class-applicable mistakes also go to `class/<class>/mtm.md` (see /mistake Step 0)
+- **Primary**: upsert to the DB (`shared-projects` tier, `--agent $ARGUMENTS`)
+- **Dual-write**: class-applicable mistakes also go to DB `class` tier (see /mistake Step 0)
 - If no mistakes found, note "Clean session" and move on
 
 ### Step 3: Run /good-idea
 
 Invoke the `/good-idea` skill for `$ARGUMENTS`:
 - Review session for wins, effective patterns, good decisions
-- **Primary**: record to `~/.claude/agent-memory/shared/projects/$ARGUMENTS.md`
-- **Dual-write**: class-applicable wins also go to `class/<class>/mtm.md` (see /good-idea Step 0)
+- **Primary**: upsert to the DB (`shared-projects` tier, `--agent $ARGUMENTS`)
+- **Dual-write**: class-applicable wins also go to DB `class` tier (see /good-idea Step 0)
 - If no notable wins, note "Standard execution" and move on
 
 ### Step 4: Update State
@@ -76,5 +76,5 @@ After all 4 steps:
 - Execute steps sequentially — RPT must exist before retrospectives reference it
 - If any step fails, continue with remaining steps and note the failure
 - Dual-write is handled by /mistake and /good-idea (Step 0 class detection). No extra logic needed here
-- Class writes are layer 2 only — never write to `shared/global/ltm.md` directly. Use `/lt-mem` for promotions to global.
+- Class writes are layer 2 only — never write to the `shared-global` tier directly. Use `/lt-mem` for promotions to global.
 - After completing a multi-session campaign (3+ directives), consider running `/lt-mem --quick <project>` as a final consolidation step.

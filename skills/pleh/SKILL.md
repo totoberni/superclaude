@@ -67,7 +67,12 @@ Create a 3x force multiplier: target keeps working + your helper + helper's sub-
 2. Read the target's context (in parallel):
    - `~/.claude/comms/<target>/directives.md` — their current directive
    - Glob `~/.claude/plans/*/state*.md` for files matching the target name
-   - `~/.claude/agent-memory/<target>/MEMORY.md` (if it exists — read separately, may not exist)
+   - Query the memory DB for the target's recovery context (run separately — may return nothing):
+     ```bash
+     HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
+       search "<target> recovery context" -k 4
+     # Then fetch full body of any hit: memory_db.py get --name <slug>
+     ```
 3. Spawn **1 helper sub-agent** via the Agent tool with this prompt template:
 
 ```
@@ -80,7 +85,7 @@ You are a helper for agent `<target-name>`. You are READ-ONLY but you CAN spawn 
 [paste active task section from state file]
 
 ## Target's Memory (if available)
-[paste or summarize MEMORY.md content]
+[paste or summarize results from: memory_db.py search "<target> recovery context" -k 4]
 
 ## Your Job
 1. Analyze the target's current task and identify what research/exploration would help

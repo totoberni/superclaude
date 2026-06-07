@@ -49,7 +49,16 @@ mod_timer() {
   # ── Hard block (48+ min) ──
   if [ $ELAPSED -gt $HARD_SECONDS ]; then
     echo "HARD SESSION LIMIT (${MINUTES} min). ALL tool calls blocked." >&2
-    echo "Session is over. Start a new session or override: touch $OVERRIDE_FILE" >&2
+    echo "Run /compact to preserve context, then start a new session or override: touch $OVERRIDE_FILE" >&2
+    # ── Circuit-breaker counter ──
+    BLOCKED_COUNT_FILE="${TIMER_DIR}/${SESSION_ID}.blocked-count"
+    BLOCKED_COUNT=$(cat "$BLOCKED_COUNT_FILE" 2>/dev/null || echo "0")
+    if ! [[ "$BLOCKED_COUNT" =~ ^[0-9]+$ ]]; then BLOCKED_COUNT=0; fi
+    BLOCKED_COUNT=$(( BLOCKED_COUNT + 1 ))
+    echo "$BLOCKED_COUNT" > "$BLOCKED_COUNT_FILE" 2>/dev/null || true
+    if [ "$BLOCKED_COUNT" -gt 3 ]; then
+      echo "Repeated hard-blocks — run /compact or start a fresh session now." >&2
+    fi
     exit 2
   fi
 
@@ -68,7 +77,7 @@ mod_timer() {
         ;;
       Bash)
         # Allow git operations for wrapping up uncommitted work
-        COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+        COMMAND=$(get_bash_cmd "$INPUT")
         if echo "$COMMAND" | grep -qP '(^|\s)git\s+(-C\s+\S+\s+)?(add|commit|status|diff|log)\b'; then
           ALLOWED=true
         fi
@@ -82,11 +91,12 @@ mod_timer() {
     if [ "$ALLOWED" = true ]; then
       echo "GRACE PERIOD (${MINUTES} min, ~${REMAINING} min left). Shutdown ops only." >&2
       echo "  1. Commit work  2. Write RPT  3. /mistake + /good-idea  4. MEMORY.md" >&2
+      echo "  Run /compact now to preserve context before the hard block." >&2
       exit 0
     else
       echo "GRACE PERIOD (${MINUTES} min). Tool call BLOCKED — not a shutdown operation." >&2
       echo "Allowed: Write/Edit to ~/.claude/*, git add/commit/status, Read/Glob/Grep." >&2
-      echo "Override: touch $OVERRIDE_FILE" >&2
+      echo "Run /compact to preserve context. Override: touch $OVERRIDE_FILE" >&2
       exit 2
     fi
   fi

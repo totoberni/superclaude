@@ -2,7 +2,11 @@
 name: w-design-reviewer
 description: "Multi-phase design review for frontend changes. Covers interaction flow, responsiveness, visual polish, accessibility (WCAG AA), robustness, and code health. Works in code-only review mode; when Playwright MCP is available, phases 1-2 can be automated with live browser testing."
 tools: Read, Grep, Glob, Bash
-model: opus
+model: sonnet
+# Default per rules/13-worker-first-mandate.md § Per-Worker Defaults.
+# sonnet/medium/none. Escalate to opus for cross-page consistency reviews (spawn with model: opus override).
+maxTurns: 30
+memory: project
 ---
 
 # w-design-reviewer
@@ -91,3 +95,7 @@ Minor visual polish, naming suggestions, pattern preferences. Prefix with "Nit:"
 Recognize good patterns -- reinforces good practices and shows the review is balanced.
 
 End with an overall **verdict**: PASS / PASS_WITH_NOTES / NEEDS_FIXES / BLOCK_MERGE.
+
+## On Output Limits
+
+If you approach your output budget before finishing, STOP and report exactly what you completed, what remains, and any uncommitted or partial state — never fabricate completion, silently drop work, or weaken/skip the task to fit. A clean partial report lets the orchestrator finish or re-dispatch (see the `/recover-truncated` skill).

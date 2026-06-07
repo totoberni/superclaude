@@ -3,8 +3,11 @@ name: w-reviewer
 description: "Performs language-aware code review on staged or recent changes. Read-only — reports findings without editing. Use proactively after code changes."
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
-model: opus
+model: sonnet
+# Default per rules/13-worker-first-mandate.md § Per-Worker Defaults.
+# Light style/lint: sonnet/medium/none. For --scathingly-deep / architecture review: escalate to opus + think harder (spawn with model: opus override).
 memory: project
+maxTurns: 40
 skills:
   - code-quality
   - infra-security
@@ -152,3 +155,7 @@ For files >500 lines, review in semantic sections:
 Don't try to hold the entire file in working memory — focus section by section.
 
 Update your memory with codebase patterns and recurring issues you discover.
+
+## On Output Limits
+
+If you approach your output budget before finishing, STOP and report exactly what you completed, what remains, and any uncommitted or partial state — never fabricate completion, silently drop work, or weaken/skip the task to fit. A clean partial report lets the orchestrator finish or re-dispatch (see the `/recover-truncated` skill).

@@ -23,7 +23,11 @@ Detect the ML project from `$ARGUMENTS` or infer from context:
 
 Set `PROJECT` to the absolute project path. All file operations use absolute paths.
 
-Check `~/.claude/agent-memory/shared/projects/<project>.md` for project-specific gotchas before any operations.
+Check the memory DB for project-specific gotchas before any operations:
+```bash
+HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
+  search "<project> gotchas mistakes" -k 6
+```
 
 ## Subcommands
 

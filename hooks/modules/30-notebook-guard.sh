@@ -34,7 +34,7 @@ mod_notebook_guard() {
       fi
       ;;
     Bash)
-      BASH_CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) || BASH_CMD=""
+      BASH_CMD=$(get_bash_cmd "$INPUT")
       [ -z "$BASH_CMD" ] && return 0
       # Block direct nbconvert --inplace on .ipynb (must go through `nb execute`).
       if echo "$BASH_CMD" | grep -qE 'jupyter\s+nbconvert.*--inplace.*\.ipynb'; then

@@ -16,6 +16,11 @@ mod_bootstrap_check() {
   boot_ts=$(stat -c %Y "$boot_file" 2>/dev/null) || return 0
   dir_ts=$(stat -c %Y "$dir_file" 2>/dev/null) || return 0
   if [[ "$dir_ts" =~ ^[0-9]+$ ]] && [[ "$boot_ts" =~ ^[0-9]+$ ]] && [ "$dir_ts" -gt "$boot_ts" ]; then
-    echo "WARN: bootstrap.md older than directives.md for $AGENT_NAME — may be stale. Ask Meta to update." >&2
+    # One-shot per session (audit O15): the SessionStart guard above already
+    # limits this to first call, but additional safety against re-entry —
+    # marker survives across SessionStart re-runs in the same session id.
+    if ! already_warned "$SESSION_ID" "bootstrap"; then
+      echo "WARN: bootstrap.md older than directives.md for $AGENT_NAME — may be stale. Ask Meta to update." >&2
+    fi
   fi
 }

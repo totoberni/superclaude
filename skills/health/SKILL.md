@@ -1,6 +1,7 @@
 ---
 name: health
 description: "Infrastructure health check. /health [component] for specific."
+model: haiku
 category: health
 user-invocable: true
 disable-model-invocation: true
@@ -30,6 +31,7 @@ Run the infrastructure health check script and display results.
    - **Missing frontmatter**: add `---` delimited YAML frontmatter with required fields
    - **Missing comms files**: create the 4-file set (bootstrap.md, directives.md, escalations.md, reports.md)
    - **Dead rule globs**: the `paths:` filter matches no files — either update the glob or remove the frontmatter filter
+   - **Memory DB invalid / missing tables / FTS desync / vec missing**: rebuild the search store with `HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py init` (idempotent), then re-run `/health memory`. For the authoritative `memories==fts==vec` triple, run `memory_db.py stats`.
 
 ## Valid Components
 
@@ -40,7 +42,7 @@ Run the infrastructure health check script and display results.
 | `agents` | Frontmatter, model field, valid model values |
 | `comms` | 4-file completeness, cross-references with agents |
 | `sessions` | Active timers, stale PIDs, orphan files, RAM usage |
-| `memory` | MEMORY.md existence, line counts, footprint |
+| `memory` | Memory DB (`agent-memory/.memory.db`) integrity + stats: schema/required-tables, row count, FTS index cohesion (`memories==memories_fts_docsize`), vec0 presence, per-tier population, last-write sanity, on-disk footprint. (Scored corpus-health — exempt-aware footprint min/avg/max, row-count + search-latency refs, and staleness N/A renormalization — lives in `/mem-health` + `/super-health`'s `score_mem`, the SOT for the weighted /100.) |
 | `rules` | Frontmatter paths: globs, dead rule detection |
 
 ## Examples

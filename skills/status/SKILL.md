@@ -1,6 +1,7 @@
 ---
 name: status
 description: "Show project status from state files, git status, and plan."
+model: haiku
 category: orchestration
 user-invocable: true
 disable-model-invocation: true
@@ -21,12 +22,16 @@ Show the current project status.
    - Read `~/.claude/plans/*/plan.md` for current phase details
    - Count completed vs total phases
    - List pending HUMAN GATEs
-   - Check `~/.claude/comms/*/reports.md` for latest orch reports
+   - Query broker for latest RPT per orch:
+     ```bash
+     DB="$HOME/.claude/comms/.broker.db"
+     sqlite3 -header -column "$DB" "SELECT from_agent, seq, datetime(ts,'unixepoch') AS t, substr(body,1,80) AS preview FROM messages WHERE kind='RPT' GROUP BY from_agent HAVING ts=MAX(ts) ORDER BY ts DESC;"
+     ```
 3. If in-project `.orchestrator/` exists:
    - Read `.orchestrator/state.md` and `.orchestrator/plan.md`
 4. Run `git status` for working tree state
 5. Run `git log --oneline -5` for recent activity
-6. Check project memory: `~/.claude/agent-memory/shared/projects/<project>.md` for known gotchas
+6. Check project memory: `HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py search '<project> gotchas' -k 8` or `list --tier shared-projects` for known gotchas
 
 ## Output Format
 
@@ -56,5 +61,5 @@ Recent commits: [list]
 - [ ] [gate description]
 
 ### Known Gotchas
-- [from shared/projects/<project>.md]
+- [from DB shared-projects tier]
 ```

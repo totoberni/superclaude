@@ -1,0 +1,67 @@
+# =============================================================================
+# passport.yaml — claim-provenance map (worked example + schema reference)
+# =============================================================================
+# Purpose: bind every reported numeric claim/figure in a paper, report, or README
+# to the experiment that produced it, so claims can be verified and stale numbers
+# blocked before they ship.
+#
+# Produced/consumed by: ~/.claude/scripts/experiment-harness.py
+#   record:  ~/.claude/.venv/bin/python ~/.claude/scripts/experiment-harness.py \
+#              run --script train.py --seeds 1,2,3 \
+#              --claim-id table2_test_acc --passport passport.yaml
+#   verify:  ~/.claude/.venv/bin/python ~/.claude/scripts/experiment-harness.py \
+#              verify --passport passport.yaml --claims claims.txt
+#
+# -----------------------------------------------------------------------------
+# SCHEMA
+# -----------------------------------------------------------------------------
+# Single top-level key `claims` mapping a stable claim_id -> provenance record:
+#
+#   claims:
+#     <claim_id>:            # stable, human-chosen key referenced from the doc
+#       experiment: <str>    # human label for the experiment
+#       script:     <str>    # path/command that produced the number
+#       seeds:      [<int>]  # the exact seeds aggregated (len == n)
+#       git_commit: <str>    # short SHA the result was produced at
+#       date:       <str>    # ISO date recorded (YYYY-MM-DD)
+#       metric:     <str>    # OPTIONAL: which metric, when a script emits many
+#       value:      <float>  # reported central value (the across-seed mean)
+#       std:        <float>  # reported spread (population std across seeds)
+#       n:          <int>    # number of seeds aggregated
+#
+# A claim_id is whatever stable token your document cites (a table cell label,
+# a figure id, an inline-result anchor). The verifier matches on this key.
+# =============================================================================
+
+claims:
+  table2_test_acc:
+    experiment: ResNet-18 CIFAR-10 baseline
+    script: train.py --model resnet18 --epochs 90
+    seeds: [1, 2, 3, 4, 5]
+    git_commit: a1b2c3d
+    date: 2026-06-01
+    metric: test_acc
+    value: 0.9342
+    std: 0.0031
+    n: 5
+
+  fig3_final_loss:
+    experiment: ResNet-18 CIFAR-10 baseline
+    script: train.py --model resnet18 --epochs 90
+    seeds: [1, 2, 3, 4, 5]
+    git_commit: a1b2c3d
+    date: 2026-06-01
+    metric: final_loss
+    value: 0.2187
+    std: 0.0094
+    n: 5
+
+  abstract_headline_f1:
+    experiment: BERT-base sentiment fine-tune
+    script: finetune.py --task sst2
+    seeds: [1, 2, 3]
+    git_commit: e4f5a6b
+    date: 2026-05-28
+    value: 0.911
+    std: 0.0042
+    n: 3

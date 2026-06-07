@@ -30,8 +30,8 @@ Templates and conventions for orchestrated projects. Two patterns exist:
   decisions.md     # Executive decision log (DEC-NNN format)
   reference/       # Frozen reference docs
 
-~/.claude/agent-memory/shared/projects/<project>.md
-  # Wins, Mistakes, Gotchas — accessible to ALL orch instances
+# Wins, Mistakes, Gotchas — accessible to ALL orch instances (shared-projects tier)
+  # Query: memory_db.py search "<project> gotchas mistakes" -k 8
 
 ~/.claude/comms/<orch-name>/
   directives.md    # Meta → Orch (DIR-NNN)

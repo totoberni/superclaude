@@ -4,7 +4,7 @@
 - Always read a file before modifying it
 - Understand existing code before suggesting changes
 - Check for known issues before debugging:
-  - Superclaude: `~/.claude/agent-memory/shared/projects/<project>.md` (Gotchas section)
+  - Superclaude: `memory_db.py search '<project> gotchas mistakes'` or `list --tier shared-projects`
   - In-project: `docs/gotchas.md` or `.orchestrator/mistakes.md`
 
 ## Minimal Changes
@@ -18,7 +18,7 @@
 - Never git push — the user decides when to push
 - Never create/switch/merge branches without explicit instruction
 - One logical commit per unit of work
-- WSL permission diffs (`755 → 644`): never commit — see `20-tool-conventions.md §WSL File Permissions`
+- WSL permission diffs (`755 → 644`): never commit — see `21-domain-gotchas.md §WSL File Permissions`
 
 ## Commit Protocol
 - **Format**: `<type>(<optional scope>): <description>` — type is one of: feat, fix, test, docs, chore, refactor, style, ci, perf, build
@@ -43,7 +43,7 @@ Stop and ask the user if:
 
 If you fail at the same task 3 times with different approaches:
 1. Stop trying the same category of solution
-2. Check project gotchas (`~/.claude/agent-memory/shared/projects/<project>.md`)
+2. Check project gotchas (`memory_db.py search '<project> gotchas mistakes'` or `list --tier shared-projects`)
 3. If a worker, report back to your orch with all 3 attempts documented
 4. If an orch, write ESC-NNN to escalations.md with all 3 attempts
 5. Never silently retry a 4th time — the pattern indicates a wrong mental model

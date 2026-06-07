@@ -10,45 +10,105 @@
 ~/.claude/
   CLAUDE.md                        # Global user instructions
   settings.json                    # Permissions, hooks, sandbox
-  hooks/                           # Dispatcher + modular hooks
+  hooks/                           # Dispatcher + modular hooks + lib.sh
   rules/                           # Auto-loaded rules (numbered order)
-  agents/                          # Specialist agents
+  agents/                          # Specialist agents (+ _ephemeral/, _pending_promotion/, _archive/)
   comms/                           # Meta <> Orch(s) communication bus
   plans/                           # Cross-project orchestration
   agent-memory/                    # 3-tier memory matrix
   skills/                          # Slash commands and agent-loaded skills
-  docs/                            # This guide + manifests
+  docs/                            # This guide + manifests + hcom-design.md
   upstream/                        # Curated external references
-  scripts/                         # Utilities (health, completions, reaper)
+  scripts/                         # Utilities (health, completions, reaper, scan-mem-matrix)
 ```
 
 Rules load automatically. Agents activate via Agent tool or `--agent`. Skills appear in `/` menu or get injected into agents at startup.
 
 ---
 
+## Swarm-First Defaults (v2)
+
+The infrastructure is now **swarm-first**: Meta+w-swarm is the default delegation pattern. Persistent orks are the **EXCEPTION**, reserved for work that genuinely benefits from multi-hour state.
+
+### Decision Tree: Meta+Swarm vs Ork Handoff
+
+Use **Meta + w-swarm** when ALL of:
+
+- Estimated wall-clock <= 4 hr
+- Distinct subtasks < 8 with clean independent scopes
+- No persistent compile-gate <-> edit-loop coupling required
+- Total context for synthesis < 1M tokens
+- Single-project scope (no cross-repo coordination)
+
+Use **Ork (handoff)** when ANY of:
+
+- Multi-day campaign (HPC training, ACM-style multi-hour assembly)
+- Persistent compile-gate <-> edit-loop coupling (LaTeX rebuild every change with iterative state)
+- Multi-orch parallelism in same repo (already needs ork-tier coordination)
+- Multi-session continuity required (ork preserves identity across hard-blocks)
+- HW EDA pipelines (full DC synth -> gate-sim -> example-tool loop)
+
+Full SOT: `~/.claude/rules/13-worker-first-mandate.md`. Quality gates: `~/.claude/rules/40-swarm-quality-gates.md`.
+
+### Pre-Action Trigger
+
+Before any task that takes >3 tool calls, ask:
+
+> *"Is this menial enough to delegate to a `w-`? Can I focus my context on synthesis / design / decision-making instead?"*
+
+If YES -> delegate (use `/autocommission` if no permanent `w-*` fits). If NO -> retain only when surgical edit <=50 lines or single-shot decision needing your full context.
+
+### Subagent Thinking Is NOT Inherited
+
+**Most error-prone gotcha**: thinking keywords (`think`, `think hard`, `think harder`, `megathink`, `ultrathink`) and `/effort` setting do **not** propagate to spawned subagents.
+
+To get thinking depth in a worker:
+- (a) **Embed the keyword in the spawn prompt text** the worker reads, OR
+- (b) **Set the default in the worker's `agent.md`** instruction text
+
+When dispatching parallel batches with mixed thinking depth, embed differently per worker.
+
+---
+
 ## Agents
 
-| Agent | Invocation | Model | Purpose |
-|-------|------------|-------|---------|
-| `meta` | `claude --agent meta` | opus | Cross-project coordination, plans, directives |
+| Agent | Invocation | Default Model | Purpose |
+|-------|------------|---------------|---------|
+| `meta` | `claude --agent meta` | opus | Cross-project coordination, plans, directives, swarm orchestration |
 | `scaf` | `claude --agent scaf` | opus | Superclaude infrastructure (agents, hooks, rules, settings.json) |
-| `orch` / `o-<proj>-<seq>` | `claude --agent o-<name>` | opus | Executes plans, spawns workers, edits code |
-| `w-reviewer` | Via Agent tool | sonnet | Read-only code review (3 modes: general/infra/security) |
-| `w-debugger` | Via Agent tool | sonnet | Debug with gotchas preloaded |
-| `w-merger` | Via Agent tool | sonnet | Resolve git merge conflicts |
-| `w-planner` | Via Agent tool | opus | Create project plans |
-| `w-refactorer` | Via Agent tool | sonnet | Safe targeted refactoring |
-| `w-design-reviewer` | Via Agent tool | sonnet | Frontend design review (7-phase) |
+| `orch` / `o-<proj>-<seq>` | `claude --agent o-<name>` | opus | Persistent project execution (EXCEPTION path — see decision tree) |
 
-Hierarchy, write scopes, CAN/CANNOT: `~/.claude/rules/12-agent-hierarchy.md`
+### Worker Fleet (11 permanent w-*)
 
-### Orch Naming Convention
+| Worker | Model | Use Case |
+|--------|-------|----------|
+| `w-explorer` | haiku | Read-only file exploration, grep, recon. Reports `file:line` references — never edits |
+| `w-committer` | haiku | Atomic git ops only (stage + write conventional commit + commit). Read-only on code |
+| `w-implementer` | sonnet | Writes new code from a clear spec. Distinct from refactorer/debugger |
+| `w-doc` | sonnet | Authors prose: LaTeX sections, Markdown docs, READMEs, plans/specs |
+| `w-tester` | sonnet | Runs project test suites; classifies failures; proposes routing (read-only on code) |
+| `w-debugger` | sonnet | Diagnoses + fixes runtime errors; checks gotchas first; minimal fix; records pattern |
+| `w-merger` | sonnet | Resolves git merge conflicts using both sides + commit history |
+| `w-refactorer` | sonnet | Targeted refactoring: extract function, rename, inline, simplify; minimal blast radius |
+| `w-reviewer` | sonnet | Read-only code review (3 modes: general/infra/security). `--scathingly-deep` -> opus |
+| `w-design-reviewer` | sonnet | Multi-phase frontend design review (interaction, responsive, polish, a11y, robustness) |
+| `w-planner` | opus | Creates / updates project plans (superclaude `plans/` or in-project `.orchestrator/`) |
 
-New named orchs use `o-<project>-<seq>` (e.g., `o-<project>-1`, `o-example`). Legacy `orch-<name>` names continue to work.
+Aggregate distribution if fully adopted: ~5% haiku / ~70% sonnet / ~25% opus.
+
+### Ephemeral Workers (via `/autocommission`)
+
+For one-off tasks where no permanent `w-*` fits, `/autocommission "<task>"` writes a temporary `w-X.md` to `~/.claude/agents/_ephemeral/`, spawns it, and auto-cleans the file when the task finishes. Authority: meta + orch only.
+
+If an autocommissioned pattern recurs >=3 times across sessions (tracked in `shared/global/ltm.md`), `/promote` drafts a permanent `w-*.md` candidate to `~/.claude/agents/_pending_promotion/` for Meta review.
+
+### Hierarchy + Write Scopes
+
+Full table: `~/.claude/rules/12-agent-hierarchy.md`. Worker-first mandate: `~/.claude/rules/13-worker-first-mandate.md`. Quality gates: `~/.claude/rules/40-swarm-quality-gates.md`.
 
 ### Named Orch Alias Template
 
-See `~/.claude/docs/agent-manifest.md` for full details. Create `~/.claude/agents/o-<project>-<seq>.md`:
+For the EXCEPTION path. Create `~/.claude/agents/o-<project>-<seq>.md`:
 
 ```markdown
 ---
@@ -73,26 +133,72 @@ You are **o-<project>-<seq>**, a named orchestrator instance.
 
 ---
 
-## Skills (46 total, grouped by category)
+## Slash Commands (54 skills, grouped by purpose)
 
-| Category | Skills |
-|----------|--------|
-| **workflow** (10) | `/brainstorm`, `/commit`, `/fix-issue`, `/pr`, `/push`, `/rb`, `/review`, `/tdd`, `/verify`, `/wrap-up` |
-| **orchestration** (9) | `/delegate`, `/handoff`, `/nudge`, `/observe`, `/plan`, `/pleh`, `/portfolio`, `/session-reaper`, `/status` |
-| **memory** (8) | `/compact-mem`, `/good-idea`, `/mem-health`, `/memory-prune`, `/memory-search`, `/mistake`, `/remember`, `/sanitize-mem` |
-| **meta** (9) | `/code-quality`*, `/debugging`*, `/design-review`, `/infra-security`*, `/orchestrator-patterns`*, `/sanity-check`, `/sync-upstream`, `/test-infra`*, `/test-scaffold` |
-| **health** (4) | `/health`, `/hook-health`, `/skill-health`, `/super-health` |
-| **domain** (6) | `/experiment`, `/gas-patterns`*, `/hpc`, `/research`, `/threat-model`, `/wsl-gotchas`* |
+### Delegation (5)
+
+| Skill | Purpose |
+|-------|---------|
+| `/handoff` | Permanent-ork lifecycle: commission, decommission, check-in, session handoff |
+| `/autocommission` | Spawn ephemeral `w-*` worker for one-off task; auto-cleanup on done |
+| `/swarm-dispatch` | Launch parallel `w-*` worker batch using W-1/W-4/W-7/W-11 patterns |
+| `/topology-producer-reviewer` | Producer-Reviewer dyad: pair worker output with reviewer audit (FG or BG) |
+| `/promote` | Scan `ltm.md` for >=3-occurrence autocommission patterns; draft permanent `w-*.md` |
+| `/swarm-status` | Live snapshot of in-flight workers, BG reviewer queue, ephemeral agents |
+
+### Orchestration (7)
+
+`/delegate`, `/handoff`, `/nudge`, `/plan`, `/pleh`, `/portfolio`, `/session-reaper`, `/status`
+
+### Memory (8)
+
+| Skill | Purpose |
+|-------|---------|
+| `/lt-mem` | Mutator: consolidate, promote, archive, compact, sanitize |
+| `/mem-health` | Score memory matrix /100 (6 criteria + v3 trigger checks) |
+| `/memory-prune` | Advisory scan for stale or broken entries |
+| `/mem-index` | Auto-regen `MEMORY.md` index files from filenames + first-line titles |
+| `/memory-search` | Search across all agent memory files |
+| `/remember` | Meta context save/load (cheaper than compaction) |
+| `/good-idea` | Promote a session win to project gotchas |
+| `/mistake` | Record a fix for a recurring issue |
+
+Shared scanner: `~/.claude/scripts/scan-mem-matrix.sh`.
+
+### Health (4)
+
+| Skill | Purpose |
+|-------|---------|
+| `/super-health` | Aggregate /100 (hooks + skills + mem + settings + sessions). `--complete` adds 5-agent post-hoc audit |
+| `/hook-health` | Score hook subsystem /100 (syntax, perf, naming, coverage) |
+| `/skill-health` | Score skill subsystem /100 (frontmatter, refs, descriptions) |
+| `/health` | Generic infra health check; `/health [component]` for targeted |
+
+### Workflow (12)
+
+`/brainstorm`, `/commit`, `/fix-issue`, `/notebook`, `/pr`, `/push`, `/rb`, `/review`, `/tdd`, `/verify`, `/wrap-up`
+
+### Meta (8)
+
+`/code-quality`*, `/debugging`*, `/design-review`, `/infra-security`*, `/orchestrator-patterns`*, `/sanity-check`, `/sync-upstream`, `/test-infra`*, `/test-scaffold`
+
+### Domain (6)
+
+`/experiment`, `/gas-patterns`*, `/hpc`, `/research`, `/threat-model`, `/wsl-gotchas`*
+
+### Testing (1)
+
+`/test-cleanup-protocol`
 
 \* = agent-only (not in `/` menu)
 
-**Health assessment**: Run `/super-health --quick` for /100 aggregate score.
+**Health quickstart**: `/super-health --quick` for /100 aggregate score.
 
 ---
 
 ## Memory Matrix
 
-3-tier persistent memory. Details: `~/.claude/docs/memory-matrix.md`
+3-tier persistent memory. Details: `~/.claude/docs/memory-matrix.md`. Canonical load order: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order.
 
 | Row | Scope | Path | Budget |
 |-----|-------|------|--------|
@@ -102,26 +208,67 @@ You are **o-<project>-<seq>**, a named orchestrator instance.
 
 All paths relative to `~/.claude/agent-memory/`. Root symlinks provide shorthand access (e.g., `agent-memory/meta/` -> `instance/meta/`).
 
+Mutations go through `/lt-mem`. Health checks via `/mem-health`. Index regeneration via `/mem-index`.
+
+---
+
+## Rules (auto-loaded)
+
+| File | Purpose |
+|------|---------|
+| `00-universal.md` | Read before edit; minimal changes; git discipline; stop conditions |
+| `05-coding-standards.md` | Language-specific standards (path-scoped) |
+| `10-orchestrator-protocol.md` | Plan/state protocol (in-project + superclaude) |
+| `12-agent-hierarchy.md` | Meta/Orch/Worker hierarchy; write scopes; comms; Memory Load Order SOT |
+| `13-worker-first-mandate.md` | Swarm-first defaults; decision boundary; SOT model x effort x thinking matrix |
+| `15-programming-principles.md` | DRY, KISS, separation of concerns, defensive design |
+| `20-tool-conventions.md` | Universal tool patterns (git -C, parallel batches, merge conflicts, worktrees) |
+| `21-domain-gotchas.md` | Stack-specific gotchas (Compose, WSL, Python ns, HDL, large images) |
+| `25-context-management.md` | Session lifecycle, context hygiene, self-compact protocol |
+| `30-upstream-sync.md` | When to consult `~/.claude/upstream/awesome-claude-code/` |
+| `40-swarm-quality-gates.md` | R-1 schema spec, R-2 baseline-stash, R-3 worker verification, R-4 fleet expansion |
+
 ---
 
 ## Hooks
 
-Modular dispatcher architecture. All hooks run through `session-timer.sh` which dispatches to `hooks/modules/`:
+Modular dispatcher architecture. The main `session-timer.sh` hook dispatches to numbered modules in `hooks/modules/`. Shared helpers live in `hooks/lib.sh`.
 
 | Module | Purpose |
 |--------|---------|
 | `00-parse.sh` | Parse JSON input (session_id, tool_name) |
 | `05-context-check.sh` | File-size-based context estimation |
 | `10-nudge.sh` | Non-blocking advisory nudges |
+| `15-baseline-stash.sh` | R-2: auto-stash baseline on `/commit false` repos |
 | `20-counter.sh` | TDD edit counter (fires at 5 edits without tests) |
 | `25-commit-gate.sh` | Conventional commit format check |
-| `30-timer.sh` | Session time enforcement (35/40/48 min) |
+| `30-notebook-guard.sh` | Notebook safety guard for `.ipynb` writes |
+| `30-timer.sh` | Session time enforcement |
 | `40-gc.sh` | PID-liveness garbage collection |
+| `45-spawn-log.sh` | Log subagent spawns for `/swarm-status` |
 | `50-bootstrap.sh` | Bootstrap freshness check |
 
-Other hooks: `pre-compact.sh` (PreCompact snapshots), `session-cleanup.sh` (SessionEnd).
+Standalone hooks:
+
+| Hook | Event | Purpose |
+|------|-------|---------|
+| `pre-compact.sh` | PreCompact | Snapshot state files before context compaction |
+| `session-cleanup.sh` | SessionEnd | Clean timer files on normal exit |
+| `stop.sh` | Stop | Stop-event handling |
+| `subagent-stop.sh` | SubagentStop | Subagent completion handling |
+| `comms-schema-lint.sh` | PreToolUse (writes to comms) | Schema validation for comms messages |
+| `hcom-pre-tool-use.sh` | PreToolUse | HCOM (Phase A) — message broker integration |
+| `hcom-session-end.sh` | SessionEnd | HCOM (Phase A) — session-end broker cleanup |
 
 Details: `~/.claude/rules/25-context-management.md`
+
+---
+
+## HCOM (Phase A)
+
+The flat-file comms bus (`~/.claude/comms/<orch-name>/`) is being replaced by a SQLite-backed message broker inspired by HCOM (Claude Hook Comms). Phase A hooks (`hcom-pre-tool-use.sh`, `hcom-session-end.sh`) are wired in; the broker (`scripts/hcom-broker.py`) handles durable concurrent writes, mid-turn message injection, and queryable cross-orch escalations.
+
+Full design: `~/.claude/docs/hcom-design.md`.
 
 ---
 

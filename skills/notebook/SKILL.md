@@ -1,6 +1,6 @@
 ---
 name: notebook
-description: "Programmatic .ipynb manipulation — atomic edit, kernel-aware execute, multi-orch-safe, paired-mode SoT. Replaces bespoke append/patch/init scripts."
+description: "Atomic .ipynb edit/execute/validate — kernel-aware, multi-orch-safe, paired-mode"
 category: workflow
 user-invocable: true
 disable-model-invocation: false
@@ -14,7 +14,7 @@ Programmatic mutation, execution, validation, and multi-agent coordination for J
 
 **Skill root**: `~/.claude/skills/notebook/`. **CLI entry**: `~/.claude/skills/notebook/notebook` (alias suggested: `nb`).
 
-**Status**: v1.3 (post AT1+AT2 + example-project-review-of-skill-v3 closeout). v1.0 BLOCKERs + HIGHs + MEDIUMs addressed; v1.2-patch closes V3-X1..X5 (linked-worktree paths, fig-binding, heartbeat configurability, output-only commits, nbdime list-source); v1.3 also lands UX-1 (`op: insert_block`), UX-2 (mixed `--cells` selectors), UX-3 (`nb merge-preview`), UX-4 (jupytext PATH capture for merge/pre-commit subshells).
+**Status**: v1.4 (post AT1+AT2 + example-project-review-of-skill-v3 closeout + mandatory-final-sync rule). v1.0 BLOCKERs + HIGHs + MEDIUMs addressed; v1.2-patch closes V3-X1..X5 (linked-worktree paths, fig-binding, heartbeat configurability, output-only commits, nbdime list-source); v1.3 also lands UX-1 (`op: insert_block`), UX-2 (mixed `--cells` selectors), UX-3 (`nb merge-preview`), UX-4 (jupytext PATH capture for merge/pre-commit subshells); v1.4 adds mandatory final-sync rule (H-30).
 
 ## Decision tree — when to invoke
 
@@ -35,16 +35,19 @@ Programmatic mutation, execution, validation, and multi-agent coordination for J
 | `.ipynb` lock contention | `nb lock-status <nb>` — shows holder PID. |
 | Persistent kernel hung / crashed | `nb reset-kernel <nb>`. |
 | Pre-simulating cross-branch merge | `nb merge-preview <nb> <ours> <theirs>` — extracts via `git show + jupytext`, runs `git merge-file` in tempdir, prints conflict topology before the real merge (UX-3). |
+| Just finished any `nb batch` / `nb init` / structural edit | **`nb sync <nb>` + verify `<nb>.py` exists on disk (MANDATORY pre-commit — see H-30)** |
 
 ## Hard rules — DO and DON'T
 
 **DO**
+- **MANDATORY at end of implementation**: run `nb sync <nb>` and verify `<nb>.py` exists on disk before any `git add` / `git commit`. The pre-commit hook (installed by `nb init`) hard-rejects `.ipynb` staged without a paired `.py`. This applies whether the notebook will be committed locally OR pushed — assume commit will be attempted. `nb init` and `nb batch` BOTH attempt an internal `jupytext --sync`, but BOTH can silent-skip when `jupytext --set-formats` failed during init (e.g., read-only `~/.local/share/jupyter/` in sandbox/CI: exits 0 with WARN, paired `.py` never created, `nb validate` still passes). Explicit final sync is non-negotiable. See H-30.
 - Edit `.py` (paired) for source-only changes, then `nb sync <nb>`.
 - Use `nb batch` for any structural change.
 - Run `nb validate` after edits, before commit.
 - Run `nb sync <nb>` immediately after `git pull` / branch switch (jupytext is mtime-based; stale-py-newer-than-ipynb causes silent reverse-sync per V1-H10/H13).
 - Tag figure-output cells with `metadata: { keep_output: true }` to preserve evidence across nbstripout AND across structural edits (V1-H9).
 - Address cells by `cell_id` or `cell_tag` (stable). Use `at_position` only when you've just read the live notebook (cell-shift after `nb init` will invalidate stale positions).
+- **NO skill-support files inside a user project workdir.** This is the strict superclaude v2 firewall rule, not a soft preference: agent-tier artefacts of any kind (plan YAMLs, the `.notebook/` dir itself, paired `.py` files, snapshots, kernel-name pointers, `jupytext_path` captures, `warm.py`, `version`, anything else the skill writes) MUST live under `~/.claude/` — typically `~/.claude/notebook/<project>/` — never anywhere under `~/projects/*/`. Plans specifically belong in `~/.claude/comms/<spawning-agent>/notebook-plans/<project>/<wave>.plan.yml` or `$TMPDIR/notebook-plans-<project>/<wave>.plan.yml`, and must be deleted after `nb batch` succeeds (the project's `.notebook/snapshots/` is NOT the rollback SoT under this rule — snapshots also move to `~/.claude/notebook/<project>/snapshots/`). See H-31 + H-32. **The skill in its current shape (v1.4) hard-codes `.notebook/` to the project root and therefore VIOLATES this rule on every `nb init`** — until v2 lands, agents must treat `.notebook/` as a transient working-set, immediately archive its contents under `~/.claude/notebook/<project>/`, and remove the project-side dir before any commit.
 
 **DON'T**
 - Edit `.ipynb` directly via `Edit` / `Write` / `NotebookEdit`. Banned and intercepted by `~/.claude/hooks/modules/30-notebook-guard.sh` (PreToolUse, hard-block).
@@ -58,6 +61,7 @@ Programmatic mutation, execution, validation, and multi-agent coordination for J
 - Put a literal `# %%` line in code-cell source (any indentation) — silent cell-split. Skill rejects at write time AND on `nb sync .py → .ipynb`.
 - Use `nbstripout` as git filter (clean/smudge) — unresolvable-merge footgun. Use as pre-commit hook only.
 - Use `merge=union` for `.ipynb` in `.gitattributes` — invalid JSON. Use `merge=jupytext-regen`.
+- **Leave ANY skill-support file inside a user project workdir.** This goes beyond plan YAMLs: `<project>/.notebook/` (kernel name, jupytext_path, warm.py, snapshots/, version, forbidden_imports.txt, plan files, `.merge-driver-installed`, `.requirements.sha256`), the paired `<nb>.py`, and `<project>/plan.yml` are ALL banned under `~/projects/*/`. Per the strict superclaude v2 firewall rule, agent-tier artefacts of every category must live exclusively under `~/.claude/` (typically `~/.claude/notebook/<project>/` for skill state, `~/.claude/comms/<agent>/notebook-plans/<project>/` for plans). `nb init` writing to `<project>/.notebook/` is a v1.4 design defect, not a free pass — see H-31, H-32, and v2-roadmap. The CLI examples and walkthroughs further down the doc predate this rule and are wrong on this dimension; treat all workdir-relative paths in them (`--plan plan.yml`, `cat .notebook/kernel_name`, etc.) as referring to the `~/.claude/notebook/<project>/` mirror, not the project dir.
 
 ---
 
@@ -357,7 +361,7 @@ This sidesteps `nbdime` auto-merge's silent-cell-deletion footgun (#597, open si
 
 ## Acid tests (corrected per V1.1 fixes)
 
-(D-2) Per `~/.claude/comms/notebook-skill/example-project-context-and-problems.md` §8:
+(D-2) Acid tests derived from the example-project problem catalog (dev review):
 
 ### Acid Test 1 — T5 polish-loop fix
 
@@ -476,13 +480,13 @@ These were discovered during stress-test research (W1-W5) + example-project-meta
 - H-27: mixed `--cells` selectors (UX-2) — `id:abc,id:def,tag:t5` works via top-level comma split + union; bare-ID-only and single-mode forms preserved (backward compat).
 - H-28: `nb merge-preview` (UX-3) — pre-simulate cross-branch `.ipynb` merges in a tempdir; tags conflicts with surrounding `# %% [id]` cell-anchors. Exit 1 retains the tempdir for orch inspection.
 - H-29: `.notebook/jupytext_path` (UX-4) — `nb init` captures the resolved absolute jupytext binary so the merge-driver and pre-commit-hook subshells (which don't inherit `.venv/bin` in PATH) can find it.
+- H-30: `nb init`'s `jupytext --set-formats` step silently exits 0 with WARN if `~/.local/share/jupyter/` is read-only (sandbox/CI). Subsequent `nb batch`'s internal `jupytext --sync` is a no-op (no format registered). The `.ipynb` passes `nb validate` cleanly but the paired `.py` is absent — the pre-commit hook then hard-rejects the commit with `REJECT: <nb>.ipynb staged without paired <nb>.py`. **Mitigation**: agents MUST run `nb sync <nb>` as a final step after all implementation is complete and verify `<nb>.py` exists on disk before staging. `// TODO consider: make nb init HARD-FAIL (exit non-zero) when jupytext --set-formats returns non-zero, rather than WARN-and-continue — the current silent-success contract is the root cause of this footgun.`
+- H-31: **Plan-file location footgun — skill predates the firewall.** `nb batch --plan <p>` accepts any path, and every example in this doc historically shows `--plan plan.yml` (workdir-relative) or `--plan .notebook/<wave>.plan.yml` — both VIOLATE the superclaude firewall (`~/.claude/rules/20-tool-conventions.md` §Superclaude ↔ Local Codebase Firewall, which bans agent-tier artefacts from user project workdirs). `nb init` only gitignores `.notebook/snapshots/`; plan files dropped alongside (`*.plan.yml`) get tracked and ride into the commit. **Mitigation**: agents put plan YAMLs in `~/.claude/comms/<spawning-agent>/notebook-plans/<project>/<wave>.plan.yml` or `$TMPDIR/notebook-plans-<project>/<wave>.plan.yml`, and delete after `nb batch` succeeds. The DO/DON'T section above is the canonical rule; the historical examples below it are wrong on this dimension and should be read with the plan path substituted. `// TODO consider: nb batch --plan SHOULD warn (or refuse) when the resolved plan path is under the project repo root; nb init SHOULD gitignore '.notebook/*.plan.yml' alongside snapshots/.`
+- H-32: **The `.notebook/` directory itself violates the firewall — v2 redesign required.** `nb init` writes ALL skill state to `<project>/.notebook/` (kernel name, warm.py, jupytext_path, snapshots/, version, forbidden_imports.txt, merge-driver marker, requirements sha). Per the strict superclaude v2 rule no agent-tier artefacts may populate user project workdirs — not just plans. The current `.gitignore` discipline (gitignoring `.notebook/snapshots/` and untracking `.notebook/*` cached files) only addresses what reaches REMOTE; the local presence is itself the violation. **Interim mitigation** (until v2 lands): after running `nb init` or `nb batch`, immediately `rsync -a <project>/.notebook/ ~/.claude/notebook/<project>/ && rm -rf <project>/.notebook` and similarly archive the paired `<nb>.py`. Subsequent `nb batch` / `nb sync` calls will recreate `.notebook/` — repeat the move each session, OR avoid the skill until v2. **v2 roadmap** (canonical task): refactor `nb_io.canonical_repo_root` + `nb_init` to resolve all state paths under `$XDG_DATA_HOME/notebook-skill/<project-hash>/` (or `~/.claude/notebook/<project>/`); the project dir holds only the user-authored `.ipynb`. Pre-commit hook, merge driver, lock files all need re-anchoring. Tracked as H-32; no version assigned yet.
 
 ---
 
 ## See also
 
-- EXAMPLE_PROJECT problem catalog: `~/.claude/comms/notebook-skill/example-project-context-and-problems.md`
-- Skill-meta reply: `~/.claude/comms/notebook-skill/replies-from-skill-meta.md`
-- EXAMPLE_PROJECT validation pass 1: `~/.claude/comms/notebook-skill/example-project-review-of-skill-v1.md`
 - WSL gotchas: `~/.claude/skills/wsl-gotchas/`
-- Project memory (per project): `~/.claude/agent-memory/shared/projects/<project>.md`
+- Project memory (per project): query `memory_db.py search "<project> gotchas mistakes" -k 6` (shared-projects tier)

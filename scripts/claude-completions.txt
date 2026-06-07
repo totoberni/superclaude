@@ -4,7 +4,6 @@
 
 /brainstorm
 /commit
-/compact-mem
 /design-review
 /experiment
 /fix-issue
@@ -25,7 +24,6 @@
 /remember
 /research
 /review
-/sanitize-mem
 /sanity-check
 /session-reaper
 /status

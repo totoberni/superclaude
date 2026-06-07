@@ -10,6 +10,7 @@ TIMER_DIR="$CLAUDE_DIR/session-timers"
 COMPONENT=""
 HAS_FAILURE=false
 HAS_WARNING=false
+PYTHON="$HOME/.claude/.venv/bin/python"; [ -x "$PYTHON" ] || PYTHON="$(command -v python3 2>/dev/null || true)"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -63,25 +64,9 @@ check_settings() {
     warn "Deny rules: $DENY_COUNT (< 5 — safety erosion?)"
   fi
 
-  # Duplicate key check (Python one-liner)
+  # Duplicate key check
   local DUP_CHECK
-  DUP_CHECK=$(python3 -c "
-import json, sys
-seen = set()
-dups = []
-def check(pairs):
-    d = {}
-    for k, v in pairs:
-        if k in d:
-            dups.append(k)
-        d[k] = v
-    return d
-json.loads(open('$SETTINGS').read(), object_pairs_hook=check)
-if dups:
-    print('DUPLICATES: ' + ', '.join(dups))
-else:
-    print('OK')
-" 2>/dev/null || echo "OK")
+  DUP_CHECK=$("$PYTHON" "$HOME/.claude/scripts/settings_dupcheck.py" "$SETTINGS" 2>/dev/null || echo "OK")
   if [ "$DUP_CHECK" = "OK" ]; then
     pass "No duplicate JSON keys"
   else
@@ -225,9 +210,13 @@ check_comms() {
 
   for dir in "$CLAUDE_DIR"/comms/*/; do
     [ -d "$dir" ] || continue
-    COMMS_COUNT=$((COMMS_COUNT + 1))
     local DIR_NAME
     DIR_NAME=$(basename "$dir")
+    # Skip special directories (not real comms dirs)
+    case "$DIR_NAME" in
+      _archive|_template) continue ;;
+    esac
+    COMMS_COUNT=$((COMMS_COUNT + 1))
 
     local MISSING=0
     for req in "${REQUIRED_FILES[@]}"; do
@@ -245,21 +234,22 @@ check_comms() {
 
     # Cross-reference: check for matching agent
     if [ ! -f "$CLAUDE_DIR/agents/$DIR_NAME.md" ]; then
-      # Could be a named orch or special dir
-      if ! echo "$DIR_NAME" | grep -qE "^(orch-|scaf|meta)"; then
+      # Could be a named orch (orch-* or o-*) or special dir — these legitimately have no per-instance agent file
+      if ! echo "$DIR_NAME" | grep -qE "^(orch-|o-|scaf|meta)"; then
         warn "$DIR_NAME: no matching agent definition"
       fi
     fi
   done
 
   # Orphan detection: agent exists but no comms dir
+  # Only check meta, orch, and named o-* aliases — workers (w-*) and scaf are spawn-only
   for agent in "$CLAUDE_DIR"/agents/*.md; do
     [ -f "$agent" ] || continue
     local AGENT_NAME
     AGENT_NAME=$(basename "$agent" .md)
-    # Workers and base agents don't need comms dirs
+    # Skip all workers (w-*), scaf, and other base agents that don't need persistent comms
     case "$AGENT_NAME" in
-      w-debugger|w-merger|w-refactorer|w-reviewer|w-planner|debugger|merge-resolver|refactorer|code-reviewer|planner|orch|meta|w-design-reviewer) continue ;;
+      w-*|scaf|debugger|merge-resolver|refactorer|code-reviewer|planner|orch) continue ;;
     esac
     if [ ! -d "$CLAUDE_DIR/comms/$AGENT_NAME" ]; then
       warn "$AGENT_NAME: agent exists but no comms dir"
@@ -374,9 +364,25 @@ check_sessions() {
 }
 
 # ── 6. Memory ──
+# v3 REWRITE (DB-aware): memory is the hybrid-search SQLite store at
+# agent-memory/.memory.db, NOT a tree of MEMORY.md/ltm.md/mtm.md files with per-file
+# LINE budgets. This check now validates DB INTEGRITY + STATS instead of file
+# line-counts:
+#   - DB presence + valid-SQLite + required tables (memories, *_fts, *_vec, *_docsize)
+#   - row count (corpus population)
+#   - FTS index cohesion : memories == memories_fts_docsize (the falsifiable check;
+#                          memories_fts is external-content so its COUNT is vacuous)
+#   - vec presence       : memories_vec is a vec0 VIRTUAL table — plain sqlite3 cannot
+#                          COUNT(*) it, so PRESENCE via sqlite_master is the fail-safe
+#                          check (mirrors scripts/super-health.sh).
+#   - last-write sanity  : max(updated) timestamp (is the store being written to?)
+#   - on-disk footprint  : du -h of the .db file
+# Fast path only: bash + sqlite3 CLI, NO python, NO embedding model. Missing sqlite3 /
+# missing DB degrade to a warn (not a fail) so this stays usable on pre-DB systems.
 check_memory() {
   header "memory"
   local MEM_DIR="$CLAUDE_DIR/agent-memory"
+  local MDB="${MEMORY_DB_PATH:-$MEM_DIR/.memory.db}"
 
   if [ ! -d "$MEM_DIR" ]; then
     warn "No agent-memory directory"
@@ -384,121 +390,91 @@ check_memory() {
     return
   fi
 
-  local MEM_COUNT=0
   local MEM_ISSUES=0
 
-  for dir in "$MEM_DIR"/*/; do
-    [ -d "$dir" ] || continue
-    local DIR_NAME
-    DIR_NAME=$(basename "$dir")
-    # Skip structural and special dirs
-    case "$DIR_NAME" in
-      _archive|_compact-snapshots|_system|class|instance|shared) continue ;;
-    esac
-    MEM_COUNT=$((MEM_COUNT + 1))
-
-    if [ -f "$dir/MEMORY.md" ]; then
-      local LINES
-      LINES=$(wc -l < "$dir/MEMORY.md" 2>/dev/null || echo "0")
-      if [ "$LINES" -gt 180 ]; then
-        warn "$DIR_NAME/MEMORY.md: $LINES lines (approaching 200 truncation limit)"
-        MEM_ISSUES=$((MEM_ISSUES + 1))
-      elif [ "$LINES" -gt 0 ]; then
-        pass "$DIR_NAME/MEMORY.md: $LINES lines"
-      else
-        warn "$DIR_NAME/MEMORY.md: empty"
-      fi
-    else
-      warn "$DIR_NAME: no MEMORY.md"
-      MEM_ISSUES=$((MEM_ISSUES + 1))
-    fi
-  done
-
-  # Total footprint
-  local FOOTPRINT
-  FOOTPRINT=$(du -sh "$MEM_DIR" 2>/dev/null | awk '{print $1}')
-  pass "Total memory footprint: ${FOOTPRINT:-unknown}"
-
-  # Check shared project memory
-  if [ -d "$MEM_DIR/shared/projects" ]; then
-    local PROJECT_COUNT
-    PROJECT_COUNT=$(ls "$MEM_DIR/shared/projects/"*.md 2>/dev/null | wc -l)
-    pass "Shared project memory: $PROJECT_COUNT files"
-
-    # Row 1: shared/projects line budget (60 lines each)
-    for pfile in "$MEM_DIR"/shared/projects/*.md; do
-      [ -f "$pfile" ] || continue
-      local PNAME PLINES
-      PNAME=$(basename "$pfile")
-      PLINES=$(wc -l < "$pfile" 2>/dev/null || echo "0")
-      if [[ "$PLINES" =~ ^[0-9]+$ ]] && [ "$PLINES" -gt 60 ]; then
-        warn "shared/projects/$PNAME: $PLINES lines (budget: 60)"
-        MEM_ISSUES=$((MEM_ISSUES + 1))
-      fi
-    done
-
-    # Row 1: shared/global/ltm.md budget (60 lines)
-    if [ -f "$MEM_DIR/shared/global/ltm.md" ]; then
-      local LTM_LINES
-      LTM_LINES=$(wc -l < "$MEM_DIR/shared/global/ltm.md" 2>/dev/null || echo "0")
-      if [[ "$LTM_LINES" =~ ^[0-9]+$ ]] && [ "$LTM_LINES" -gt 60 ]; then
-        warn "shared/global/ltm.md: $LTM_LINES lines (budget: 60)"
-        MEM_ISSUES=$((MEM_ISSUES + 1))
-      fi
-    fi
-
-    # Stale project check (>30 days since file modification)
-    local NOW_EPOCH
-    NOW_EPOCH=$(date +%s)
-    local STALE_DAYS=30
-    for pfile in "$MEM_DIR"/shared/projects/*.md; do
-      [ -f "$pfile" ] || continue
-      local PNAME MTIME AGE_DAYS
-      PNAME=$(basename "$pfile" .md)
-      MTIME=$(stat -c %Y "$pfile" 2>/dev/null || echo "$NOW_EPOCH")
-      if [[ "$MTIME" =~ ^[0-9]+$ ]]; then
-        AGE_DAYS=$(( (NOW_EPOCH - MTIME) / 86400 ))
-        if [ "$AGE_DAYS" -gt "$STALE_DAYS" ]; then
-          warn "shared/projects/$PNAME.md: not updated in ${AGE_DAYS}d (>${STALE_DAYS}d)"
-        fi
-      fi
-    done
+  # ── DB availability ──
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    warn "sqlite3 absent — cannot inspect memory DB"
+    SUMMARY_MEMORY="⚠️  memory | sqlite3 absent"
+    return
+  fi
+  if [ ! -f "$MDB" ]; then
+    warn "memory DB not built ($MDB)"
+    SUMMARY_MEMORY="⚠️  memory | DB not built"
+    return
+  fi
+  if ! sqlite3 "$MDB" "SELECT 1;" >/dev/null 2>&1; then
+    fail "memory DB is not valid SQLite ($MDB)"
+    SUMMARY_MEMORY="❌ memory | invalid SQLite"
+    return
   fi
 
-  # Row 2: class mtm.md budget (40 lines each)
-  for mtm in "$MEM_DIR"/class/*/mtm.md; do
-    [ -f "$mtm" ] || continue
-    local CNAME CLINES
-    CNAME=$(basename "$(dirname "$mtm")")
-    CLINES=$(wc -l < "$mtm" 2>/dev/null || echo "0")
-    if [[ "$CLINES" =~ ^[0-9]+$ ]] && [ "$CLINES" -gt 40 ]; then
-      warn "class/$CNAME/mtm.md: $CLINES lines (budget: 40)"
-      MEM_ISSUES=$((MEM_ISSUES + 1))
-    fi
+  # ── Required tables (core + FTS doc-index shadow + vec0 virtual table) ──
+  local TABLES MISS=""
+  TABLES=$(sqlite3 "$MDB" "SELECT name FROM sqlite_master WHERE type IN ('table','view');" 2>/dev/null)
+  local t
+  for t in memories memories_fts memories_vec memories_fts_docsize; do
+    printf '%s\n' "$TABLES" | grep -qx "$t" || MISS="$MISS $t"
   done
+  if [ -n "$MISS" ]; then
+    fail "memory DB missing table(s):$MISS — rebuild via memory_db.py init"
+    MEM_ISSUES=$((MEM_ISSUES + 1))
+  else
+    pass "memory DB schema: core + fts + vec + docsize present"
+  fi
 
-  # Row 3: instance MEMORY.md cell-specific budgets
-  for imem in "$MEM_DIR"/instance/*/MEMORY.md; do
-    [ -f "$imem" ] || continue
-    local INAME ILINES IBUDGET
-    INAME=$(basename "$(dirname "$imem")")
-    ILINES=$(wc -l < "$imem" 2>/dev/null || echo "0")
-    # Budget: 80 for meta, 40 for orch-type, 30 for others
-    case "$INAME" in
-      meta) IBUDGET=80 ;;
-      orch*|o-*) IBUDGET=40 ;;
-      *) IBUDGET=30 ;;
-    esac
-    if [[ "$ILINES" =~ ^[0-9]+$ ]] && [ "$ILINES" -gt "$IBUDGET" ]; then
-      warn "instance/$INAME/MEMORY.md: $ILINES lines (budget: $IBUDGET)"
-      MEM_ISSUES=$((MEM_ISSUES + 1))
-    fi
-  done
+  # ── Row count (corpus population) ──
+  local ROWS
+  ROWS=$(sqlite3 "$MDB" "SELECT COUNT(*) FROM memories;" 2>/dev/null)
+  [[ "$ROWS" =~ ^[0-9]+$ ]] || ROWS=0
+  if [ "$ROWS" -le 0 ]; then
+    warn "memory DB has 0 rows — store is empty"
+    MEM_ISSUES=$((MEM_ISSUES + 1))
+  else
+    pass "memory rows: $ROWS"
+  fi
+
+  # ── FTS index cohesion: memories == memories_fts_docsize (falsifiable check) ──
+  local IDX
+  IDX=$(sqlite3 "$MDB" "SELECT COUNT(*) FROM memories_fts_docsize;" 2>/dev/null)
+  [[ "$IDX" =~ ^[0-9]+$ ]] || IDX=0
+  if [ "$ROWS" -gt 0 ] && [ "$IDX" -eq "$ROWS" ]; then
+    pass "FTS index aligned: fts_idx=$IDX == rows=$ROWS"
+  else
+    fail "FTS index DESYNC: fts_idx=$IDX != rows=$ROWS — rebuild via memory_db.py init"
+    MEM_ISSUES=$((MEM_ISSUES + 1))
+  fi
+
+  # ── vec presence (vec0 virtual table; cannot COUNT(*) via plain sqlite3) ──
+  local VEC
+  VEC=$(sqlite3 "$MDB" "SELECT COUNT(*) FROM sqlite_master WHERE name='memories_vec';" 2>/dev/null)
+  [[ "$VEC" =~ ^[0-9]+$ ]] || VEC=0
+  if [ "$VEC" -ge 1 ]; then
+    pass "vector store present (memories_vec); full triple via memory_db.py stats"
+  else
+    fail "memories_vec MISSING — vector search unavailable"
+    MEM_ISSUES=$((MEM_ISSUES + 1))
+  fi
+
+  # ── Per-tier population (replaces per-cell line-budget rows) ──
+  local TIER_SUMMARY
+  TIER_SUMMARY=$(sqlite3 "$MDB" "SELECT tier || '=' || COUNT(*) FROM memories GROUP BY tier ORDER BY COUNT(*) DESC;" 2>/dev/null | tr '\n' ' ')
+  [ -n "$TIER_SUMMARY" ] && pass "tiers: $TIER_SUMMARY"
+
+  # ── Last-write sanity: is the store actually being written to? ──
+  local LAST_WRITE
+  LAST_WRITE=$(sqlite3 "$MDB" "SELECT COALESCE(MAX(updated),'never') FROM memories;" 2>/dev/null)
+  pass "last write: ${LAST_WRITE:-unknown}"
+
+  # ── On-disk footprint of the DB file ──
+  local FOOTPRINT
+  FOOTPRINT=$(du -h "$MDB" 2>/dev/null | awk '{print $1}')
+  pass "memory DB footprint: ${FOOTPRINT:-unknown}"
 
   if [ "$MEM_ISSUES" -gt 0 ]; then
-    SUMMARY_MEMORY="⚠️  memory ($MEM_COUNT dirs) | $MEM_ISSUES issues"
+    SUMMARY_MEMORY="⚠️  memory (DB) | $MEM_ISSUES issue(s), rows=$ROWS"
   else
-    SUMMARY_MEMORY="✅ memory ($MEM_COUNT dirs) | All have MEMORY.md, footprint: ${FOOTPRINT:-?}"
+    SUMMARY_MEMORY="✅ memory (DB) | rows=$ROWS, fts ok, vec ok, ${FOOTPRINT:-?}"
   fi
 }
 

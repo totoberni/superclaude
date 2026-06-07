@@ -91,3 +91,33 @@ agents/_archive/
 # Misc runtime / cache state
 usage-limits.json
 mcp-needs-auth-cache.json
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# === v3 runtime / venv / cache clutter (2026-06-07) ===
+.venv/
+.cache/
+_backups/
+.debug-*
+/.context-latest.json
+/.rate-latest.json
+/.cost-cache.json
+/.cost-ledger.json
+/.nb-progress.json
+
+# === v3 daemon/jobs/notebook + comms-log + bak runtime (2026-06-07 commit hygiene) ===
+# Daemon supervisor runtime (roster/lock/log/status regenerated each launch)
+daemon/
+daemon.lock
+daemon.log
+daemon.status.json
+# Job-queue + notebook operational state (project-specific; notebook/ holds private project scaffolds)
+jobs/
+notebook/
+# One-shot update result + comms runtime logs (top-level; comms/*/ only covers subdirs)
+.last-update-result.json
+comms/_*.log
+# settings.json backups (broadens the exact settings.json.bak rule to catch -suffix variants)
+settings.json.bak*

@@ -6,12 +6,12 @@ mod_commit_gate() {
   [ "$TOOL_NAME" = "Bash" ] || return 0
   [ "$NUDGE_FIRED" = true ] && return 0
 
-  BASH_CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) || BASH_CMD=""
+  BASH_CMD=$(get_bash_cmd "$INPUT")
   [ -z "$BASH_CMD" ] && return 0
 
   # ── Push reminder ──
   if echo "$BASH_CMD" | grep -qE '^\s*git(\s+-C\s+\S+)?\s+push'; then
-    printf '{"additionalContext":"Push detected. Reminder: verify with the user before pushing. Never push without explicit instruction."}\n'
+    emit_context "Push detected. Reminder: verify with the user before pushing. Never push without explicit instruction."
     return 0
   fi
 
@@ -42,6 +42,13 @@ mod_commit_gate() {
 
   # Check conventional commit prefix
   if ! echo "$COMMIT_MSG" | grep -qE '^\s*(feat|fix|test|docs|chore|refactor|style|ci|perf|build)(\(.+\))?!?:'; then
-    printf '{"additionalContext":"Commit message may not follow conventional format. Expected: feat:|fix:|test:|docs:|chore:|refactor:|style:|ci:|perf:|build: prefix. Current: %s"}\n' "$(echo "$COMMIT_MSG" | head -c 60)"
+    # One-shot per session (audit O15): same agent gets ONE conventional-format
+    # warning per session — they've heard the message, no need to repeat. The
+    # marker key is plain "commit-gate" (not per-message hashed) because
+    # repeated warnings inside the same session are noise; the agent will see
+    # other failures (rejected commits, hook output) if they ignore this one.
+    if ! already_warned "$SESSION_ID" "commit-gate"; then
+      emit_context "Commit message may not follow conventional format. Expected: feat:|fix:|test:|docs:|chore:|refactor:|style:|ci:|perf:|build: prefix. Current: $(echo "$COMMIT_MSG" | head -c 60)"
+    fi
   fi
 }

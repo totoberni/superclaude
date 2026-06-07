@@ -9,7 +9,7 @@ Chain of command, write scopes, and workspace boundaries for ALL superclaude age
 | Strategic | Meta | Write directives/bootstrap/plans, read reports, manage comms bus, spawn read-only helpers | Edit project code, git in repos, write state.md during Orch execution, edit settings.json |
 | Infrastructure | Scaffolder | Edit `~/.claude/` files (agents, hooks, rules, skills, settings.json), validate infra, write own reports | Edit project code, git in repos, architecture decisions alone, remove deny rules or disable sandbox |
 | Tactical | Orch / Orch-* | Edit project code, git (except push), spawn workers, write state/reports | Push, architecture decisions alone, write plan.md/directives/bootstrap, touch local `.claude/`, edit settings.json |
-| Worker | w-merger, w-debugger, w-refactorer, w-reviewer, w-planner | Edit within assigned scope, run scoped commands | Push, touch local `.claude/`, write to comms, unscoped changes, edit settings.json |
+| Worker | w-merger, w-debugger, w-refactorer, w-reviewer, w-planner, w-design-reviewer, w-implementer, w-doc, w-explorer, w-tester, w-committer (+ ephemeral via `/autocommission`) | Edit within assigned scope, run scoped commands | Push, touch local `.claude/`, write to comms, unscoped changes, edit settings.json, spawn children |
 
 ## Multi-Orch
 
@@ -67,10 +67,41 @@ Message formats: `~/.claude/comms/README.md`
 **Orch -> Meta**: Write RPT-NNN to reports.md. ESC-NNN to escalations.md for blockers.
 **Escalation flow**: Orch writes ESC -> the user sees -> the user decides or relays to Meta -> Meta answers below ESC entry.
 
+**Comms search + HTML (v3)**: for historical/semantic comms queries use `scripts/memory/comms_db.py search` (run `sync` first; hybrid FTS5+vec over all comms). Render entries / report bundles to HTML via `comms_viewer.py`. The broker (`.broker.db`) remains the operational message bus — unread DIR/RPT/ESC are detected via its `read_at`, unchanged. See `comms/README.md` § Comms Search Store + HTML Reports.
+
 ## Delegation
 
-**Parallel limit**: both Meta and Orch can spawn **up to 5 subagents simultaneously** via the Agent tool. Launch them in a single message with multiple Agent tool calls. Use for parallelizable, independent tasks.
+**SOT**: `~/.claude/rules/13-worker-first-mandate.md`. That file owns: swarm-first mandate, decision boundary (swarm vs ork), per-worker model × effort × thinking matrix, battle-tested patterns, autocommission protocol summary. R-1/R-2/R-3/R-4 critical rules now live in `~/.claude/rules/40-swarm-quality-gates.md`.
 
-**Meta -> Helpers**: read-only subagents (Explore, general-purpose, w-reviewer, Plan). Helpers must NOT write to code, comms, or state files. See `~/.claude/agents/meta.md` § Helper Subagents.
-**Meta -> Orch**: never bypass orch for code-editing workers. Read-only tasks (e.g., w-reviewer) are allowed.
-**Orch -> Workers**: absolute paths, full task context, explicit file scope, verify output. See `~/.claude/agents/orch.md` § Delegating to Workers.
+This rule retains only the write-scope tables above (which are hierarchy concerns, not delegation patterns). For ALL delegation guidance, refer to 13-rule.
+
+**Parallel limit** (universal): 5 subagents simultaneously per message via Agent tool. Both Meta and Orch.
+
+**Orch → Workers**: see `~/.claude/agents/orch.md` § Delegating to Workers for the dispatch contract checklist.
+
+## Memory Access (Canonical for All Spawn-Capable Agents)
+
+Persistent memory lives in a hybrid-search SQLite DB at `~/.claude/agent-memory/.memory.db` (FTS5 + vector embeddings). There is **no MEMORY.md to read** — query the DB.
+
+1. **Auto-loaded slice**: at session start, a SessionStart hook injects a pointer + a top-N slice of your most relevant memories. Treat it as your starting context. (Subagents do not get this hook — they rely on step 2.)
+2. **Proactive recall** (do this whenever a task touches prior work, a project, or a known pitfall): run `memory_db.py search "<natural-language query>" -k 8` (see §1 for the full invocation), then `get --name <slug>` for the full body. Hybrid search matches prose, jargon, paths, and error codes. To find memories related to one you already hold (near-dups / same-topic-different-words), use `memory_db.py similar --name <slug>` (hybrid cosine + token-Jaccard; also via `/mem-similar`).
+3. **Scope by tier**: `instance/<your-agent>` (your own memories), `shared-projects` (project gotchas/wins), `shared-global` (cross-project lessons), `class` (your agent-class patterns) — via `list --tier <t>` or natural queries.
+4. **Write** via the memory skills (/remember, /good-idea, /lt-mem, /mistake); they upsert to the DB. Never write `.md` memory files.
+
+## Reviewer Attribution on Dirty Trees
+
+When project policy is `/commit false` (e.g., `~/projects/workspace/example-webapp-polish`), the working tree may carry pre-existing uncommitted changes from previous sessions. `w-reviewer` reads `git diff HEAD` and CANNOT distinguish wave's contribution from prior state — produces false-positive REJECTs flagging prior work as "scope drift".
+
+**Mitigation (mandatory when dispatching `w-reviewer` on `/commit false` repos)**:
+
+1. Stash baseline at session start:
+```bash
+git -C <repo> status --short > /tmp/<session_id>-baseline.txt
+git -C <repo> diff > /tmp/<session_id>-baseline.diff
+```
+
+2. Inject baseline path into every `w-reviewer` dispatch prompt with explicit "files in this list are PRIOR state, not your concern" guidance.
+
+3. Optionally enumerate the explicit file scope list this wave touches.
+
+The `~/.claude/hooks/modules/15-baseline-stash.sh` hook (per Phase 4 ROI item) automates step 1 when implemented.

@@ -1,6 +1,7 @@
 ---
 name: portfolio
 description: "Cross-orch dashboard: active orchs, status, escalations"
+model: haiku
 category: orchestration
 user-invocable: true
 disable-model-invocation: true
@@ -20,19 +21,33 @@ Parse `$ARGUMENTS` to determine mode (default: `--orch`):
 ## Data Sources
 
 - Registry: `~/.claude/comms/meta-registry.md`
-- Reports: `~/.claude/comms/*/reports.md` (latest RPT per orch)
-- Escalations: `~/.claude/comms/*/escalations.md` (pending ESC)
+- Reports (latest RPT per orch): broker query — `kind='RPT' GROUP BY from_agent HAVING ts=MAX(ts)`
+- Escalations (pending ESC): broker query — `kind='ESC' AND read_at IS NULL`
 - Plans: `~/.claude/plans/*/plan.md`, `~/.claude/plans/*/state*.md`
-- Scaf directives: `~/.claude/comms/scaf*/directives.md`
-- File timestamps for age calculation
+- Scaf directives (latest DIR to scaf): broker query — `kind='DIR' AND to_agent LIKE '@scaf%'`
+- Broker DB: `~/.claude/comms/.broker.db`; fall back to flat files only if broker unavailable
 
 ## Mode: --orch (default)
 
 1. Read `~/.claude/comms/meta-registry.md` — extract Active orchs table
-2. For each active orch, read its latest RPT from `~/.claude/comms/<name>/reports.md` (last `## RPT-NNN` entry — extract Status + Time)
-3. Check `~/.claude/comms/<name>/escalations.md` for unanswered ESCs (no `**Answer**` line)
-4. Compute age from RPT timestamp vs now
-5. Output:
+2. Query broker for latest RPT per orch + unanswered ESC count:
+   ```bash
+   DB="$HOME/.claude/comms/.broker.db"
+   sqlite3 -header -column "$DB" "
+     SELECT
+       from_agent AS orch,
+       MAX(CASE WHEN kind='RPT' THEN seq END) AS last_rpt,
+       datetime(MAX(CASE WHEN kind='RPT' THEN ts END),'unixepoch') AS rpt_time,
+       CAST((strftime('%s','now') - MAX(CASE WHEN kind='RPT' THEN ts END)) / 60 AS INTEGER) AS age_min,
+       SUM(CASE WHEN kind='ESC' AND read_at IS NULL THEN 1 ELSE 0 END) AS unanswered_esc
+     FROM messages
+     WHERE kind IN ('RPT','ESC')
+     GROUP BY from_agent
+     ORDER BY MAX(ts) DESC;
+   "
+   ```
+3. Compute age from RPT timestamp vs now (age_min column above)
+4. Output:
 
 ```
 | Orch | Project | DIR | Last RPT | Status | Age | Escalation |
@@ -50,15 +65,23 @@ List active workers by checking `~/.claude/session-timers/*.agent` for `w-*` pre
 ## Mode: --meta
 
 1. Read `~/.claude/comms/meta-registry.md` (full Active + Archive tables)
-2. Count pending ESCs across all `~/.claude/comms/*/escalations.md`
+2. Count pending ESCs from broker:
+   ```bash
+   DB="$HOME/.claude/comms/.broker.db"
+   sqlite3 "$DB" "SELECT COUNT(*) AS pending_esc FROM messages WHERE kind='ESC' AND read_at IS NULL;"
+   ```
 3. List plan statuses from `~/.claude/plans/*/plan.md` (Phase header)
 4. Output: registry summary, pending escalation count, plan phase summary
 
 ## Mode: --scaf
 
-1. Read `~/.claude/comms/scaf/directives.md`
+1. Query broker for scaf directives:
+   ```bash
+   DB="$HOME/.claude/comms/.broker.db"
+   sqlite3 -header -column "$DB" "SELECT seq, datetime(ts,'unixepoch') AS t, substr(body,1,80) AS preview FROM messages WHERE kind='DIR' AND to_agent LIKE '@scaf%' ORDER BY ts DESC LIMIT 20;"
+   ```
 2. Output status table from directive index (DIR | Title | Status)
-3. Show next pending directive
+3. Show next pending directive (no matching RPT for the latest seq)
 
 ## Mode: --all
 

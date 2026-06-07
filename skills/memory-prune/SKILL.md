@@ -10,7 +10,12 @@ allowed-tools: Read, Bash, Glob, Grep
 
 # Memory Prune
 
-Scan memory matrix cells for stale, broken, or obsolete entries. **Advisory only** — presents findings for human decision, never auto-deletes.
+Scan memory matrix cells for stale, broken, or obsolete entries. **Advisory only** — presents
+findings for human decision. Deletion is explicit and per-entry via the DB CLI.
+
+Memory is DB-resident (v3): all tiers are indexed in `~/.claude/agent-memory/.memory.db`.
+Find candidates with `memory_db.py search` or `memory_db.py list`, then remove confirmed
+stale entries with `memory_db.py prune --name <name>`.
 
 **Scope**: $ARGUMENTS (default: all)
 
@@ -21,82 +26,106 @@ Scan memory matrix cells for stale, broken, or obsolete entries. **Advisory only
 | **Broken path** | Entry references a file/dir that doesn't exist | Flag for removal |
 | **Stale mistake** | Mistake with Occ=1, older than 30 days | Flag for review |
 | **Resolved gotcha** | Gotcha for an issue that's been fixed | Flag for archival |
-| **Oversized cell** | File exceeds its line budget | Flag for /compact-mem |
+| **Oversized tier** | Tier row count exceeds budget (see `/mem-health`) | Flag for /lt-mem --compact |
 | **Dead project** | Project memory for a project with no recent commits (>60 days) | Flag for archival |
 
-## Scan Targets
+## Tier Budgets (unchanged — now row counts in DB)
 
-### Row 1: Shared (cross-agent)
-
-| Cell | Path | Budget |
-|------|------|--------|
-| Global LTM | `shared/global/ltm.md` | 60 lines |
-| Project memory | `shared/projects/<project>.md` | 60 lines each |
-
-### Row 2: Class (per agent type)
-
-| Cell | Path | Budget |
-|------|------|--------|
-| Class MTM | `class/<class>/mtm.md` | 40 lines |
-| Class project | `class/projects/<class>/<project>.md` | 30 lines each |
-
-### Row 3: Instance (per agent)
-
-| Cell | Path | Budget |
-|------|------|--------|
-| Instance MEMORY.md | `instance/<name>/MEMORY.md` | 80 (meta), 40 (orch), 30 (other) |
+| Tier | DB filter | Budget |
+|------|-----------|--------|
+| Global LTM | `--tier global` | 60 rows |
+| Project memories | `--tier shared --type project` | 60 rows each project |
+| Class MTM | `--tier class` | 40 rows per class |
+| Instance | `--tier instance` | 80 (meta), 40 (orch), 30 (other) |
 
 ## Procedure
 
-### 1. Collect All Cells
+### 1. Enumerate All Entries
 
 ```bash
-MEM="$HOME/.claude/agent-memory"
-# Row 1
-wc -l "$MEM"/shared/global/ltm.md "$MEM"/shared/projects/*.md 2>/dev/null
-# Row 2
-wc -l "$MEM"/class/*/mtm.md "$MEM"/class/projects/*/*.md 2>/dev/null
-# Row 3
-wc -l "$MEM"/instance/*/MEMORY.md 2>/dev/null
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list
 ```
 
-### 2. Check Line Budgets
+Filter by tier or type to narrow scope:
 
-Flag any cell exceeding its budget (see tables above).
+```bash
+# Shared project memories only
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list \
+  --tier shared --type project
+```
 
-### 3. Scan for Broken Paths
+### 2. Search for Candidates by Symptom
 
-For each memory file, extract path references (lines matching `~/.claude/` or backtick-quoted paths). Verify each exists. Flag missing.
+Use semantic + keyword search to surface likely-stale entries:
 
-### 4. Scan for Stale Entries
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
+  search '<topic or symptom>' -k 10 --mode hybrid
+```
 
-- **Mistakes**: grep for `Occ=1` or `| 1 |` entries. Check if the date is >30 days old.
-- **Gotchas**: check if referenced files/patterns still exist in the codebase.
-- **Projects**: `git -C <repo> log -1 --format=%ci 2>/dev/null` — flag if >60 days.
+Use `--mode fts` for exact strings (e.g., a deleted file path, a resolved error message).
 
-### 5. Present Findings
+### 3. Inspect Candidates
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py get --name <name>
+```
+
+Read the full entry text. Apply staleness criteria from the table above.
+
+### 4. Scan for Broken Paths
+
+For each suspicious entry's `text`, verify any `~/.claude/` or backtick-quoted paths still
+exist with `test -f`/`test -d`. Flag entries whose referenced paths are gone.
+
+### 5. Check Dead Projects
+
+```bash
+git -C <repo> log -1 --format=%ci 2>/dev/null
+```
+
+Flag project-type entries where the repo has no commits in >60 days.
+
+### 6. Present Findings
 
 ```
 ## Memory Prune Report
 
-### Budget Status
-| Cell | Lines | Budget | Status |
-|------|-------|--------|--------|
-| shared/projects/<project>.md | 38 | 60 | OK |
-| ... | ... | ... | ... |
-
 ### Flagged Entries (N total)
-| # | Cell | Entry | Reason | Recommendation |
-|---|------|-------|--------|----------------|
-| 1 | shared/projects/X.md | "workaround for bug Y" | Path /foo/bar gone | Remove |
-| ... | ... | ... | ... | ... |
+| # | name | tier | type | Reason | Recommendation |
+|---|------|------|------|--------|----------------|
+| 1 | feedback_workaround_foo | shared | feedback | Path /foo/bar gone | prune |
+| 2 | project_vps_migration | shared | project | Repo silent >60 days | archive |
+| … | … | … | … | … | … |
 
 ### Action Required
-- Review flagged entries above
-- Run `/compact-mem` on oversized cells
+- Confirm each entry above, then prune confirmed stale entries (see below)
+- Run `/lt-mem --compact` on oversized tiers
 - Archive dead project memories if confirmed inactive
+```
+
+### 7. Remove Confirmed Stale Entries
+
+After human confirmation — remove one entry at a time:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py prune --name <name>
+```
+
+Or by numeric id:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py prune --id <N>
 ```
 
 ## Key Principle
 
-**Never delete automatically.** Memory entries may look stale but encode hard-won lessons. Present findings with context so the user (or Meta) can make informed decisions. When in doubt, keep.
+**Never delete automatically.** Memory entries may look stale but encode hard-won lessons.
+Present findings with context so the user (or Meta) can make informed decisions. When in
+doubt, keep. `memory_db.py prune` is only invoked after explicit human sign-off.

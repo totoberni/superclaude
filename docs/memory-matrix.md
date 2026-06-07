@@ -2,6 +2,8 @@
 
 3-tier memory system for superclaude agents.
 
+Canonical load order for ALL spawn-capable agents: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order. Don't restate it here — link.
+
 ## Matrix Structure
 
 ```
@@ -24,8 +26,23 @@
 |------|------|---------|----------|
 | Shared | `shared/global/ltm.md` | Cross-project, cross-agent knowledge | Permanent |
 | Shared | `shared/projects/<project>.md` | Project-specific knowledge for all agents | Project lifetime |
-| Class | `class/<class>/mtm.md` | Agent-class patterns (orch, meta, scaf, etc.) | Medium-term |
+| Class | `class/<class>/mtm.md` | Agent-class patterns (orch, meta, scaf, w-debugger, w-reviewer, etc.) | Medium-term |
 | Instance | `instance/<name>/MEMORY.md` | Per-session recovery, agent-specific state | Session lifetime |
+
+## Memory Skills
+
+Three active skills, one shared scanner. Mutators and queries are now consolidated.
+
+| Skill | Role | Replaces |
+|-------|------|----------|
+| `/lt-mem` | Mutator: consolidate, promote, archive, compact to budgets, sanitize refs | -- |
+| `/mem-health` | Score memory matrix /100 (6 criteria + v3 trigger checks) | -- |
+| `/memory-prune` | Advisory scan for stale / broken entries (no mutation) | -- |
+| `/mem-index` | Auto-regen `MEMORY.md` index files from filenames + first-line titles | -- |
+
+All four skills share `~/.claude/scripts/scan-mem-matrix.sh` for matrix LOC + budget reporting (single source of truth — no skill reimplements scanning logic).
+
+Other memory-adjacent skills (not mutators of the matrix itself): `/good-idea`, `/mistake`, `/memory-search`, `/remember`.
 
 ## Placement Rule
 
@@ -82,6 +99,13 @@ _system/
 When v3 triggers fire (see `shared/projects/superclaude.md`):
 
 1. **Class mtm.md > 40 lines** -> split into `class/<class>/projects/<project>.md` (30-line budget each)
-2. **Corpus > 2,000 lines** -> activate `/lt-mem` skill for automated archival
+2. **Corpus > 2,000 lines** -> `/lt-mem` handles automated archival (already active)
 3. **3+ class cells > 30 lines** -> standalone manifest files per agent
 4. **Cross-cell duplication > 10%** -> `/lt-mem` promotion logic deduplicates
+
+## Cross-References
+
+- Canonical load order: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order
+- Worker memory inheritance rule: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order, Note
+- Programming principles governing memory writes: `~/.claude/rules/15-programming-principles.md`
+- Context lifecycle and self-compact protocol: `~/.claude/rules/25-context-management.md`

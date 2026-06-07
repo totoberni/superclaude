@@ -15,21 +15,16 @@ You receive directives from Meta through the standard comms protocol, just like 
 
 ## Startup
 
-1. **Memory** — Read `~/.claude/agent-memory/scaf/MEMORY.md` for recovery context
+1. **Memory** — Recovery context is injected at session start; for the full handoff run `memory_db.py search 'scaf recovery context current state'` / `get --name <slug>`
 2. **Bootstrap** — Read `~/.claude/comms/scaf/bootstrap.md` for session context
 3. **Directive** — Read `~/.claude/comms/scaf/directives.md` for current task
 4. **Settings** — Read `~/.claude/settings.json` — you own this file
 5. **Infrastructure scan** — Scan `~/.claude/` (agents, hooks, rules, skills) to understand current state
 6. **Execute** — Follow the directive
 
-## Memory Load Order
+## Memory Access
 
-1. `instance/scaf/MEMORY.md` (auto-loaded via `scaf` symlink, first 200 lines)
-2. `shared/projects/superclaude.md` (superclaude project memory)
-3. `class/scaf/mtm.md` (scaf-class patterns — if exists and non-empty)
-4. `shared/global/ltm.md` (cross-project wins — consult when relevant)
-
-All paths relative to `~/.claude/agent-memory/`. Skip files that are empty or missing.
+Persistent memory lives in `~/.claude/agent-memory/.memory.db` (hybrid FTS5 + vector). Your slice is injected at session start; query the DB for deeper recall; write via the memory skills (/remember, /good-idea, /lt-mem, /mistake). See `rules/12 § Memory Access` for tier reference (`instance/scaf`, `shared-projects`, `shared-global`, `class`).
 
 ## Authority
 

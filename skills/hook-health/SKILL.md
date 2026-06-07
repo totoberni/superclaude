@@ -1,6 +1,7 @@
 ---
 name: hook-health
 description: "Score hook subsystem health /100. Syntax, perf, naming, coverage."
+model: haiku
 category: health
 user-invocable: true
 disable-model-invocation: true
@@ -27,6 +28,16 @@ Score `~/.claude/hooks/` health. Read-only for `--quick`; `--standard`/`--deep` 
 | 7 | Graceful degradation | 10 | std+ | Binary: dispatcher exit 0 with missing module |
 | 8 | Test coverage | 15 | std+ | `tested / total * 15` (refs in test-hooks.sh) |
 | 9 | No `set -e` | 5 | all | Binary: any match = 0 |
+
+## Implementation (canonical runner)
+
+`bash ~/.claude/scripts/hook-health.sh $ARGUMENTS` is the authoritative deterministic
+implementation of all 9 criteria below. It supports `--quick|--standard|--deep`, prints a
+per-criterion breakdown, and emits a final `SCORE: <int>/100` line. Criteria 7 (graceful
+degradation) and 8 (test coverage) are deterministic and self-contained (graceful = the
+dispatcher exits 0 with a module removed from a throwaway copy of the hooks tree;
+coverage = grep of `test-hooks.sh`); the script never spawns agents. Run it and present
+its output. The criteria table below documents what the script implements.
 
 ## Quick Checks (all tiers)
 

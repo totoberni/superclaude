@@ -42,7 +42,7 @@ After completing any directive that involved code changes or took >5 minutes:
 2. Run `/mistake <project>` and `/good-idea <project>` (promotes learnings to shared project memory)
 3. Update state file
 
-This is separate from the grace-period shutdown procedure. Retrospectives at normal completion ensure learnings reach `~/.claude/agent-memory/shared/projects/<project>.md` where ALL future orchs benefit — even if the session ends gracefully without hitting the timer.
+This is separate from the grace-period shutdown procedure. Retrospectives at normal completion ensure learnings reach the DB (`shared-projects` tier) where ALL future orchs benefit — even if the session ends gracefully without hitting the timer.
 
 ## Context Hygiene (All Agents)
 
@@ -70,10 +70,9 @@ Context compaction can happen at any time when the conversation grows large. Aut
 
 ### Stash Procedure
 
-Write recovery context to `~/.claude/agent-memory/instance/<your-agent-name>/MEMORY.md`:
+Stash via `/remember` (upserts to the DB). Write a recovery memory with content structured as:
 
-```markdown
-## Recovery Context (auto-stash)
+```
 - **Directive**: DIR-NNN ref
 - **Progress**: which tasks done, which in progress
 - **Current task**: exact task ID + what you were doing
@@ -84,14 +83,14 @@ Write recovery context to `~/.claude/agent-memory/instance/<your-agent-name>/MEM
 
 Then update your state file (`state-<X>.md`) with current task progress.
 
-**Critical**: the stash is incremental — append/update, don't overwrite prior recovery context. If you already have useful content in MEMORY.md, preserve it and add the new recovery section.
+**Critical**: the stash is incremental — use /remember to upsert (the DB handles de-dup). Include a descriptive name slug like `<agent>-recovery-<date>` so `memory_db.py search '<agent> recovery context'` retrieves it.
 
 ### After Compaction — Recovery
 
 The `pre-compact.sh` hook auto-snapshots state files. After compaction, resume in this order:
 
 1. `~/.claude/agent-memory/_system/_compact-snapshots/` (latest snapshot)
-2. Your `MEMORY.md` recovery context
+2. Recovery context: `memory_db.py search '<agent> recovery context current state'` then `get --name <slug>`
 3. Your state file
 4. Your latest report
 5. Your directive
@@ -113,7 +112,7 @@ The `pre-compact.sh` hook auto-snapshots state files. After compaction, resume i
 1. Commit outstanding work
 2. Update state file + write RPT to reports.md
 3. Run `/mistake <project>` and `/good-idea <project>` (captures learnings to shared memory)
-4. Write recovery context to MEMORY.md
+4. Stash recovery context via /remember (upserts to the DB)
 
 ## Context Estimation Response
 
@@ -132,3 +131,9 @@ The warning is informational — don't stop current work. Address it at the next
 - Commit in logical batches, not one file at a time
 - Prefer delegation over doing everything yourself — workers get fresh context
 - If a task can be split into 2 sessions cleanly, stash and let the next session handle it
+
+## Worker Absorption (Swarm-First)
+
+**SOT**: `~/.claude/rules/13-worker-first-mandate.md`. Workers absorb context — spawning a w-* no longer triggers a "stash" (delegated context is freed). Stash triggers (above) apply to non-delegating long sequences only.
+
+For the decision rule + matrix + battle-tested patterns, see 13-rule.

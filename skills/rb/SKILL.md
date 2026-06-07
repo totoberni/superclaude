@@ -5,7 +5,7 @@ category: workflow
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "<orch-name>"
-allowed-tools: Read, Write, Glob, Grep
+allowed-tools: Read, Write, Bash, Glob, Grep
 ---
 
 # /rb — Refresh Bootstrap
@@ -16,16 +16,20 @@ Generate fresh `bootstrap.md` for `$ARGUMENTS` (orch name) from current state, d
 
 ### 1. Resolve Orch Context
 
-1. Read `~/.claude/comms/$ARGUMENTS/directives.md` — find latest active DIR (last PENDING or IN_PROGRESS in status table)
-2. Read the directive file referenced in the index
+1. Query broker for the latest DIR addressed to `$ARGUMENTS`:
+   ```bash
+   DB="$HOME/.claude/comms/.broker.db"
+   sqlite3 -header -column "$DB" "SELECT seq, datetime(ts,'unixepoch') AS t, body FROM messages WHERE kind='DIR' AND to_agent='@$ARGUMENTS' ORDER BY ts DESC LIMIT 1;"
+   ```
+2. The broker `body` column above holds the full directive text (handoff dual-writes the entire directive into the broker), so use it directly — no flat-file read needed
 3. Identify the project from the directive or registry (`~/.claude/comms/meta-registry.md`)
 
 ### 2. Gather State
 
 Read in parallel:
 - `~/.claude/plans/<project>/state-$ARGUMENTS.md` (or `state.md`) — current progress
-- `~/.claude/agent-memory/shared/projects/<project>.md` — Gotchas + top Mistakes
-- `~/.claude/agent-memory/$ARGUMENTS/MEMORY.md` — recovery context (if exists)
+- Project gotchas + top mistakes: `HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py search '<project> gotchas mistakes' -k 8` or `list --tier shared-projects`
+- Recovery context: injected at session start; for full handoff run `memory_db.py search '<orch-name> recovery context current state'` / `get --name <slug>`
 
 ### 3. Auto-Select Pitfalls
 
@@ -57,7 +61,7 @@ You are **<orch-name>**, an orchestrator for <project>.
 <auto-selected 3-5 items, numbered>
 
 ## Recovery Context
-<from MEMORY.md if exists, otherwise "Fresh session — no prior context">
+<from `memory_db.py search '<agent> recovery context current state'` (then `get --name <slug>`) if found, otherwise "Fresh session — no prior context">
 
 ## Environment
 - CWD: `~/projects/workspace/` (never cd into project dirs)

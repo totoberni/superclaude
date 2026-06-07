@@ -32,7 +32,7 @@ Location: state.md Decisions section or `~/.claude/plans/<name>/decisions.md`
 ## Gotchas/Mistakes
 
 After fixing a new issue, record it:
-- Superclaude: `~/.claude/agent-memory/shared/projects/<project>.md` (canonical)
+- Superclaude: `memory_db.py search '<project> gotchas mistakes'` or `list --tier shared-projects` (use /mistake or /good-idea to write)
 - In-project: `docs/gotchas.md` or `.orchestrator/mistakes.md`
 - Tool patterns: `~/.claude/rules/20-tool-conventions.md`
 

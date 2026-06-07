@@ -6,10 +6,13 @@
 #   00-parse.sh     — JSON parsing + agent detection + caching
 #   05-context-check.sh — Memory footprint estimation + staleness (first 10 calls)
 #   10-nudge.sh     — Nudge file detection + delivery + cleanup
+#   14-agent-thinking-nudge.sh — V-001 lesson: soft nudge when matrix prescribes thinking keyword
+#   15-baseline-stash.sh — R-2 mitigation: stash baseline for /commit false repos
 #   20-counter.sh   — Tool call efficiency counter + TDD awareness
 #   25-commit-gate.sh — Commit quality gate (conventional format + push reminder)
 #   30-timer.sh     — Session timer lifecycle (warn/grace/block)
 #   40-gc.sh        — GC Phase 1/2/3 (stale/dead/orphan cleanup)
+#   45-spawn-log.sh — Telemetry: log Agent tool calls to comms/_spawns.log
 #   50-bootstrap.sh — Bootstrap freshness check (SessionStart only)
 #
 # Shared vars: SESSION_ID, TOOL_NAME, AGENT_NAME, TIMER_DIR, NUDGE_DIR, NUDGE_FIRED
@@ -32,6 +35,10 @@ PID_FILE=""
 CLAUDE_PID=""
 
 mkdir -p "$TIMER_DIR"
+
+# Source shared helpers (get_bash_cmd, walk_to_agent, safe_int,
+# rm_session_files, emit_context, already_warned).
+. "$HOOK_DIR/lib.sh" 2>/dev/null || { echo "WARN: lib.sh not found at $HOOK_DIR/lib.sh" >&2; }
 
 # Source all modules (defines functions only)
 LC_COLLATE=C
@@ -56,6 +63,9 @@ run_mod mod_gc
 run_mod mod_bootstrap_check
 run_mod mod_context_check
 run_mod mod_nudge
+run_mod mod_thinking_nudge
+run_mod mod_baseline_stash
+run_mod mod_spawn_log
 run_mod mod_counter
 run_mod mod_commit_gate
 run_mod mod_notebook_guard

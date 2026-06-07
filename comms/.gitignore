@@ -1,0 +1,9 @@
+.broker.db
+.broker.db-journal
+.broker.db-wal
+.broker.db-shm
+.comms.db
+.comms.db-journal
+.comms.db-wal
+.comms.db-shm
+.viewer/

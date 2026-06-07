@@ -18,11 +18,16 @@ Record effective solutions and patterns from this session.
 
 ### 1. Detect Agent Class + Gather Evidence
 
-Infer class: `o-`/`orch` → `orch`, `scaf` → `scaf`, `meta` → `meta`, `w-<type>-N` → `w-<type>`. Check if `~/.claude/agent-memory/class/<class>/mtm.md` exists (enables dual-write).
+Infer class: `o-`/`orch` → `orch`, `scaf` → `scaf`, `meta` → `meta`, `w-<type>-N` → `w-<type>`. Check if the class tier has entries (`HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier class` filtered to your class) — enables dual-write to class tier.
 
 Read in parallel:
 - `git -C <repo> log --oneline -20` + `git diff --stat HEAD~5..HEAD`
-- Orch reports (`~/.claude/comms/*/reports.md`) — look for DONE, smooth completions
+- Recent orch RPTs (look for DONE, smooth completions):
+  ```bash
+  DB="$HOME/.claude/comms/.broker.db"
+  sqlite3 -header -column "$DB" "SELECT from_agent, seq, datetime(ts,'unixepoch') AS t, substr(body,1,80) AS preview FROM messages WHERE kind='RPT' ORDER BY ts DESC LIMIT 20;"
+  ```
+  Or semantic search: `HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/comms_db.py search "DONE completed smooth"`
 - Plan state (`~/.claude/plans/*/state*.md`) — tasks completed faster than expected
 
 ### 2. Identify + Tag Wins
@@ -33,32 +38,81 @@ Categories: tool usage, architecture, delegation, process, code pattern.
 
 ### 3. Scope + Dedup
 
-| Scope | Storage | Who Writes |
-|-------|---------|------------|
-| Project win | `shared/projects/<project>.md` Wins table | **Meta only** |
-| Cross-project | `shared/global/ltm.md` Index | Meta only |
-| Class-level | `class/<class>/mtm.md` Wins table | Any agent of that class |
-| Universal tool | `rules/20-tool-conventions.md` | Via promotion |
+| Scope | DB tier | Type | Who Writes |
+|-------|---------|------|------------|
+| Project win | `shared` (--agent <project>) | project / feedback | **Meta only** |
+| Cross-project | `global` | project | Meta only |
+| Class-level | `class` (--agent <class>) | project / feedback | Any agent of that class |
+| Universal tool | `rules/20-tool-conventions.md` (Edit tool) | — | Via promotion |
 
-**Orchs**: `shared/projects/` is sandbox-denied. Write to class memory (primary) + instance memory (secondary). Meta promotes via `/lt-mem`.
+**Orchs**: `shared` tier writes are sandbox-denied. Write to `class` tier (primary) + `instance` tier (secondary). Meta promotes via `/lt-mem`.
 
-Check for duplicates before recording. Skip if already present.
+Search the DB for duplicates before recording: `memory_db.py search '<summary>' -k 3`. Skip or update if already present.
 
 ### 4. Record
 
-**Project wins** (meta only): append `| W-<N> | <Phase> | <What Worked> | <Why> | <Reusable?> |`
+Storage uses the v3 memory DB CLI. Env prefix for every call: `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`.
+CLI: `~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py`
 
-If project file doesn't exist, create with standard template (# heading + Wins/Mistakes/Gotchas sections with table headers).
+**For each win, search first, then upsert:**
 
-**Cross-project wins**: append `| CW-<N> | <Pattern> | <Source Projects> | No |` to `ltm.md`
+```bash
+# 1. Search to find an existing entry to update vs creating a new one
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
+  search '<win summary in a few words>' -k 3
+```
 
-**Class dual-write**: `| <ID> | <Pattern> | <One-liner> [<project>] | <Source> |` in `class/<class>/mtm.md`. Add `[PROMOTE]` prefix if `--universal` flag.
+If a matching entry exists, reuse its `--name` slug. Otherwise derive a new kebab-case slug.
+
+**Project wins** (meta only — tier=shared, scoped to project; technical wins → type=project, process wins → type=feedback):
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
+  upsert --tier shared --type project \
+  --name <slug-kebab-case> \
+  --description "<one-line summary>" \
+  --agent <project-name> \
+  --text-stdin <<'EOF'
+| W-<N> | <Phase> | <What Worked> | <Why> | Reusable? Yes |
+EOF
+```
+
+**Cross-project wins** (tier=global, type=project or reference):
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
+  upsert --tier global --type project \
+  --name <slug-kebab-case> \
+  --description "<one-line summary>" \
+  --text-stdin <<'EOF'
+| CW-<N> | <Pattern> | <Source Projects> |
+EOF
+```
+
+**Class dual-write** (tier=class, type=feedback or project; --agent=<class-name>):
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
+  upsert --tier class --type project \
+  --name <slug-kebab-case> \
+  --description "<one-line summary>" \
+  --agent <class-name> \
+  --text-stdin <<'EOF'
+| <ID> | <Pattern> | <One-liner> [<project>] | <Source> |
+EOF
+```
+
+Each `upsert` prints `upserted id=N` on success.
 
 ### 5. Check Promotion
 
 If `Reusable? = Yes` and seen in 2+ projects:
-1. Add to `shared/global/ltm.md`
-2. If tool pattern → promote to `rules/20-tool-conventions.md`
+1. Upsert to global tier: `upsert --tier global --type project --name <cw-slug> ...` (see Step 4 Cross-project block)
+2. If tool pattern → promote to `rules/20-tool-conventions.md` via Edit tool
 3. Mark source entries as `Promoted`
 
 ### 6. Report
@@ -72,6 +126,9 @@ If `Reusable? = Yes` and seen in 2+ projects:
 - [list or "None"]
 ```
 
-## Storage Paths
-- **Project**: `shared/projects/<project>.md` | **Class**: `class/<class>/mtm.md` | **Global**: `shared/global/ltm.md` | **Rules**: `rules/20-tool-conventions.md`
+## Storage
+- All writes go through `~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py upsert` with `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`.
+- Tier mapping: project-scoped win → `--tier shared --agent <project>`; cross-project → `--tier global`; class-level → `--tier class --agent <class>`; instance → `--tier instance`.
+- Type mapping: technical wins → `--type project`; process/convention wins → `--type feedback`.
 - Write scopes: rule 12. Class writes are layer 2 only. Promotion to global via `/lt-mem`.
+- Rules promotion (`rules/20-tool-conventions.md`) still uses Edit tool directly — that file is not in the DB.

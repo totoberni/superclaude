@@ -306,11 +306,7 @@ or working notes.
    CWD that contains a git repository, a `docs/` folder, or a
    `~/.claude/plans/<name>/plan.md` entry.
 
-2. **Project memory**: if `~/.claude/agent-memory/shared/projects/<name>.md`
-   exists, read the Gotchas, Mistakes, and Wins sections. These are
-   the accumulated traps for this project; a review, design, or gap
-   audit is the right moment to verify none have been silently
-   re-introduced.
+2. **Project memory**: query the DB for accumulated traps: `HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py search '<name> gotchas mistakes wins' -k 8` or `list --tier shared-projects`. A review, design, or gap audit is the right moment to verify none have been silently re-introduced.
 
 3. **Markscheme**:
    - Prefer `~/.claude/plans/<project>/markscheme.md` (the current
@@ -376,8 +372,9 @@ reference this section rather than restating.
 - **Decontamination**: when the output path resolves into a
   project directory (`<project-root>/...`), grep the draft for
   superclaude identifiers before writing: `~/.claude/`,
-  `agent-memory`, `MEMORY.md`, `mtm.md`, `ltm.md`, `MM-\d+`,
-  `GM-\d+`, `M-\d+`, internal orch names, internal
+  `agent-memory`, `MEMORY.md`, `mtm.md`, `ltm.md`, `.memory.db`,
+  `.comms.db`, `.broker.db`, `memory_db.py`, `comms_db.py`,
+  `MM-\d+`, `GM-\d+`, `M-\d+`, internal orch names, internal
   project-memory filenames. Paraphrase hits as external
   references before save. Paths under `~/.claude/` are exempt
   from decontamination but should still paraphrase where portable.
@@ -1099,6 +1096,52 @@ Produces or refines a LaTeX research document structured for
 layered comprehension: the main body introduces and contextualises;
 appendices provide the derivations that are genuinely specific to
 the project (Principle 9).
+
+### Setup (Anti IDE / VS Code on WSL, one-time per project)
+
+Before the first save of any LaTeX file in a subdir (e.g. `sections/`),
+disable `latexindent` format-on-save at the workspace root. The
+latex-workshop extension (10.13.1) invokes
+`latexindent -c <root-dir>/` but then cleans up
+`<file-dir>/indent.log` -- a path mismatch that throws `ENOENT` on
+every Ctrl+S for files outside the root dir. The build itself
+succeeds, but the noisy error masks real failures and pollutes the
+output channel. A second adjacent failure mode: a Ctrl+S during an
+in-flight latexmk run can leave `main.aux` corrupted with null bytes
+(`./main.aux:1: Text line contains an invalid character`); recovery
+is `latexmk -C && latexmk -pdf` from the directory containing
+`main.tex`, but the root cause is the same auto-formatter race that
+this setup defuses.
+
+Mitigation: create `.vscode/settings.json` at the workspace root (the
+folder the IDE opens, which is what `%WS1%` resolves to in the LaTeX
+Workshop output channel) with:
+
+```json
+{
+  "[latex]": { "editor.formatOnSave": false },
+  "latex-workshop.latex.autoBuild.run": "onSave"
+}
+```
+
+Reload the window (`Ctrl+Shift+P -> Developer: Reload Window`) after
+creating; save-time settings do not retroactively apply, and saves
+made between settings creation and reload still trigger the bug.
+Auto-build on save is preserved, so the PDF still updates on Ctrl+S;
+manual indentation stays available via
+`Ctrl+Shift+P -> Format Document`. If the IDE was opened at a
+parent of the LaTeX project (e.g. workspace root is `example-course/` but
+the report lives at `example-course/iqc/report/`), place the
+`.vscode/settings.json` at the IDE's workspace root, not at the
+report's parent. Verify the right level by reading the LaTeX
+Workshop log: the path component immediately following `%WS1%/` is
+the first directory inside the workspace (so `%WS1%/report/` means
+workspace root contains `report/` directly). User-level Antigravity
+settings can override workspace settings; if the bug persists after
+a reload, mirror the same block into
+`Ctrl+Shift+P -> Preferences: Open User Settings (JSON)`. Applies to
+Anti IDE and VS Code on WSL; native macOS/Linux installs may not
+exhibit the path mismatch but the setting is harmless there.
 
 ### Principles
 
