@@ -69,6 +69,10 @@ def _embed(text: str) -> list[float]:
 def _connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
     """Open a connection with the sqlite-vec extension loaded."""
     conn = sqlite3.connect(str(db_path))
+    # Wait up to 5s for a competing writer instead of failing immediately with
+    # "database is locked" — matters when a cross-device sync writes this DB
+    # concurrently with a local agent's write (Phase EM concurrency hardening).
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
@@ -736,6 +740,15 @@ def _db_get_by_name(conn: sqlite3.Connection, name: str):
     ).fetchone()
 
 
+def _db_get_by_path(conn: sqlite3.Connection, path: str):
+    # `path` is the UNIQUE identity column — unambiguous, unlike `name`
+    # (names can collide across tiers). Cross-device sync must address rows
+    # by path so a delete never targets the wrong row.
+    return conn.execute(
+        "SELECT * FROM memories WHERE path = ?", (path,)
+    ).fetchone()
+
+
 def _prune_row(row_id: int, db_path: Path | str = DB_PATH) -> None:
     """Delete a memory + its FTS/vec rows. Raises LookupError if not found."""
     conn = _connect(db_path)
@@ -1168,6 +1181,9 @@ if __name__ == "__main__":
     p_prune_id = p_prune.add_mutually_exclusive_group(required=True)
     p_prune_id.add_argument("--id", type=int, metavar="N", help="Memory row id.")
     p_prune_id.add_argument("--name", metavar="X", help="Memory name/slug.")
+    p_prune_id.add_argument(
+        "--path", metavar="P", help="Memory logical path (UNIQUE identity)."
+    )
 
     # stats
     p_stats = sub.add_parser("stats", help="Row counts for memories / fts / vec.")
@@ -1221,6 +1237,17 @@ if __name__ == "__main__":
         required=True,
         metavar="TARGET",
         help="Target tier (e.g. shared-global). Reject 'archive' — use `archive`.",
+    )
+
+    # export
+    p_export = sub.add_parser(
+        "export",
+        help="Emit a JSON manifest of all rows (for cross-device sync).",
+    )
+    p_export.add_argument(
+        "--with-body",
+        action="store_true",
+        help="Include each row's full body text (default: metadata only).",
     )
 
     ns = parser.parse_args()
@@ -1339,13 +1366,20 @@ if __name__ == "__main__":
         try:
             if ns.id is not None:
                 row = _db_get_by_id(conn, ns.id)
+            elif ns.path is not None:
+                row = _db_get_by_path(conn, ns.path)
             else:
                 row = _db_get_by_name(conn, ns.name)
         finally:
             conn.close()
 
         if row is None:
-            ref = f"id={ns.id}" if ns.id is not None else f"name={ns.name!r}"
+            if ns.id is not None:
+                ref = f"id={ns.id}"
+            elif ns.path is not None:
+                ref = f"path={ns.path!r}"
+            else:
+                ref = f"name={ns.name!r}"
             _die(f"memory not found: {ref}")
 
         row_id = row["id"]
@@ -1455,3 +1489,21 @@ if __name__ == "__main__":
         print(f"memories : {mem_count}")
         print(f"fts rows : {fts_count}")
         print(f"vec rows : {vec_count}")
+
+    elif ns.cmd == "export":
+        # JSON manifest of all rows for cross-device sync. Identity = `path`,
+        # equality = content `hash` (sha256 of name+description+text — machine
+        # independent), recency = `updated`. `id`/`created` are intentionally
+        # omitted from the equality surface (machine-local); `--with-body`
+        # adds `text` so a remote peer can reconstruct a row via `upsert`.
+        conn = _connect(db)
+        try:
+            cols = "path, name, tier, type, agent, description, hash, updated"
+            if ns.with_body:
+                cols += ", text"
+            rows = conn.execute(
+                f"SELECT {cols} FROM memories ORDER BY path"
+            ).fetchall()
+        finally:
+            conn.close()
+        print(json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2))
