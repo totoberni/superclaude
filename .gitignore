@@ -121,3 +121,5 @@ notebook/
 comms/_*.log
 # settings.json backups (broadens the exact settings.json.bak rule to catch -suffix variants)
 settings.json.bak*
+# settings.local.json backups (local override may carry machine-specific config — never publish)
+settings.local.json.bak*

@@ -68,4 +68,29 @@ if [ -x "$ARCHIVE_SCRIPT" ]; then
   fi
 fi
 
+# history.jsonl rotation (v3 fix #6): the append-only session-history ledger grows
+# unbounded (~per session). When it crosses 10MB, gzip a timestamped snapshot into
+# _backups/history/ and truncate the live file, retaining the 5 most recent archives.
+# Fully fail-safe — any error here must not affect session cleanup (|| true everywhere).
+# Target dir is gitignored (_backups/), so archives never enter the public repo.
+HISTORY_JSONL="$HOME/.claude/history.jsonl"
+HISTORY_ROTATE_BYTES=10485760   # 10 MiB
+HISTORY_ARCHIVE_KEEP=5
+if [ -f "$HISTORY_JSONL" ]; then
+  HJ_SIZE=$(stat -c%s "$HISTORY_JSONL" 2>/dev/null || echo 0)
+  if [ "$HJ_SIZE" -gt "$HISTORY_ROTATE_BYTES" ] 2>/dev/null; then
+    HJ_ARCHIVE_DIR="$HOME/.claude/_backups/history"
+    mkdir -p "$HJ_ARCHIVE_DIR" 2>/dev/null || true
+    HJ_TS=$(date '+%Y%m%d-%H%M%S')
+    if gzip -c "$HISTORY_JSONL" > "$HJ_ARCHIVE_DIR/history-$HJ_TS.jsonl.gz" 2>/dev/null; then
+      : > "$HISTORY_JSONL"   # truncate in place (preserves inode/perms; CC keeps appending)
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] history rotate: ${HJ_SIZE}B -> history-$HJ_TS.jsonl.gz, truncated" >> "$LOG_FILE" 2>/dev/null || true
+      # Retain only the newest $HISTORY_ARCHIVE_KEEP archives (delete older).
+      ls -1t "$HJ_ARCHIVE_DIR"/history-*.jsonl.gz 2>/dev/null | tail -n +$((HISTORY_ARCHIVE_KEEP + 1)) | while IFS= read -r old; do
+        rm -f "$old" 2>/dev/null || true
+      done
+    fi
+  fi
+fi
+
 exit 0
