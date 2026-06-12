@@ -269,7 +269,7 @@ score_mem() {
 # ── Settings + agents (15%) — ported verbatim from super-health/SKILL.md §1d ──
 score_settings() {
   local SCORE=0
-  jq . "$CLAUDE/settings.json" > /dev/null 2>&1 && SCORE=$((SCORE + 25))
+  jq . "$CLAUDE/settings.json" > /dev/null 2>&1 && SCORE=$((SCORE + 15))
 
   local TOTAL=0 VALID=0 a FM
   for a in "$CLAUDE"/agents/*.md; do
@@ -280,7 +280,7 @@ score_settings() {
       VALID=$((VALID + 1))
     fi
   done
-  [ "$TOTAL" -gt 0 ] && SCORE=$((SCORE + VALID * 25 / TOTAL))
+  [ "$TOTAL" -gt 0 ] && SCORE=$((SCORE + VALID * 20 / TOTAL))
 
   local MODELS_OK=0 MODELS_TOTAL=0 MODEL
   for a in "$CLAUDE"/agents/*.md; do
@@ -290,7 +290,25 @@ score_settings() {
     MODELS_TOTAL=$((MODELS_TOTAL + 1))
     case "$MODEL" in opus|sonnet|haiku|"opus[1m]"|"sonnet[1m]"|"haiku[1m]") MODELS_OK=$((MODELS_OK + 1)) ;; esac
   done
-  [ "$MODELS_TOTAL" -gt 0 ] && SCORE=$((SCORE + MODELS_OK * 15 / MODELS_TOTAL))
+  [ "$MODELS_TOTAL" -gt 0 ] && SCORE=$((SCORE + MODELS_OK * 10 / MODELS_TOTAL))
+
+  # Security posture (F0 lesson: sandbox/secrets gains were scorer-invisible).
+  # Sandbox must not be disabled in either settings file (absent key = enabled).
+  local SANDBOX_OK=1 sf
+  for sf in "$CLAUDE/settings.json" "$CLAUDE/settings.local.json"; do
+    [ -f "$sf" ] || continue
+    [ "$(jq -r '.sandbox.enabled' "$sf" 2>/dev/null)" = "false" ] && SANDBOX_OK=0
+  done
+  [ "$SANDBOX_OK" -eq 1 ] && SCORE=$((SCORE + 10))
+
+  # Secrets files must not be group/world-accessible (mode & 077 == 0).
+  local LAX_SECRETS=0 sfile smode
+  for sfile in "$HOME/.claude.json" "$CLAUDE/.credentials.json" "$CLAUDE/scripts/telegram-surface/.env"; do
+    [ -f "$sfile" ] || continue
+    smode=$(stat -c '%a' "$sfile" 2>/dev/null) || continue
+    [ $(( 8#$smode & 8#077 )) -ne 0 ] && LAX_SECRETS=$((LAX_SECRETS + 1))
+  done
+  [ "$LAX_SECRETS" -eq 0 ] && SCORE=$((SCORE + 10))
 
   local DENY
   DENY=$(jq '.permissions.deny | length' "$CLAUDE/settings.json" 2>/dev/null || echo 0)
@@ -309,7 +327,7 @@ score_settings() {
   BROKEN=$(find "$CLAUDE/agents/" -maxdepth 1 -type l ! -exec test -e {} \; -print 2>/dev/null | wc -l)
   [ "$BROKEN" -eq 0 ] && SCORE=$((SCORE + 10))
 
-  echo "Settings+Agents detail: jsonOK, frontmatter=$VALID/$TOTAL, models=$MODELS_OK/$MODELS_TOTAL, deny=$DENY, orphans=$ORPHANS, brokenSymlinks=$BROKEN"
+  echo "Settings+Agents detail: jsonOK, frontmatter=$VALID/$TOTAL, models=$MODELS_OK/$MODELS_TOTAL, deny=$DENY, orphans=$ORPHANS, brokenSymlinks=$BROKEN, sandboxOK=$SANDBOX_OK, laxSecrets=$LAX_SECRETS"
   echo "SCORE: $SCORE/100"
 }
 
