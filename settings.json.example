@@ -54,7 +54,13 @@
       "Bash(git commit*)",
       "Bash(git reset --hard*)",
       "Bash(rm -rf /)",
-      "Bash(rm -rf ~/*)"
+      "Bash(rm -rf ~/*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/)",
+      "Bash(rm -fr ~)",
+      "Bash(rm -fr ~/)",
+      "Bash(find ~ -delete)",
+      "Bash(git push*)"
     ],
     "defaultMode": "default"
   },
