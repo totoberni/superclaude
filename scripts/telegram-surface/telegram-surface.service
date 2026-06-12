@@ -1,0 +1,35 @@
+# Superclaude Telegram factory surface — systemd USER unit (verified functional on this WSL:
+# `systemctl --user is-system-running` = running, 2026-06-12).
+# NOT installed/enabled until HG-F3 clears. Install (column-0 commands):
+#   mkdir -p ~/.config/systemd/user
+#   cp ~/.claude/scripts/telegram-surface/telegram-surface.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now telegram-surface
+# Rollback:
+#   systemctl --user disable --now telegram-surface
+#   rm ~/.config/systemd/user/telegram-surface.service && systemctl --user daemon-reload
+
+[Unit]
+Description=Superclaude Telegram factory surface (read-only monitoring bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.claude/.venv/bin/python %h/.claude/scripts/telegram-surface/bot.py
+WorkingDirectory=%h/.claude/scripts/telegram-surface
+# Secrets come from the mode-600 .env (bot.py also self-loads + perm-checks it).
+EnvironmentFile=-%h/.claude/scripts/telegram-surface/.env
+Restart=on-failure
+RestartSec=10
+# Fail-closed startup exits (missing token/allowlist) must NOT be restart-looped:
+RestartPreventExitStatus=1
+NoNewPrivileges=true
+# Optional extra hardening — enable only after verifying user-namespace support on this WSL
+# (if unsupported, the unit fails with namespace errors):
+#ProtectSystem=strict
+#ReadOnlyPaths=%h/.claude
+#PrivateTmp=true
+
+[Install]
+WantedBy=default.target

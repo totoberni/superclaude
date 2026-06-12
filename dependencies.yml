@@ -1,20 +1,22 @@
 schema: 1
-updated: "2026-06-03"
+updated: "2026-06-12"
 
 python:   # pip; pinned; --export → requirements-format / --pip-install → venv; currency via PyPI JSON API
-  - {name: fastembed,   version: "0.8.0",    via: superclaude-v3, reason: "ONNX embeddings (bge-small, ~130 MB) for semantic memory"}
-  - {name: sqlite-vec,  version: "0.1.9",    via: superclaude-v3, reason: "SQLite loadable vector-search extension"}
-  - {name: nbclient,    version: "0.10.4",   via: superclaude-v3, reason: "per-cell execution hooks for notebook runtime monitor"}
-  - {name: nbformat,    version: "5.10.4",   via: superclaude-v3, reason: "notebook (.ipynb) loading + schema validation"}
-  - {name: ipykernel,   version: "7.2.0",    via: superclaude-v3, reason: "kernel for nb-monitor self-test + python3-default notebooks"}
-  - {name: Pillow,      version: "12.2.0",   via: superclaude-v3, reason: "image loading + pixel analysis (WCAG contrast ratio)"}
-  - {name: numpy,       version: "2.4.6",    via: superclaude-v3, reason: "luminance / contrast math for figure validator"}
-  - {name: matplotlib,  version: "3.10.9",   via: superclaude-v3, reason: "generates sample figures for figure-validate self-test"}
-  - {name: PyMuPDF,     version: "1.27.2.3", via: superclaude-v3, reason: "OPTIONAL: figure-validate PDF mode (raster page 1)"}
-  - {name: PyYAML,      version: "6.0.3",    via: superclaude-v3, reason: "passport.yaml claim-provenance map + deps manifest parser"}
+  - {name: fastembed, version: 0.8.0, via: superclaude-v3, reason: 'ONNX embeddings (bge-small, ~130 MB) for semantic memory'}
+  - {name: sqlite-vec, version: 0.1.9, via: superclaude-v3, reason: SQLite loadable vector-search extension}
+  - {name: nbclient, version: 0.10.4, via: superclaude-v3, reason: per-cell execution hooks for notebook runtime monitor}
+  - {name: nbformat, version: 5.10.4, via: superclaude-v3, reason: notebook (.ipynb) loading + schema validation}
+  - {name: ipykernel, version: 7.2.0, via: superclaude-v3, reason: kernel for nb-monitor self-test + python3-default notebooks}
+  - {name: Pillow, version: 12.2.0, via: superclaude-v3, reason: image loading + pixel analysis (WCAG contrast ratio)}
+  - {name: numpy, version: 2.4.6, via: superclaude-v3, reason: luminance / contrast math for figure validator}
+  - {name: matplotlib, version: 3.10.9, via: superclaude-v3, reason: generates sample figures for figure-validate self-test}
+  - {name: PyMuPDF, version: 1.27.2.3, via: superclaude-v3, reason: 'OPTIONAL: figure-validate PDF mode (raster page 1)'}
+  - {name: PyYAML, version: 6.0.3, via: superclaude-v3, reason: passport.yaml claim-provenance map + deps manifest parser}
+  - {name: aiogram, version: 3.28.2, via: superclaude-v4, reason: 'Telegram factory surface v0 bot framework (F3, DIR-001)'}
 
-npm:      # node; currency via registry.npmjs.org (external — not sandbox-allowlisted)
-  - {name: ccusage, scope: ryoppippi, install: npx-latest, version: "latest", via: "telemetry stopgap", reason: "cost cross-check reference"}
+npm:   # node; currency via registry.npmjs.org (external — not sandbox-allowlisted)
+  - {name: ccusage, scope: ryoppippi, install: npx-latest, version: latest, via: telemetry stopgap, reason: cost cross-check reference}
 
 docker:   # compose; currency via registry digest (external — checked via docker manifest inspect)
-  - {name: crawl4ai, image: "unclecode/crawl4ai", tag: "latest", digest: null, compose: "services/crawl4ai/docker-compose.yml", endpoint: "127.0.0.1:11235", via: better-super, reason: "URL->markdown crawl (Apache-2.0)"}
+  - {name: crawl4ai, image: unclecode/crawl4ai, tag: latest, digest: null, compose: services/crawl4ai/docker-compose.yml, endpoint: '127.0.0.1:11235', via: better-super, reason: URL->markdown crawl (Apache-2.0)}
+

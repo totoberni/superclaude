@@ -123,3 +123,6 @@ comms/_*.log
 settings.json.bak*
 # settings.local.json backups (local override may carry machine-specific config — never publish)
 settings.local.json.bak*
+
+# === Telegram factory surface secrets (superclaude-v4 F3) — PUBLIC repo, never commit ===
+scripts/telegram-surface/.env
