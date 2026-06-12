@@ -1,0 +1,145 @@
+# Firecrawl self-hosted stack — reconstructed compose SOT (DIR-002 T2, 2026-06-13).
+#
+# Reconstructed from `docker inspect` of the live containers after the original
+# compose checkout (~/projects/workspace/firecrawl/docker-compose.yaml) was deleted.
+# `name: firecrawl` adopts the existing compose project, so targeted recreation
+# works: `docker compose --env-file .env up -d --no-deps api`.
+#
+# Images firecrawl-api / firecrawl-playwright-service / firecrawl-nuq-postgres
+# are LOCAL BUILDS (no registry, no build context here) — rebuilding them
+# requires re-cloning upstream mendableai/firecrawl. redis/rabbitmq are pulls.
+#
+# Secrets: POSTGRES_PASSWORD comes from ./.env (gitignored, mode 600).
+# Commit .env.example only — this repo is PUBLIC.
+#
+# Volume caveat: the LIVE rabbitmq + nuq-postgres containers use ANONYMOUS
+# volumes. The named volumes below apply only to future recreations of those
+# two services (fresh data unless you migrate the anonymous volumes first).
+# Recreating `api` / `playwright-service` / `redis` is stateless and safe.
+
+name: firecrawl
+
+services:
+  api:
+    image: firecrawl-api
+    command: ["node", "dist/src/harness.js", "--start-docker"]
+    ports:
+      - "127.0.0.1:3002:3002" # loopback-only (was 0.0.0.0 — DIR-002 T2 rebind)
+    environment:
+      HOST: "0.0.0.0" # in-container bind; host exposure is governed by `ports`
+      PORT: "3002"
+      WORKER_PORT: "3005"
+      EXTRACT_WORKER_PORT: "3004"
+      ENV: local
+      USE_DB_AUTHENTICATION: "false"
+      NUM_WORKERS_PER_QUEUE: "8"
+      BROWSER_POOL_SIZE: "5"
+      MAX_CONCURRENT_JOBS: "5"
+      CRAWL_CONCURRENT_REQUESTS: "10"
+      PLAYWRIGHT_MICROSERVICE_URL: http://playwright-service:3000/scrape
+      REDIS_URL: redis://redis:6379
+      REDIS_RATE_LIMIT_URL: redis://redis:6379
+      NUQ_RABBITMQ_URL: amqp://rabbitmq:5672
+      POSTGRES_HOST: nuq-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+      LOGGING_LEVEL: ""
+      # Unused in this deployment (USE_DB_AUTHENTICATION=false, no LLM extract)
+      # but kept empty-set to mirror the original container env exactly:
+      OPENAI_API_KEY: ""
+      OPENAI_BASE_URL: ""
+      MODEL_NAME: ""
+      MODEL_EMBEDDING_NAME: ""
+      OLLAMA_BASE_URL: ""
+      TEST_API_KEY: ""
+      BULL_AUTH_KEY: ""
+      AUTUMN_SECRET_KEY: ""
+      SUPABASE_URL: ""
+      SUPABASE_ANON_TOKEN: ""
+      SUPABASE_SERVICE_TOKEN: ""
+      PROXY_SERVER: ""
+      PROXY_USERNAME: ""
+      PROXY_PASSWORD: ""
+      SEARXNG_ENDPOINT: ""
+      SEARXNG_ENGINES: ""
+      SEARXNG_CATEGORIES: ""
+      SELF_HOSTED_WEBHOOK_URL: ""
+      SLACK_WEBHOOK_URL: ""
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    depends_on:
+      playwright-service:
+        condition: service_started
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  playwright-service:
+    image: firecrawl-playwright-service
+    environment:
+      PORT: "3000"
+      MAX_CONCURRENT_PAGES: "10"
+      PROXY_SERVER: ""
+      PROXY_USERNAME: ""
+      PROXY_PASSWORD: ""
+      BLOCK_MEDIA: ""
+      ALLOW_LOCAL_WEBHOOKS: ""
+    networks:
+      - backend
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    command: ["redis-server", "--bind", "0.0.0.0"] # container-net only; no host ports
+    networks:
+      - backend
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - backend
+    restart: unless-stopped
+
+  nuq-postgres:
+    image: firecrawl-nuq-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    restart: unless-stopped
+
+# external: the live network predates this file (different config-hash);
+# compose must attach, never manage it — a compose-managed `backend` triggers
+# network recreation, which fails/destabilizes while other services are attached
+# (observed 2026-06-13). From-scratch bootstrap: docker network create firecrawl_backend
+networks:
+  backend:
+    name: firecrawl_backend
+    external: true
+
+volumes:
+  rabbitmq-data:
+  postgres-data:

@@ -7,30 +7,44 @@ Serves the `firecrawl` MCP server (registered in `~/.claude.json` project scope 
 
 | Container | Image | Role |
 |---|---|---|
-| firecrawl-api-1 | firecrawl-api (local build) | API on **0.0.0.0:3002** |
+| firecrawl-api-1 | firecrawl-api (local build) | API on **127.0.0.1:3002** (loopback-only) |
 | firecrawl-redis-1 | redis:alpine | queue/cache |
 | firecrawl-rabbitmq-1 | rabbitmq:3-management | job queue |
 | firecrawl-nuq-postgres-1 | firecrawl-nuq-postgres (local build) | job store |
 | firecrawl-playwright-service-1 | firecrawl-playwright-service (local build) | rendering |
 
-## ⚠ Compose source is GONE
+## Compose SOT: `docker-compose.yml` (this directory)
 
-The original compose project lived at `~/projects/workspace/firecrawl/docker-compose.yaml` — that
-checkout was deleted (containers' compose labels still point there). The stack survives as
-**docker-managed containers + locally built images only**. No bind mounts (named volumes only:
-rabbitmq + postgres data), so restarts are safe without the source tree.
+The original compose checkout (`~/projects/workspace/firecrawl/docker-compose.yaml`) was deleted;
+`docker-compose.yml` here is the **reconstructed SOT** (from `docker inspect`, DIR-002 T2,
+2026-06-13), validated by recreating the api container with it. The old "never compose-down"
+warning relaxes to: **recreate via this compose file**. Caveats:
 
-**Do NOT `docker compose down`** this stack — without the compose file + build contexts,
-recreating containers requires re-cloning upstream firecrawl and rebuilding (~3.8GB of images).
+- **Local-build images**: `firecrawl-api` / `firecrawl-playwright-service` /
+  `firecrawl-nuq-postgres` exist only in the local image store. If they are ever lost,
+  rebuild requires re-cloning upstream firecrawl (~3.8GB).
+- **Network is external**: `firecrawl_backend` predates this file — compose attaches, never
+  manages it. From-scratch bootstrap: `docker network create firecrawl_backend` first.
+- **Anonymous-volume data**: the LIVE rabbitmq + nuq-postgres containers store data in
+  anonymous volumes. Recreating those two services starts with fresh named volumes
+  (`firecrawl_rabbitmq-data` / `firecrawl_postgres-data`) unless data is migrated first.
+  api / playwright-service / redis are stateless — recreate freely.
+- **Secrets**: `cp .env.example .env && chmod 600 .env`, fill `POSTGRES_PASSWORD`.
+  `.env` is gitignored (`**/.env`) — this repo is PUBLIC, never commit it.
 
 ## Operations
 
 ```bash
+cd ~/.claude/services/firecrawl
+
 # Status
 sg docker -c "docker ps -a --filter name=firecrawl"
 
-# Start (dependency order; api last)
-sg docker -c "docker start firecrawl-redis-1 firecrawl-rabbitmq-1 firecrawl-nuq-postgres-1 firecrawl-playwright-service-1 && sleep 5 && docker start firecrawl-api-1"
+# Recreate/update ONE service (never drop --no-deps without reading the caveats above)
+sg docker -c "docker compose --env-file .env up -d --no-deps api"
+
+# Start the whole stack after a host reboot (restart=unless-stopped usually handles it)
+sg docker -c "docker compose --env-file .env up -d"
 
 # Verify (loopback is sandbox-blocked — run unsandboxed)
 curl -s http://127.0.0.1:3002/                       # -> {"message":"Firecrawl API",...}
@@ -45,12 +59,13 @@ curl -s -X POST http://127.0.0.1:3002/v1/scrape -H 'Content-Type: application/js
   ECONNREFUSED on 127.0.0.1:3002 (observed 2026-06-12).
 - **2026-06-12**: stack restarted (scaf DIR-001 T1); end-to-end scrape verified; restart policy
   set to `unless-stopped` on all 5 via `docker update` (survives daemon/host restarts now).
+- **2026-06-13** (DIR-002 T2): api rebound `0.0.0.0:3002` → `127.0.0.1:3002` via reconstructed
+  compose (`up -d --no-deps api`). First attempt failed: compose tried to recreate the live
+  `firecrawl_backend` network (config-hash mismatch) — fixed by declaring it `external`.
+  All gates passed post-swap (binding, /v1/scrape 200, crawl health, MCP).
 
 ## Known gaps
 
-- **Port binding**: api binds `0.0.0.0:3002` (LAN-exposed; WSL2 NAT limits practical exposure to
-  the Windows host). crawl4ai by contrast binds `127.0.0.1` only. Fixing requires container
-  recreation (compose source gone) — accepted risk, revisit if the stack is ever rebuilt.
-- **No healthcheck** on the api container (compose source gone; `docker update` can't add one).
-- Long-term: if firecrawl remains load-bearing, re-clone upstream pinned, rebuild under
-  `~/.claude/services/firecrawl/` with localhost-only binding + healthchecks + compose SOT.
+- **No healthcheck** on the api container (upstream image defines none; could be added to the
+  compose service on a future recreation).
+- **crawl4ai** (sibling service, `127.0.0.1:11235`) is docker-run managed, not in this compose.

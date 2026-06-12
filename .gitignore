@@ -124,5 +124,7 @@ settings.json.bak*
 # settings.local.json backups (local override may carry machine-specific config — never publish)
 settings.local.json.bak*
 
-# === Telegram factory surface secrets (superclaude-v4 F3) — PUBLIC repo, never commit ===
-scripts/telegram-surface/.env
+# === Secrets env files — PUBLIC repo, never commit (.env.example stubs ARE committable) ===
+# Generalizes the original scripts/telegram-surface/.env rule (superclaude-v4 F3);
+# also covers services/firecrawl/.env (DIR-002 T2) and any future service .env.
+**/.env
