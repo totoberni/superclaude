@@ -35,7 +35,7 @@ See `~/.claude/rules/12-agent-hierarchy.md` for the full ownership table. Summar
 **Time**: YYYY-MM-DD HH:MM
 **Project**: ...
 **Repo**: [absolute path]
-**Plan**: [absolute path to plan.md]
+**Plan**: [absolute path to plan.md]  <!-- agents read plan.md (SOT); humans open plan.html (rendered view) in the same dir -->
 **State**: [absolute path to state.md]
 **Phase/Tasks**: ...
 **Instruction**: ...
@@ -114,3 +114,22 @@ Two comms stores coexist:
 - `--demo` — embedded Mermaid/Vega/TikZ sample.
 
 Terminal comms stay MD; HTML is for completion reports + browser review.
+
+## Bus Identity + Flat-File Parity (ESC-002 (a+))
+
+**Bus identity = `(from_agent, to_agent, kind, seq)`**, enforced at the DB level by the partial
+UNIQUE index `idx_messages_identity` (`WHERE seq IS NOT NULL`) plus `INSERT OR IGNORE` at both
+writers (`hcom-broker.py send` and `hcom_backfill.py`). NULL-seq kinds (NUDGE/EVENT) are
+unconstrained by design. Semantics:
+
+- **Flat file = full-body SOT.** The MD entry in `comms/<agent>/` is the authoritative full text.
+- **Condensed direct-send = blessed pattern.** Agents may `send` a condensed body for real-time
+  routing; the identity constraint guarantees a later backfill can never duplicate it.
+- **Backfill = gap-filler.** `hcom-backfill.sh` only inserts identities missing from the bus;
+  existing ones count as `skipped_existing`.
+- **Divergence = reported, tolerated.** When a skipped entry's `md5(body)` differs from the bus
+  row's, it is flagged `divergent_body` (count + per-entry line, in both dry-run and apply) —
+  surfaced, never silently absorbed. Re-sends of an existing identity are no-ops (exit 0 +
+  `already-on-bus` notice).
+- **`backfill_audit` = pure log** of backfill-applied rows. It is NOT a dedup oracle — the bus
+  itself is (the schema constraint binds every writer, present and future).

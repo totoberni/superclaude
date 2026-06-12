@@ -93,6 +93,13 @@ CREATE INDEX idx_messages_kind_seq ON messages(kind, seq);
 CREATE INDEX idx_messages_kind_unread ON messages(kind, read_at)
   WHERE read_at IS NULL;
 
+-- Bus identity (ESC-002 (a+), 2026-06-13): one row per (from, to, kind, seq).
+-- Both writers use INSERT OR IGNORE; NULL-seq kinds (NUDGE/EVENT) unconstrained.
+-- Parity semantics: comms/README.md § Bus Identity + Flat-File Parity.
+CREATE UNIQUE INDEX idx_messages_identity
+  ON messages(from_agent, to_agent, kind, seq)
+  WHERE seq IS NOT NULL;
+
 -- Live agent registry. One row per known agent.
 CREATE TABLE agent_status (
   agent           TEXT    PRIMARY KEY,    -- "orch-example"

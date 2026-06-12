@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # hcom-backfill.sh — backfill historical comms into HCOM SQLite broker.
-# Idempotent (audit table prevents duplicates). Default = dry-run.
+# Idempotent: bus identity (from,to,kind,seq) is DB-enforced (idx_messages_identity,
+# ESC-002 (a+)); backfill_audit is a pure log, not the dedup oracle. Default = dry-run.
 #
 # Usage:
 #   hcom-backfill.sh                          # dry-run, active orchs only

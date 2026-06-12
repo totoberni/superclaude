@@ -55,17 +55,23 @@ class Broker:
         body: str,
         seq: Optional[int] = None,
         from_agent: Optional[str] = None,
-    ) -> int:
-        """Insert a message. Returns the new message id."""
+    ) -> Optional[int]:
+        """Insert a message. Returns the new message id.
+
+        Bus identity (from_agent, to_agent, kind, seq) is UNIQUE for seq IS
+        NOT NULL (idx_messages_identity, ESC-002 (a+)). A re-send of an
+        existing identity is a no-op: returns None (idempotent — protects
+        against double-dispatch). NULL-seq kinds (NUDGE/EVENT) always insert.
+        """
         from_agent = from_agent or os.environ.get("CLAUDE_AGENT_NAME", "unknown")
         ts = int(time.time())
         with self._conn() as c:
             cur = c.execute(
-                "INSERT INTO messages (ts, from_agent, to_agent, kind, seq, body) "
+                "INSERT OR IGNORE INTO messages (ts, from_agent, to_agent, kind, seq, body) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (ts, from_agent, to_agent, kind, seq, body),
             )
-            return cur.lastrowid
+            return cur.lastrowid if cur.rowcount > 0 else None
 
     def recv(
         self,
@@ -195,6 +201,7 @@ class Broker:
 def _cli():
     import argparse
     p = argparse.ArgumentParser(description="HCOM broker CLI")
+    p.add_argument("--db", default=DB_PATH, help="broker DB path (tests use a sacrificial copy)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("send")
@@ -213,10 +220,16 @@ def _cli():
     sub.add_parser("status")
 
     a = p.parse_args()
-    b = Broker()
+    b = Broker(a.db)
 
     if a.cmd == "send":
         mid = b.send(a.to, a.kind, a.body, seq=a.seq, from_agent=a.from_agent)
+        if mid is None:
+            print(
+                f"already-on-bus ({a.from_agent or os.environ.get('CLAUDE_AGENT_NAME', 'unknown')},"
+                f"{a.to},{a.kind},{a.seq}) — no-op",
+                file=sys.stderr,
+            )
         print(json.dumps({"id": mid}))
     elif a.cmd == "recv":
         msgs = b.recv(a.self_agent, kinds=a.kinds, unread_only=a.unread_only, limit=a.limit)

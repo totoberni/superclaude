@@ -2,6 +2,18 @@
 # hcom_backfill.py — parse one comms Markdown file and idempotently backfill
 # the HCOM SQLite broker.  Invoked by hcom-backfill.sh; also importable.
 #
+# Dedup oracle = the bus itself (ESC-002 decision (a+)): bus identity is
+# (from_agent, to_agent, kind, seq), enforced by the partial UNIQUE index
+# idx_messages_identity (WHERE seq IS NOT NULL). Inserts are INSERT OR
+# IGNORE; an ignored row means the identity is already on the bus (e.g. a
+# condensed direct-send) and counts as skipped_existing. When skipped AND
+# md5(body) differs from the bus row's, the entry is flagged divergent_body
+# — surfaced, never silently absorbed. Divergence is expected and tolerated:
+# the flat file remains the full-body SOT.
+#
+# backfill_audit is a pure log of backfill-applied rows; it is NOT consulted
+# for dedup (the old ikey-oracle never saw direct-sends — see ESC-002).
+#
 # argv: <file_path> <orch> <kind> <from_agent> <to_agent> <db_path> <mode>
 #   mode: "apply" | "dry-run"
 
@@ -14,11 +26,15 @@ import time
 from datetime import datetime
 
 
+def _body_md5(body):
+    return hashlib.md5(body.encode('utf-8', 'replace')).hexdigest()
+
+
 def process_file(file_path, orch, kind, from_agent, to_agent, db_path, mode):
     """Parse *file_path* for entries of *kind* (DIR/RPT/ESC) and backfill.
 
-    Returns a tuple (inserted, skipped, would, total_matches).
-    Prints a one-line summary to stdout.
+    Returns a tuple (applied, skipped_existing, divergent, would, total_matches).
+    Prints a one-line summary (plus one line per divergent body) to stdout.
     """
     with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
         content = f.read()
@@ -33,8 +49,9 @@ def process_file(file_path, orch, kind, from_agent, to_agent, db_path, mode):
     conn = sqlite3.connect(db_path, timeout=10.0)
     cur = conn.cursor()
 
-    inserted = 0
-    skipped = 0
+    applied = 0
+    skipped_existing = 0
+    divergent = 0
     would = 0
 
     for i, m in enumerate(matches):
@@ -82,39 +99,68 @@ def process_file(file_path, orch, kind, from_agent, to_agent, db_path, mode):
         if ts is None:
             ts = int(os.path.getmtime(file_path))
 
-        # Idempotency key
-        body_hash = hashlib.md5(body[:200].encode('utf-8')).hexdigest()
-        ikey = f"{orch}|{kind}|{seq}|{body_hash}"
+        flat_md5 = _body_md5(body)
 
-        existing = cur.execute(
-            "SELECT 1 FROM backfill_audit WHERE ikey=?", (ikey,)
-        ).fetchone()
-        if existing:
-            skipped += 1
-            continue
+        def _bus_row():
+            """Existing bus row for this identity (None if seq is NULL-scoped)."""
+            if seq is None:
+                return None
+            return cur.execute(
+                "SELECT id, body FROM messages"
+                " WHERE from_agent=? AND to_agent=? AND kind=? AND seq=?",
+                (from_agent, to_agent, kind, seq),
+            ).fetchone()
+
+        def _report_divergence(row):
+            bus_md5 = _body_md5(row[1])
+            if bus_md5 != flat_md5:
+                print(
+                    f"    DIVERGENT-BODY {header}: bus id={row[0]}"
+                    f" bus_md5={bus_md5} bus_len={len(row[1])}"
+                    f" flat_md5={flat_md5} flat_len={len(body)}"
+                    f" (flat file is the full-body SOT)"
+                )
+                return 1
+            return 0
 
         if mode == "apply":
             cur.execute(
-                "INSERT INTO messages (ts, from_agent, to_agent, kind, seq, body)"
+                "INSERT OR IGNORE INTO messages"
+                " (ts, from_agent, to_agent, kind, seq, body)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
                 (ts, from_agent, to_agent, kind, seq, body),
             )
-            cur.execute(
-                "INSERT INTO backfill_audit (ikey, inserted_at) VALUES (?, ?)",
-                (ikey, int(time.time())),
-            )
-            inserted += 1
-        else:
-            would += 1
+            if cur.rowcount == 0:
+                skipped_existing += 1
+                row = _bus_row()
+                if row is not None:
+                    divergent += _report_divergence(row)
+            else:
+                # backfill_audit: pure log of backfill-applied rows only
+                ikey = f"{orch}|{kind}|{seq}|{hashlib.md5(body[:200].encode('utf-8')).hexdigest()}"
+                cur.execute(
+                    "INSERT OR IGNORE INTO backfill_audit (ikey, inserted_at)"
+                    " VALUES (?, ?)",
+                    (ikey, int(time.time())),
+                )
+                applied += 1
+        else:  # dry-run: advisory existence check against the bus
+            row = _bus_row()
+            if row is not None:
+                skipped_existing += 1
+                divergent += _report_divergence(row)
+            else:
+                would += 1
 
     conn.commit()
     conn.close()
     print(
         f"  {os.path.basename(file_path)}: kind={kind}"
-        f" entries={len(matches)} inserted={inserted}"
-        f" skipped={skipped} would={would}"
+        f" entries={len(matches)} applied={applied}"
+        f" skipped_existing={skipped_existing}"
+        f" divergent_body={divergent} would_apply={would}"
     )
-    return inserted, skipped, would, len(matches)
+    return applied, skipped_existing, divergent, would, len(matches)
 
 
 if __name__ == "__main__":
