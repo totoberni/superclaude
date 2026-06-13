@@ -13,6 +13,13 @@ broker. Covers:
   (vi)  concurrency smoke: send during an open writer transaction ->
         clean serialization, no corruption
 
+DIR-003 alias-normalization cases:
+  (vii)  @-spelled vs bare collision under the index -> alias migration
+         coalesces to one bare row (keeps lowest id, read_at coalesced)
+  (viii) alias normalization idempotent -> second run changes 0 rows
+  (ix)   dual-match recv -> a bare-addressed recv still sees a legacy
+         @-spelled row; broker send normalizes @ to bare on write
+
 Usage: python3 test-broker-identity.py
 Exit 0 = all pass.
 """
@@ -29,6 +36,7 @@ import time
 SCRIPTS = os.path.expanduser("~/.claude/scripts")
 LIVE_DB = os.path.expanduser("~/.claude/comms/.broker.db")
 MIGRATION = os.path.join(SCRIPTS, "migrations", "2026-06-13-broker-identity.py")
+MIGRATION_ALIAS = os.path.join(SCRIPTS, "migrations", "2026-06-13-alias-normalization.py")
 BROKER_PY = os.path.join(SCRIPTS, "hcom-broker.py")
 
 sys.path.insert(0, SCRIPTS)
@@ -181,6 +189,74 @@ def main():
     check("send serialized cleanly (waited for lock)", mid is not None, f"waited {waited:.1f}s")
     check("both rows landed", n == 2, f"got {n}")
     check("integrity ok", ok == "ok", ok)
+
+    # --- (vii) @-spelled vs bare collision under the index ---
+    print("(vii) alias migration coalesces @-vs-bare collision")
+    db = os.path.join(tmp, "t7.db")
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, ts INTEGER, from_agent TEXT,"
+              " to_agent TEXT, kind TEXT, seq INTEGER, body TEXT, read_at INTEGER)")
+    c.execute("CREATE TABLE agent_status (agent TEXT PRIMARY KEY, pid INTEGER,"
+              " started_at INTEGER NOT NULL, last_active_at INTEGER NOT NULL,"
+              " state TEXT NOT NULL DEFAULT 'IDLE')")
+    c.execute("CREATE TABLE file_locks (path TEXT PRIMARY KEY, locked_by TEXT NOT NULL,"
+              " acquired_at INTEGER NOT NULL, ttl_sec INTEGER NOT NULL DEFAULT 30)")
+    c.executemany(
+        "INSERT INTO messages (id, ts, from_agent, to_agent, kind, seq, body, read_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        [
+            (1, 10, "meta", "o-x-1", "DIR", 1, "bare keeper, unread", None),
+            (2, 11, "meta", "@o-x-1", "DIR", 1, "at-spelled dup, read", 999),
+            (3, 12, "meta", "@o-y-2", "DIR", 1, "lone at-spelled, no bare twin", None),
+            (4, 13, "@o-z-3", "meta", "RPT", 1, "at-spelled from_agent", None),
+        ],
+    )
+    c.execute("CREATE UNIQUE INDEX idx_messages_identity ON messages"
+              " (from_agent, to_agent, kind, seq) WHERE seq IS NOT NULL")
+    c.execute("INSERT INTO agent_status VALUES ('o-x-1', 100, 5, 50, 'IDLE')")
+    c.execute("INSERT INTO agent_status VALUES ('@o-x-1', 101, 3, 80, 'WORKING')")
+    c.execute("INSERT INTO file_locks VALUES ('/p', '@o-x-1', 10, 30)")
+    c.commit(); c.close()
+    mig = subprocess.run([sys.executable, MIGRATION_ALIAS, db], capture_output=True, text=True)
+    c = sqlite3.connect(db)
+    rows = c.execute("SELECT id, from_agent, to_agent, read_at FROM messages ORDER BY id").fetchall()
+    at_left = c.execute("SELECT COUNT(*) FROM messages WHERE from_agent LIKE '@%' OR to_agent LIKE '@%'").fetchone()[0]
+    st = dict(c.execute("SELECT agent, last_active_at FROM agent_status").fetchall())
+    lock = c.execute("SELECT locked_by FROM file_locks").fetchone()[0]
+    c.close()
+    check("alias migration exits 0", mig.returncode == 0, f"rc={mig.returncode} {mig.stderr.strip()}")
+    check("@-vs-bare collision coalesced to lowest id", [r[0] for r in rows] == [1, 3, 4], str(rows))
+    check("survivor read_at coalesced to MAX(999)", rows[0][3] == 999, str(rows[0]))
+    check("all message rows now bare", at_left == 0, f"{at_left} @-rows left")
+    check("lone @-row normalized to bare", rows[1][2] == "o-y-2", str(rows[1]))
+    check("@from_agent normalized to bare", rows[2][1] == "o-z-3", str(rows[2]))
+    check("agent_status merged to one bare row", set(st) == {"o-x-1"}, str(st))
+    check("agent_status keeps most-recent activity", st.get("o-x-1") == 80, str(st))
+    check("file_locks.locked_by normalized", lock == "o-x-1", lock)
+
+    # --- (viii) alias normalization idempotent ---
+    print("(viii) alias normalization idempotent")
+    mig2 = subprocess.run([sys.executable, MIGRATION_ALIAS, db], capture_output=True, text=True)
+    check("re-run exits 0", mig2.returncode == 0, f"rc={mig2.returncode}")
+    check("re-run normalizes 0", "normalized 0" in mig2.stdout, mig2.stdout.strip().splitlines()[-1])
+
+    # --- (ix) dual-match recv + send normalization ---
+    print("(ix) dual-match recv sees legacy @-row; send normalizes @")
+    db = fresh_copy(tmp, "t9")
+    raw = sqlite3.connect(db)
+    raw.execute("INSERT INTO messages (ts, from_agent, to_agent, kind, seq, body)"
+                " VALUES (1, 'meta', '@legacy-orch', 'DIR', 9001, 'legacy at-spelled DIR')")
+    raw.commit(); raw.close()
+    b = hcom_broker.Broker(db)
+    got = b.recv("legacy-orch", kinds=["DIR"], mark_read=False)
+    check("bare recv matches legacy @-row", any(m["seq"] == 9001 for m in got),
+          f"{[m['seq'] for m in got]}")
+    # a send to '@x' lands as bare 'x' and is found by a bare recv
+    b.send("@target-orch", "NUDGE", "ping", seq=None, from_agent="@meta")
+    raw = sqlite3.connect(db)
+    sent = raw.execute("SELECT from_agent, to_agent FROM messages WHERE body='ping'").fetchone()
+    raw.close()
+    check("send normalizes @to and @from to bare", sent == ("meta", "target-orch"), str(sent))
 
     shutil.rmtree(tmp, ignore_errors=True)
     failed = [r for r in RESULTS if not r[1]]

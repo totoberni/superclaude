@@ -30,12 +30,23 @@ def _body_md5(body):
     return hashlib.md5(body.encode('utf-8', 'replace')).hexdigest()
 
 
+def _bare(name):
+    """Bare agent names are canonical on the bus (DIR-003, owner-ratified)."""
+    return name[1:] if name and name.startswith('@') and len(name) > 1 else name
+
+
 def process_file(file_path, orch, kind, from_agent, to_agent, db_path, mode):
     """Parse *file_path* for entries of *kind* (DIR/RPT/ESC) and backfill.
+
+    Agent names are normalized to bare spelling before insert/lookup, so the
+    derived identity always matches direct-sends (which also emit bare).
 
     Returns a tuple (applied, skipped_existing, divergent, would, total_matches).
     Prints a one-line summary (plus one line per divergent body) to stdout.
     """
+    orch = _bare(orch)
+    from_agent = _bare(from_agent)
+    to_agent = _bare(to_agent)
     with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
         content = f.read()
 

@@ -29,6 +29,11 @@ from pathlib import Path
 DB_PATH = os.path.expanduser("~/.claude/comms/.broker.db")
 
 
+def _bare(name):
+    """Bare agent names are canonical on the bus (DIR-003, owner-ratified)."""
+    return name[1:] if name and name.startswith("@") and len(name) > 1 else name
+
+
 class Broker:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
@@ -62,8 +67,12 @@ class Broker:
         NOT NULL (idx_messages_identity, ESC-002 (a+)). A re-send of an
         existing identity is a no-op: returns None (idempotent — protects
         against double-dispatch). NULL-seq kinds (NUDGE/EVENT) always insert.
+
+        Agent names are normalized to bare spelling on write (DIR-003) —
+        '@scaf' and 'scaf' are the same bus identity.
         """
-        from_agent = from_agent or os.environ.get("CLAUDE_AGENT_NAME", "unknown")
+        from_agent = _bare(from_agent or os.environ.get("CLAUDE_AGENT_NAME", "unknown"))
+        to_agent = _bare(to_agent)
         ts = int(time.time())
         with self._conn() as c:
             cur = c.execute(
@@ -81,7 +90,13 @@ class Broker:
         mark_read: bool = True,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """Fetch messages addressed to self_agent (or @self_agent or *)."""
+        """Fetch messages addressed to self_agent (or @self_agent or *).
+
+        The `@self_agent` target is a permanent dual-match safety shim
+        (DIR-003): writes normalize to bare names, but historical rows or a
+        stray '@'-spelled send must still route. Cheap and side-effect-free.
+        """
+        self_agent = _bare(self_agent)
         targets = [self_agent, f"@{self_agent}", "*"]
         with self._conn() as c:
             placeholders = ",".join("?" * len(targets))

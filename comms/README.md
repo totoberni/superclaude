@@ -133,3 +133,23 @@ unconstrained by design. Semantics:
   `already-on-bus` notice).
 - **`backfill_audit` = pure log** of backfill-applied rows. It is NOT a dedup oracle — the bus
   itself is (the schema constraint binds every writer, present and future).
+
+### Agent-Name Spelling: Bare Is Canonical (DIR-003)
+
+**Bare agent names (`scaf`, `o-example`) are canonical on the bus** — never `@`-prefixed (owner-ratified
+2026-06-13). The leading `@` was a flat-file addressing convention that leaked into early backfills,
+producing identity drift: a direct-send of `(meta, scaf, DIR, 1)` and a backfill of `(meta, @scaf,
+DIR, 1)` are *different* identities under `idx_messages_identity`, so the gap-filler would re-insert a
+"missing" row that was already present under the other spelling.
+
+- **Writers normalize on write.** Both `hcom-broker.py send` and `hcom_backfill.py` strip a single
+  leading `@` from agent-name columns before insert/lookup (`_bare()`), so `@scaf` and `scaf` resolve
+  to one identity. The one-time migration `scripts/migrations/2026-06-13-alias-normalization.py`
+  back-normalized all historical rows (collisions resolved via the shared DIR-002 dedupe rule in
+  `broker_dedupe.py`).
+- **`recv` keeps a permanent dual-match shim.** Reads still target both `x` and `@x` (plus `*`). This
+  is intentional and permanent: it's cheap, side-effect-free, and guarantees any stray or legacy
+  `@`-spelled row still routes even though no writer emits one. Normalize-on-write + dual-match-on-read
+  is belt-and-suspenders.
+- **Alias VARIANTS are out of scope.** Only a single leading `@` is stripped. Dated/decommissioned
+  suffixes (`o-example-2` vs `o-example-2-2026-05-28`) are distinct agents and are never unified.

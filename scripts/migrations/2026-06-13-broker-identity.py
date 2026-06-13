@@ -16,9 +16,10 @@ sqlite's writer lock serializes, busy_timeout retries instead of forcing).
 
 Usage: python3 2026-06-13-broker-identity.py <db_path> [--dry-run]
 """
-import hashlib
 import sqlite3
 import sys
+
+from broker_dedupe import coalesce_rows
 
 
 def migrate(db_path: str, dry_run: bool = False) -> int:
@@ -31,8 +32,7 @@ def migrate(db_path: str, dry_run: bool = False) -> int:
         before = cur.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
         groups = cur.execute(
             """
-            SELECT from_agent, to_agent, kind, seq, COUNT(*) AS n,
-                   MIN(id) AS keep_id, MAX(read_at) AS merged_read_at
+            SELECT from_agent, to_agent, kind, seq
             FROM messages
             WHERE seq IS NOT NULL
             GROUP BY from_agent, to_agent, kind, seq
@@ -43,32 +43,18 @@ def migrate(db_path: str, dry_run: bool = False) -> int:
 
         removed = 0
         for g in groups:
-            doomed = cur.execute(
-                "SELECT id, ts, from_agent, to_agent, kind, seq, body"
-                " FROM messages"
-                " WHERE from_agent=? AND to_agent=? AND kind=? AND seq=? AND id != ?"
-                " ORDER BY id",
-                (g["from_agent"], g["to_agent"], g["kind"], g["seq"], g["keep_id"]),
-            ).fetchall()
-            for d in doomed:
-                md5 = hashlib.md5(d["body"].encode("utf-8", "replace")).hexdigest()
-                print(
-                    f"REMOVE id={d['id']} ts={d['ts']}"
-                    f" from={d['from_agent']} to={d['to_agent']}"
-                    f" kind={d['kind']} seq={d['seq']}"
-                    f" len={len(d['body'])} md5={md5}"
-                    f" (keep id={g['keep_id']})"
-                )
-            cur.execute(
-                "UPDATE messages SET read_at=? WHERE id=?",
-                (g["merged_read_at"], g["keep_id"]),
-            )
-            cur.execute(
-                "DELETE FROM messages"
-                " WHERE from_agent=? AND to_agent=? AND kind=? AND seq=? AND id != ?",
-                (g["from_agent"], g["to_agent"], g["kind"], g["seq"], g["keep_id"]),
-            )
-            removed += cur.rowcount
+            ids = [
+                r["id"]
+                for r in cur.execute(
+                    "SELECT id FROM messages"
+                    " WHERE from_agent=? AND to_agent=? AND kind=? AND seq=?",
+                    (g["from_agent"], g["to_agent"], g["kind"], g["seq"]),
+                ).fetchall()
+            ]
+            # DIR-002 dedupe rule, shared with the alias-normalization
+            # migration: see broker_dedupe.coalesce_rows
+            _, n = coalesce_rows(cur, ids)
+            removed += n
 
         cur.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_identity"
