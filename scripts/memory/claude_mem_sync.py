@@ -29,6 +29,8 @@ Usage:
   claude-mem-sync --peer-host peer                # the real WSL->peer sync
   claude-mem-sync --peer-db /tmp/other.db --dry-run
   claude-mem-sync --peer-host peer --auto newer   # non-interactive
+  claude-mem-sync --peer-host peer --auto safe --yes  # hands-off agent sync
+                                                  # (keep-both on divergence; never deletes)
 """
 
 from __future__ import annotations
@@ -208,8 +210,20 @@ class Endpoint:
         return out.strip()
 
     def write_base(self, content: str) -> None:
-        """Write the agreed base manifest JSON to this endpoint's base path."""
-        prog = "import sys;open(sys.argv[1],'w').write(sys.stdin.read())"
+        """Atomically write the base manifest JSON to this endpoint's base path.
+
+        temp-in-same-dir + os.replace so a crash mid-write can never leave a
+        truncated/half-written manifest behind (which the next sync would fail
+        to parse). os.replace is atomic on POSIX when src and dst share a dir.
+        """
+        prog = (
+            "import sys,os,tempfile;"
+            "dst=sys.argv[1];d=os.path.dirname(dst) or '.';"
+            "b=sys.stdin.buffer.read();"
+            "fd,tmp=tempfile.mkstemp(dir=d,suffix='.sync-base.tmp');"
+            "os.write(fd,b);os.fsync(fd);os.close(fd);"
+            "os.replace(tmp,dst)"
+        )
         self._exec([self.py, "-c", prog, self.base], input_text=content)
 
 
@@ -217,10 +231,20 @@ class Endpoint:
 
 
 def read_base(path: Path) -> dict[str, str]:
-    """Load {path: hash} from the base manifest; {} if absent (first run)."""
+    """Load {path: hash} from the base manifest; {} if absent (first run).
+
+    A corrupt manifest (e.g. a crash during a pre-atomic write left it truncated)
+    is treated as a first run rather than crashing every later sync with an
+    unhandled JSONDecodeError; the 3-way merge then safely re-derives state.
+    """
     if not path.exists():
         return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"  WARN: base manifest unreadable ({path}): {exc}; "
+              f"treating as first run.", file=sys.stderr)
+        return {}
     return dict(data.get("entries", {}))
 
 
@@ -403,13 +427,31 @@ def _options_for(kind: str, L: str, R: str) -> str:
             f"[t]=keep the {R} edit (restore on {L})   [s]=skip   [q]=quit")
 
 
+def _safe_choice(a: "Action") -> str:
+    """Non-interactive 'safe/agent' resolution for one conflict.
+
+    keep-both on a both-sides divergence (edit/edit, add/add); restore the
+    surviving edit on a delete-vs-edit (never honour a delete in safe mode).
+    Every branch is additive — it can only upsert, never prune. Returns a
+    choice understood by `_resolve_to_ops`.
+    """
+    if a.kind in (EDIT_EDIT, ADD_ADD):
+        return "both"
+    if a.kind == DEL_REMOTE_EDIT_LOCAL:    # remote deleted, local edited
+        return "local"                     # keep the local edit -> restore on remote
+    if a.kind == DEL_LOCAL_EDIT_REMOTE:    # local deleted, remote edited
+        return "remote"                    # keep the remote edit -> restore on local
+    return "skip"                          # unknown kind: do nothing, never delete
+
+
 def resolve_conflicts(conflicts: list[Action], *, auto: str | None,
-                      local_label: str, remote_label: str,
-                      assume_yes: bool) -> dict[str, str]:
+                      local_label: str, remote_label: str) -> dict[str, str]:
     """Return {path: choice} where choice in {local,remote,both,skip}.
 
-    auto in {newer,local,remote} resolves non-interactively. Otherwise prompts
-    per conflict on a tty; aborts (raises SyncAbort) on 'q'.
+    auto in {newer,local,remote,safe} resolves non-interactively. 'safe' (agent
+    mode) keeps both versions on a divergence and restores the surviving edit on
+    a delete-vs-edit — it never deletes. Otherwise prompts per conflict on a tty;
+    aborts (raises SyncAbort) on 'q'.
     """
     resolutions: dict[str, str] = {}
     if not conflicts:
@@ -417,7 +459,9 @@ def resolve_conflicts(conflicts: list[Action], *, auto: str | None,
 
     if auto:
         for a in conflicts:
-            if auto == "local":
+            if auto == "safe":
+                choice = _safe_choice(a)
+            elif auto == "local":
                 choice = "local"
             elif auto == "remote":
                 choice = "remote"
@@ -437,7 +481,7 @@ def resolve_conflicts(conflicts: list[Action], *, auto: str | None,
     if not sys.stdin.isatty():
         raise SyncAbort(
             f"{len(conflicts)} conflict(s) need resolution but stdin is not a "
-            f"tty — re-run with --auto {{newer|local|remote}} or on a terminal."
+            f"tty — re-run with --auto {{newer|local|remote|safe}} or on a terminal."
         )
 
     L, R = local_label, remote_label
@@ -484,6 +528,7 @@ class Plan:
     ops: list[Op] = field(default_factory=list)
     skipped: set[str] = field(default_factory=set)
     extra_paths: set[str] = field(default_factory=set)   # 'both' suffixed adds
+    suppressed_paths: set[str] = field(default_factory=set)  # safe-mode deletes held pending
     summary: dict[str, int] = field(default_factory=dict)
 
 
@@ -505,13 +550,20 @@ def _suffix_row(row: dict, peer_label: str, taken: set[str]) -> dict:
 
 def build_plan(actions: list[Action], resolutions: dict[str, str],
                *, peer_label: str, local: dict[str, dict],
-               remote: dict[str, dict]) -> Plan:
-    """Translate classified actions + conflict choices into endpoint ops."""
+               remote: dict[str, dict], suppress_deletes: bool = False) -> Plan:
+    """Translate classified actions + conflict choices into endpoint ops.
+
+    suppress_deletes (set under --auto safe) drops the clean delete-propagation
+    ops (del_local / del_remote) so a memory present on one side is never removed
+    to match the other; they are tallied under 'suppressed_del' instead. The
+    delete-vs-edit conflict branches already resolve additively under safe (see
+    `_safe_choice`), so no prune op is ever generated when suppress_deletes is set.
+    """
     plan = Plan()
     taken = set(local) | set(remote)
     counts = {k: 0 for k in
               ("push", "pull", "del_local", "del_remote", "conflict",
-               "noop", "base_clean", "skip")}
+               "noop", "base_clean", "skip", "suppressed_del")}
 
     for a in actions:
         if a.op == "noop" or a.op == "base_clean":
@@ -524,11 +576,19 @@ def build_plan(actions: list[Action], resolutions: dict[str, str],
             plan.ops.append(Op("local", "upsert", a.path, a.remote))
             counts["pull"] += 1
         elif a.op == "del_local":
-            plan.ops.append(Op("local", "prune", a.path))
-            counts["del_local"] += 1
+            if suppress_deletes:
+                plan.suppressed_paths.add(a.path)
+                counts["suppressed_del"] += 1
+            else:
+                plan.ops.append(Op("local", "prune", a.path))
+                counts["del_local"] += 1
         elif a.op == "del_remote":
-            plan.ops.append(Op("remote", "prune", a.path))
-            counts["del_remote"] += 1
+            if suppress_deletes:
+                plan.suppressed_paths.add(a.path)
+                counts["suppressed_del"] += 1
+            else:
+                plan.ops.append(Op("remote", "prune", a.path))
+                counts["del_remote"] += 1
         elif a.op == "conflict":
             counts["conflict"] += 1
             choice = resolutions.get(a.path)
@@ -553,13 +613,17 @@ def _resolve_to_ops(plan: Plan, a: Action, choice: str, peer_label: str,
             plan.ops.append(Op("local", "upsert", a.path, a.remote))
         elif choice == "both":
             # Keep local at its path on both sides; preserve the remote version
-            # under a suffixed path on both sides.
+            # under a suffixed path on both sides. Emit the two suffix-preserving
+            # upserts FIRST and the remote@a.path overwrite LAST: a crash between
+            # ops then never loses the peer version — it still lives at a.path on
+            # remote (overwrite not yet done) and/or under the suffix — it only
+            # leaves the cheap remainder for the next idempotent run.
             sfx = _suffix_row(a.remote, peer_label, taken)
             taken.add(sfx["path"])
             plan.extra_paths.add(sfx["path"])
-            plan.ops.append(Op("remote", "upsert", a.path, a.local))
             plan.ops.append(Op("local", "upsert", sfx["path"], sfx))
             plan.ops.append(Op("remote", "upsert", sfx["path"], sfx))
+            plan.ops.append(Op("remote", "upsert", a.path, a.local))
         return
 
     # delete-vs-edit: 'local'/'remote' name the WINNING side's intent.
@@ -579,17 +643,27 @@ def _resolve_to_ops(plan: Plan, a: Action, choice: str, peer_label: str,
 
 
 def print_plan(actions: list[Action], plan: Plan, *,
-               local_label: str, remote_label: str) -> None:
+               local_label: str, remote_label: str,
+               suppress_deletes: bool = False) -> None:
     L, R = local_label, remote_label
     s = plan.summary
-    moved = [a for a in actions if a.op not in ("noop", "base_clean")]
+    suppressed = s.get("suppressed_del", 0)
+    # Under --auto safe the delete actions never become ops, so they are not
+    # rendered as pending changes; they are reported as 'suppressed' instead.
+    hidden = ("noop", "base_clean") + (
+        ("del_local", "del_remote") if suppress_deletes else ())
+    moved = [a for a in actions if a.op not in hidden]
     bar = "═" * 70
     print(f"\n{bar}")
     print(f"  MEMORY SYNC — plan        local = {L}        remote = {R}")
     print(bar)
     if not moved:
-        # 'everything already in sync' is a stable sentinel other tools grep for.
-        print("  everything already in sync — nothing to do.")
+        if suppressed:
+            print(f"  {suppressed} delete(s) suppressed (safe mode — additive, "
+                  f"never deletes); nothing else to do.")
+        else:
+            # 'everything already in sync' is a stable sentinel other tools grep for.
+            print("  everything already in sync — nothing to do.")
         print(f"{bar}\n")
         return
     for i, a in enumerate(moved, 1):
@@ -600,11 +674,13 @@ def print_plan(actions: list[Action], plan: Plan, *,
         print(_render_diff_for(a, L, R, indent="     "))
     dels = s["del_local"] + s["del_remote"]
     skipped = f",  {s['skip']} skipped" if s["skip"] else ""
+    suppressed_note = (f",  {suppressed} delete(s) suppressed (safe)"
+                       if suppressed else "")
     print(f"\n{bar}")
     print(f"  summary: {len(moved)} change(s) —  "
           f"{s['push']} copy → {R},  {s['pull']} copy → {L},  "
           f"{dels} delete(s),  {s['conflict']} conflict(s){skipped}"
-          f"   ·   {s['noop']} unchanged")
+          f"{suppressed_note}   ·   {s['noop']} unchanged")
     print(f"  ({len(plan.ops)} memory-row operation(s) to apply)")
     print(f"{bar}\n")
 
@@ -648,6 +724,15 @@ def apply_plan(plan: Plan, *, local_ep: Endpoint, remote_ep: Endpoint,
         new_base[path] = row["hash"]
     for path in plan.skipped:
         if path in old_base:
+            new_base[path] = old_base[path]
+    # A delete suppressed under --auto safe must stay PENDING in the base: keep
+    # its old agreed hash so the next sync re-derives the same (suppressed)
+    # delete. Otherwise the path vanishes from base and the next sync sees
+    # local-missing/remote-present/no-base -> 'pull' -> resurrection of a human
+    # prune (B1). The `not in new_base` guard leaves the del_local direction —
+    # where local_after still holds the path — untouched.
+    for path in plan.suppressed_paths:
+        if path not in new_base and path in old_base:
             new_base[path] = old_base[path]
 
     base_json = render_base(new_base)
@@ -789,8 +874,11 @@ def main(argv: list[str] | None = None) -> int:
                    metavar="OPT", help="Extra ssh -o option (repeatable).")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the plan; mutate nothing.")
-    p.add_argument("--auto", choices=["newer", "local", "remote"],
-                   help="Resolve conflicts non-interactively.")
+    p.add_argument("--auto", choices=["newer", "local", "remote", "safe"],
+                   help="Resolve conflicts non-interactively. 'safe' (agent mode): "
+                        "keep-both on every divergence and never delete — also "
+                        "suppresses delete-propagation so a memory on one side is "
+                        "never removed to match the other (pruning is /lt-mem's job).")
     p.add_argument("--yes", action="store_true",
                    help="Apply without the final confirmation prompt.")
     p.add_argument("--no-verify", action="store_true",
@@ -820,12 +908,14 @@ def main(argv: list[str] | None = None) -> int:
             conflicts = [a for a in actions if a.op == "conflict"]
             res = resolve_conflicts(conflicts, auto=ns.auto,
                                     local_label=local_label,
-                                    remote_label=remote_label, assume_yes=True) \
+                                    remote_label=remote_label) \
                 if ns.auto else {}
             plan = build_plan(actions, res, peer_label=remote_label,
-                              local=local, remote=remote)
+                              local=local, remote=remote,
+                              suppress_deletes=(ns.auto == "safe"))
             print_plan(actions, plan, local_label=local_label,
-                       remote_label=remote_label)
+                       remote_label=remote_label,
+                       suppress_deletes=(ns.auto == "safe"))
             if conflicts and not ns.auto:
                 print(f"  ({len(conflicts)} conflict(s) would prompt interactively; "
                       f"re-run without --dry-run or with --auto.)")
@@ -844,19 +934,42 @@ def main(argv: list[str] | None = None) -> int:
             actions = classify(local, remote, base)
             conflicts = [a for a in actions if a.op == "conflict"]
 
-            res = resolve_conflicts(conflicts, auto=ns.auto,
-                                    local_label=local_label,
-                                    remote_label=remote_label, assume_yes=ns.yes)
-            plan = build_plan(actions, res, peer_label=remote_label,
-                              local=local, remote=remote)
-            print_plan(actions, plan, local_label=local_label,
-                       remote_label=remote_label)
+            # Confirm-before-apply review gate — interactive tty path only.
+            # The agent path (--auto ... --yes) sets ns.yes, so the gate is
+            # skipped and behaviour is unchanged. 'redo' re-runs per-entry
+            # conflict resolution; 'n'/'quit' abort with nothing applied.
+            # Caveat: this human-in-the-loop window is held inside the sync
+            # lock, which guards sync-vs-sync only — a concurrent memory-DB
+            # writer on either side here is NOT protected and may be overwritten
+            # on apply; quiesce other memory writers while reviewing.
+            while True:
+                res = resolve_conflicts(conflicts, auto=ns.auto,
+                                        local_label=local_label,
+                                        remote_label=remote_label)
+                plan = build_plan(actions, res, peer_label=remote_label,
+                                  local=local, remote=remote,
+                                  suppress_deletes=(ns.auto == "safe"))
+                print_plan(actions, plan, local_label=local_label,
+                           remote_label=remote_label,
+                           suppress_deletes=(ns.auto == "safe"))
 
-            if plan.ops and not ns.yes:
+                if not (plan.ops and not ns.yes):
+                    break  # nothing to apply, or non-interactive (--yes) path
                 if not sys.stdin.isatty():
                     raise SyncAbort("not a tty — pass --yes to apply non-interactively.")
-                if input("  apply this plan? [y/N] ").strip().lower() not in ("y", "yes"):
+
+                choice = ""
+                while choice not in ("y", "yes", "n", "no", "r", "redo", "q", "quit"):
+                    choice = input("  apply this plan? [y/n/redo/quit] ").strip().lower()
+                    if choice not in ("y", "yes", "n", "no", "r", "redo", "q", "quit"):
+                        print("    (enter y, n, redo, or quit)")
+                if choice in ("y", "yes"):
+                    break
+                if choice in ("n", "no", "q", "quit"):
                     raise SyncAbort("declined — nothing applied.")
+                # choice in ('r','redo'): re-resolve and re-review
+                if not conflicts:
+                    print("  (no conflicts to re-resolve — re-showing the plan)")
 
             apply_plan(plan, local_ep=local_ep, remote_ep=peer_ep,
                        old_base=base, backup_keep=ns.backup_keep,
