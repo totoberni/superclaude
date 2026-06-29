@@ -1,0 +1,27 @@
+# Meta Registry (example template)
+#
+# The live registry (meta-registry.md) is gitignored — it accumulates
+# project names, orch instance IDs, and operational notes that should
+# not be published. Copy this file to meta-registry.md and populate it.
+#
+# Format: two tables — Active orchs and Recently Decommissioned.
+
+## Active
+
+| Orch | Project | Phase / Scope | Status | Spawned | Last RPT | Notes |
+|------|---------|---------------|--------|---------|----------|-------|
+| `o-example-1` | example-project | DIR-001 — initial setup | ACTIVE | 2024-01-01 | RPT-001 (2024-01-02) | 1M context. |
+
+## Recently Decommissioned (last 30 days)
+
+| Orch | Project | Final Status | Decommissioned | Archive |
+|------|---------|--------------|----------------|---------|
+| `o-example-0` | example-project | DONE (phase 0 complete) | 2024-01-01 | comms dir archived |
+
+## Pending decisions
+
+- *(list any cross-project decisions waiting on owner input)*
+
+## Program context
+
+*(brief summary of active programs, cockpit, and operational rules)*

@@ -83,6 +83,14 @@ comms/*/
 CLAUDE.md
 settings.json
 
+# Hook local config — contains personal project names; gitignored so the
+# .example counterpart is the publishable template.
+hooks/no-commit-projects.local
+
+# Live meta registry — accumulates project names and orch operational state;
+# gitignored so meta-registry.md.example is the publishable template.
+comms/meta-registry.md
+
 # Named-orch aliases at top of agents/ — each names a private project
 agents/o-*.md
 agents/orch-*.md
@@ -95,6 +103,17 @@ mcp-needs-auth-cache.json
 # Python bytecode
 __pycache__/
 *.pyc
+
+# SQLite DB files (memory, comms, broker — regenerated at runtime)
+*.db
+*.db-wal
+*.db-shm
+
+# LaTeX warn cache (rebuilt per-session)
+.latex-warn-cache/
+
+# Local override directory (machine-specific, never publish)
+/local
 
 # === v3 runtime / venv / cache clutter (2026-06-07) ===
 .venv/

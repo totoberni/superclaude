@@ -1,5 +1,5 @@
 # Module: Baseline-stash — auto-stash baseline (git status + diff) at session start
-# for repos where policy is `/commit false` (the user's example-webapp-polish, etc.).
+# for repos where the project policy is /commit false.
 # Reads: TOOL_NAME, INPUT, SESSION_ID, TIMER_DIR
 # Mitigates R-2: w-reviewer dirty-tree attribution gotcha (reviewers blame current
 # wave for pre-existing changes when no clean commit baseline exists).
@@ -24,9 +24,21 @@ mod_baseline_stash() {
 
   # ── Detect /commit false policy ──
   # Heuristic 1: env var override (highest precedence)
-  # Heuristic 2: cwd matches a known no-commit project from PROJECTS_NO_COMMIT
+  # Heuristic 2: cwd basename matches a project listed in no-commit-projects.local
   local COMMIT_POLICY="${CLAUDE_COMMIT_POLICY:-true}"
-  local PROJECTS_NO_COMMIT=("example-webapp" "example-webapp-polish")
+
+  # Load no-commit project list from gitignored config (one basename per line).
+  # If the file is absent the list is empty and the hook becomes a safe no-op.
+  local CONFIG_FILE="$HOME/.claude/hooks/no-commit-projects.local"
+  local PROJECTS_NO_COMMIT=()
+  if [ -f "$CONFIG_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      # Skip blank lines and comment lines
+      [[ -z "$line" || "$line" == "#"* ]] && continue
+      PROJECTS_NO_COMMIT+=("$line")
+    done < "$CONFIG_FILE"
+  fi
+
   local IS_NO_COMMIT=false
 
   if [ "$COMMIT_POLICY" = "false" ]; then

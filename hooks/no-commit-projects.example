@@ -1,0 +1,14 @@
+# no-commit-projects.local — list of repo basenames whose project policy is /commit false.
+#
+# The baseline-stash hook (hooks/modules/15-baseline-stash.sh) reads this file
+# at session start and auto-captures `git status` + `git diff` snapshots for any
+# matching repo. These snapshots are injected into w-reviewer dispatch prompts so
+# reviewers can distinguish pre-existing changes from the current wave's output
+# (R-2 dirty-tree attribution mitigation).
+#
+# Format: one repo basename per line. Blank lines and lines starting with '#'
+# are ignored. If this file is absent the hook is a safe no-op.
+#
+# Copy this file to no-commit-projects.local and add your repo basenames:
+# my-webapp
+# another-project
