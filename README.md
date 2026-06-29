@@ -57,6 +57,16 @@ claude --agent o-<name>      # Named orch instance (project-specific thin alias)
 | **Hooks** | `hooks/` | Session timer (35/40/48 min), pre-compaction snapshots, cleanup |
 | **Memory** | `agent-memory/` | Shared project knowledge, per-agent instance memory, gotchas and wins |
 
+## Key Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/session-reaper.sh` | Kill zombie claude processes and clean stale session timer files. Safe to run anytime; `--dry-run` to preview, `--all` to also reap long-running active sessions |
+| `scripts/super-health.sh` | Weighted health score (0–100, letter grade) across 7 infrastructure components. `--quick` / `--standard` / `--deep` / `--complete` tiers |
+| `scripts/mem-health.sh` | Memory DB health score (6 criteria, 100 pts). DB-aware: measures row size, FTS index cohesion, and embedding coverage |
+| `scripts/better-super-deps.sh` | Manage the `.venv` dependency set: `--pip-install` to refresh, `--export --out <file>` to dump a requirements file |
+| `scripts/cockpit/cockpit.{bash,fish}` | Optional shell shortcuts: reconcile memory with a peer host, then open SSH |
+
 ## Configuration
 
 `settings.json` controls permissions (`allow`/`deny` command lists), sandbox (filesystem + network), and hook registration. Only `scaf` may edit it.
