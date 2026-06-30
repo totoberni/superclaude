@@ -65,7 +65,7 @@ claude --agent o-<name>      # Named orch instance (project-specific thin alias)
 | `scripts/super-health.sh` | Weighted health score (0–100, letter grade) across 7 infrastructure components. `--quick` / `--standard` / `--deep` / `--complete` tiers |
 | `scripts/mem-health.sh` | Memory DB health score (6 criteria, 100 pts). DB-aware: measures row size, FTS index cohesion, and embedding coverage |
 | `scripts/better-super-deps.sh` | Manage the `.venv` dependency set: `--pip-install` to refresh, `--export --out <file>` to dump a requirements file |
-| `scripts/cockpit/cockpit.{bash,fish}` | Optional shell shortcuts: reconcile memory with a peer host, then open SSH |
+| `scripts/cockpit/cockpit.{bash,fish}.example` | Optional shell shortcuts (templates): reconcile memory with a peer host, then open SSH. Copy to `cockpit.{bash,fish}` (gitignored), replace `PEER` with your SSH host alias, and source from your shell rc |
 
 ## Configuration
 

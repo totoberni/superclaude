@@ -147,3 +147,7 @@ settings.local.json.bak*
 # Generalizes the original scripts/telegram-surface/.env rule (superclaude-v4 F3);
 # also covers services/firecrawl/.env (DIR-002 T2) and any future service .env.
 **/.env
+
+# === Cockpit live scripts — peer-host-specific; .example counterparts are tracked ===
+scripts/cockpit/cockpit.bash
+scripts/cockpit/cockpit.fish

@@ -1,0 +1,51 @@
+# cockpit.bash.example — TEMPLATE for the cockpit shell shortcuts (bash)
+#
+# ADOPTION NOTES:
+#   1. Copy this file to scripts/cockpit/cockpit.bash
+#      (cockpit.bash is gitignored; only this .example ships in the public repo).
+#   2. Replace every occurrence of "PEER" with your own ~/.ssh/config host alias
+#      (e.g. the alias you use to `ssh mymachine`).
+#   3. Source the live file from your shell rc:
+#        echo 'source "$HOME/.claude/scripts/cockpit/cockpit.bash"' >> ~/.bashrc
+#   4. Mode selection is tty-based:
+#        - Interactive terminal (tty present):  full per-entry conflict dialogue.
+#        - Non-interactive (no tty, e.g. script): --auto safe (additive, no deletes, no prompts).
+#
+# The three functions below are independent; adopt any subset you like.
+
+cockpit() {
+    # Sync WSL memory to PEER, then open SSH session.
+    # Extra args (e.g. --auto newer, --dry-run) are forwarded to the sync tool.
+    # SSH runs unconditionally — sync failure/skip/abort never blocks login.
+    ~/.claude/.venv/bin/python ~/.claude/scripts/memory/claude_mem_sync.py --peer-host PEER "$@"
+    ssh -t PEER
+}
+
+peer() {
+    # Short alias: sync WSL memory to PEER (tty-selected mode), then SSH.
+    # Interactive (tty): per-entry conflict dialogue.
+    # Non-interactive (no tty): --auto safe (additive, no deletes, no prompts).
+    # SSH runs unconditionally — sync failure/skip/abort never blocks login.
+    if [ -t 0 ]; then
+        ~/.claude/.venv/bin/python ~/.claude/scripts/memory/claude_mem_sync.py --peer-host PEER
+    else
+        ~/.claude/.venv/bin/python ~/.claude/scripts/memory/claude_mem_sync.py --peer-host PEER --auto safe --yes
+    fi
+    command ssh -t PEER
+}
+
+ssh() {
+    # Wrapper: if `ssh PEER` with no remote command, auto-sync first.
+    # Any other usage (other host, or `ssh PEER <cmd>`) passes straight through.
+    # `command ssh` reaches the real binary — no recursion.
+    if [ "${1:-}" = "PEER" ] && [ "$#" -eq 1 ]; then
+        if [ -t 0 ]; then
+            ~/.claude/.venv/bin/python ~/.claude/scripts/memory/claude_mem_sync.py --peer-host PEER
+        else
+            ~/.claude/.venv/bin/python ~/.claude/scripts/memory/claude_mem_sync.py --peer-host PEER --auto safe --yes
+        fi
+        command ssh -t PEER
+    else
+        command ssh "$@"
+    fi
+}
