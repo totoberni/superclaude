@@ -23,7 +23,7 @@ Parse `$ARGUMENTS` to determine mode (default: `--orch`):
 - Registry: `~/.claude/comms/meta-registry.md`
 - Reports (latest RPT per orch): broker query — `kind='RPT' GROUP BY from_agent HAVING ts=MAX(ts)`
 - Escalations (pending ESC): broker query — `kind='ESC' AND read_at IS NULL`
-- Plans: `~/.claude/plans/*/plan.md`, `~/.claude/plans/*/state*.md`
+- Plans: `~/.claude/plans/*/plan.md`, `~/.claude/plans/*/state*.md` (agents read `plan.md`; for human browser viewing, point to the rendered `plan.html` in the same dir)
 - Scaf directives (latest DIR to scaf): broker query — `kind='DIR' AND to_agent LIKE '@scaf%'`
 - Broker DB: `~/.claude/comms/.broker.db`; fall back to flat files only if broker unavailable
 

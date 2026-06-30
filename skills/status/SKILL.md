@@ -16,7 +16,7 @@ Show the current project status.
 
 1. Check for orchestration state in BOTH locations:
    - **In-project**: `.orchestrator/state.md` and `.orchestrator/plan.md`
-   - **Superclaude**: `~/.claude/plans/*/state*.md` and `~/.claude/plans/*/plan.md`
+   - **Superclaude**: `~/.claude/plans/*/state*.md` and `~/.claude/plans/*/plan.md` (agents read `plan.md`; for human browser viewing, point to the rendered `plan.html` in the same dir)
 2. If superclaude plans exist:
    - Read `~/.claude/plans/*/state*.md` for phase status (check all state files — there may be per-orch state files like `state-p1.md`)
    - Read `~/.claude/plans/*/plan.md` for current phase details

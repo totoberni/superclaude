@@ -34,6 +34,10 @@ Before creating any files:
 7. **Output** — Create plan files at the determined location:
    - Superclaude: `~/.claude/plans/<project>/plan.md`, `state.md`, `context.md`, `decisions.md`
    - In-project: `.orchestrator/plan.md`, `state.md`, `decisions.md`, `mistakes.md`
+8. **Render the human view** — Run `~/.claude/.venv/bin/python ~/.claude/scripts/plan/render_plan.py <abs path to plan.md>` to emit `plan.html` (the rendered human view) alongside `plan.md`.
+9. **Index the plan** — Run `~/.claude/.venv/bin/python ~/.claude/scripts/plan/plan_index.py <abs path to plan.md> --campaign <slug> --status <status>` to upsert the compact memory-DB index card (`plan-index-<slug>`), making the plan discoverable via memory search. Use the campaign/project directory name as `<slug>` and the current plan phase/status as `<status>`.
+
+**SOT discipline**: `plan.md` is the editable source of truth — agents read and write it directly; `plan.html` is the rendered human view and is a derived artefact. **After ANY edit to `plan.md`, regenerate the view** by re-running `render_plan.py <plan.md>` (and re-run `plan_index.py` if the campaign status changed). Never hand-edit `plan.html`.
 
 ## Phase Design
 

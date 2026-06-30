@@ -281,6 +281,8 @@ Meta can spawn **up to 5 subagents simultaneously** via the Agent tool. Launch i
 
 Plans live at `~/.claude/plans/<name>/`. Meta owns `plan.md` and `context.md`.
 
+`plan.html` is the human-rendered VIEW; `plan.md` remains the agent-facing SOT (agents read `plan.md`). Regenerate `plan.html` via `~/.claude/scripts/plan/render_plan.py <plan.md>` after editing `plan.md`.
+
 | Phase | What Meta Does |
 |-------|----------------|
 | **Create** | Explore codebase (via helpers), decompose work into phases, write `plan.md` + `context.md` + initial `state.md` |

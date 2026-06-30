@@ -23,6 +23,7 @@ Superclaude pattern keeps orchestration OUT of project repos. See `12-agent-hier
 - Per-orch state files (`state-p1.md`, etc.) prevent write conflicts in multi-orch
 - Master `state.md` updated by Meta ONLY when no orchs active
 - If SOT conflicts with code, SOT wins — ask the user if unclear
+- `plan.html` is the human-rendered VIEW; `plan.md` remains the agent-facing SOT (agents read `plan.md`). Regenerate `plan.html` via `~/.claude/scripts/plan/render_plan.py <plan.md>` after editing `plan.md`.
 
 ## Decision Logging
 
