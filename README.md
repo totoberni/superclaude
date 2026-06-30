@@ -55,7 +55,7 @@ claude --agent o-<name>      # Named orch instance (project-specific thin alias)
 | **Skills** | `skills/` | 30 slash commands — user-invocable or preloaded into agents |
 | **Comms** | `comms/` | Structured message bus: directives (meta->orch), reports (orch->meta), escalations |
 | **Hooks** | `hooks/` | Session timer (35/40/48 min), pre-compaction snapshots, cleanup |
-| **Memory** | `agent-memory/` | Shared project knowledge, per-agent instance memory, gotchas and wins |
+| **Memory** | `agent-memory/` | Hybrid FTS5 + sqlite-vec SQLite store — shared project gotchas, per-agent instance context, wins. Self-maintains via `/lt-mem` (`memory_db.py compact` = FTS-optimize + vec-rebuild + VACUUM) |
 
 ## Key Scripts
 

@@ -26,6 +26,7 @@ import sqlite_vec
 DB_PATH = Path.home() / ".claude" / "agent-memory" / ".memory.db"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 EMBED_DIM = 384
+VEC_CHUNK_SIZE = 256  # vec0 chunk slots; tight fit for our corpus (~393KB/256 rows @384-dim vs 1.57MB at the 1024 default). Single source of truth — used in _SCHEMA AND compact().
 # Pinned, persistent model cache. The FastEmbed default ($TMPDIR/fastembed_cache)
 # is ephemeral AND differs per shell/sandbox, causing "model not found" across
 # contexts (warm-up shell vs hook/skill runtime). Pin it so it is found everywhere.
@@ -82,7 +83,7 @@ def _connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
 
 # --- Schema ------------------------------------------------------------------
 
-_SCHEMA = """
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS memories (
   id INTEGER PRIMARY KEY,
   path TEXT UNIQUE,
@@ -103,7 +104,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
   content='memories', content_rowid='id'
 );
 
-CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(embedding float[384]);
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(embedding float[{EMBED_DIM}], chunk_size={VEC_CHUNK_SIZE});
 
 CREATE TABLE IF NOT EXISTS links (src_id INTEGER, dst_name TEXT);
 """
@@ -1057,6 +1058,108 @@ def retier(
         conn.close()
 
 
+# --- Compact -----------------------------------------------------------------
+
+
+def compact_db(db_path=DB_PATH) -> dict:
+    """Structural maintenance: FTS5 optimize + vec0 rebuild (reclaim dead chunk space) + VACUUM.
+
+    Re-tier/upsert/prune churn fragments FTS and leaves dead vec0 slots that VACUUM alone can't repack.
+    Transactional vec rebuild (rollback-safe); verifies integrity + KNN identity before returning.
+    Returns {'before_bytes','after_bytes','ok'}. Raises on verification failure (after rollback).
+    """
+    import os
+
+    conn = _connect(db_path)
+    conn.isolation_level = None
+    try:
+        before = os.path.getsize(db_path)
+
+        def counts():
+            return tuple(
+                conn.execute(
+                    "SELECT (SELECT COUNT(*) FROM memories),"
+                    "(SELECT COUNT(*) FROM memories_fts),"
+                    "(SELECT COUNT(*) FROM memories_vec)"
+                ).fetchone()
+            )
+
+        def knn(rid):
+            q = conn.execute(
+                "SELECT embedding FROM memories_vec WHERE rowid=?", (rid,)
+            ).fetchone()[0]
+            return [
+                r[0]
+                for r in conn.execute(
+                    "SELECT rowid FROM memories_vec WHERE embedding MATCH ? AND k = 3 ORDER BY distance",
+                    (q,),
+                ).fetchall()
+            ]
+
+        pre_counts = counts()
+        data = [
+            (r[0], r[1])
+            for r in conn.execute(
+                "SELECT rowid, embedding FROM memories_vec ORDER BY rowid"
+            ).fetchall()
+        ]
+        if not data:
+            return {"before_bytes": before, "after_bytes": before, "ok": True}
+        sample = [data[0][0], data[len(data) // 2][0], data[-1][0]]
+        pre_knn = {r: knn(r) for r in sample}
+
+        # 1. FTS optimize
+        conn.execute(
+            "INSERT INTO memories_fts(memories_fts, rank) VALUES('integrity-check', 1)"
+        )
+        conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('optimize')")
+
+        # 2. vec0 rebuild (transactional; preserves rowid = memories.id)
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DROP TABLE memories_vec")
+            conn.execute(
+                f"CREATE VIRTUAL TABLE memories_vec USING vec0("
+                f"embedding float[{EMBED_DIM}], chunk_size={VEC_CHUNK_SIZE})"
+            )
+            conn.executemany(
+                "INSERT INTO memories_vec(rowid, embedding) VALUES(?, ?)", data
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+        # 3. VACUUM
+        conn.execute("VACUUM")
+
+        # verify
+        ic = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        post_counts = counts()
+        orphan = conn.execute(
+            "SELECT COUNT(*) FROM memories m WHERE NOT EXISTS "
+            "(SELECT 1 FROM memories_vec v WHERE v.rowid=m.id)"
+        ).fetchone()[0]
+        post_knn = {r: knn(r) for r in sample}
+        ok = (
+            ic == "ok"
+            and post_counts == pre_counts
+            and orphan == 0
+            and all(
+                post_knn[r] == pre_knn[r] and post_knn[r] and post_knn[r][0] == r
+                for r in sample
+            )
+        )
+        if not ok:
+            raise RuntimeError(
+                f"compact verification FAILED: integrity={ic} "
+                f"counts {pre_counts}->{post_counts} orphan={orphan}"
+            )
+        return {"before_bytes": before, "after_bytes": os.path.getsize(db_path), "ok": True}
+    finally:
+        conn.close()
+
+
 # --- CLI entry ---------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -1187,6 +1290,17 @@ if __name__ == "__main__":
 
     # stats
     p_stats = sub.add_parser("stats", help="Row counts for memories / fts / vec.")
+
+    # compact
+    p_compact = sub.add_parser(
+        "compact",
+        help="Structural maintenance: FTS5 optimize + vec0 rebuild + VACUUM (reclaims fragmentation; safe/verified).",
+    )
+    p_compact.add_argument(
+        "--db",
+        default=str(DB_PATH),
+        help=f"DB path (default: {DB_PATH}).",
+    )
 
     # similar
     p_similar = sub.add_parser(
@@ -1489,6 +1603,13 @@ if __name__ == "__main__":
         print(f"memories : {mem_count}")
         print(f"fts rows : {fts_count}")
         print(f"vec rows : {vec_count}")
+
+    elif ns.cmd == "compact":
+        r = compact_db(ns.db)
+        print(
+            f"compact ok={r['ok']}  {r['before_bytes']:,} -> {r['after_bytes']:,} bytes"
+            f" ({100*(1-r['after_bytes']/r['before_bytes']):.0f}% smaller)"
+        )
 
     elif ns.cmd == "export":
         # JSON manifest of all rows for cross-device sync. Identity = `path`,

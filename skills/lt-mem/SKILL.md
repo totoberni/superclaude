@@ -1,6 +1,6 @@
 ---
 name: lt-mem
-description: "Memory DB consolidation: re-tier mature entries, prune stale, merge near-dups."
+description: "Memory DB consolidation: re-tier mature entries, prune stale, merge near-dups; propagate to peer when replicated (Step 8)."
 category: memory
 user-invocable: true
 disable-model-invocation: true
@@ -380,6 +380,63 @@ Integrity: memories==fts==vec [OK | DESYNC]
 
 **Principle**: Density over length. One lesson per line beats a paragraph. Future agents need facts, not narratives.
 
+### C6. Structural DB compaction (FTS + vec0 + VACUUM)
+
+Row-level ops (compress/archive/prune) shrink content but NOT the file. Two structural bloat
+sources accrue independently: (1) **FTS5 fragmentation** — every upsert/re-tier is an FTS
+delete+insert, creating a new index segment; (2) **vec0 logical deletion** — `sqlite-vec`
+zeroes slots rather than freeing chunk space, and its default `chunk_size=1024` over-allocates
+for small corpora. Plain `VACUUM` reclaims SQLite free pages but cannot repack vec0 chunk BLOBs.
+
+**One command fixes both**:
+```bash
+HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py compact
+```
+Sequence: FTS5 `optimize` → vec0 rebuild (DROP + recreate at `chunk_size=256`, re-inserting
+every vector at `rowid=memories.id`) → `VACUUM` → self-verify (integrity_check=ok, row counts
+unchanged, zero orphan memories, KNN self-match byte-identical). Rolls back the vec rebuild on
+any error.
+
+**Safety discipline**: structural compaction is more invasive than row ops. Always back up first
+(`cp ~/.claude/agent-memory/.memory.db <backup>`) and prefer testing on the copy
+(`memory_db.py compact --db <copy>`) before running live — especially after large prune waves.
+The command is transactional + self-verifying, but a backup is the cardinal-rule safety net.
+
+**When**: after a heavy consolidation round (many prunes/compressions/re-tiers), not on every
+quick run. Measured impact: 4.1 MB → 1.83 MB (~56% reduction) with zero search-quality loss.
+
+**Peer note**: compaction is file-level and does NOT propagate via Step 8's row-level sync. Run
+it on the peer separately after Step 8 completes:
+```bash
+ssh <peer> 'HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py compact'
+```
+
+**Optional ongoing hygiene**: `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;` once, then
+`PRAGMA incremental_vacuum;` cheaply reclaims free pages between full compactions.
+
+### Step 8: Propagate to peer (replicated 2-DB setup)
+
+A `/lt-mem` consolidation writes only to the local machine's DB. On a replicated 2-machine setup
+(e.g. WSL + a peer host), the consolidating machine is the source of truth; the peer must inherit all
+compactions, re-tiers, archives, and prunes — else a later peer-side sync can resurrect
+stale/fat copies.
+
+Run immediately after the consolidation pass:
+
+```bash
+HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/claude_mem_sync.py \
+  --peer-host <peer> --auto newer
+```
+
+Use `--auto newer`, NOT `--auto safe`: the tidied rows are newer post-consolidation, so `newer`
+lets them win cleanly; `--auto safe` keeps-both and would re-add `-conflict-<peer>` copies of
+every compressed/archived row, undoing the tidy. Unless the owner specifies a different SOT or
+direction (e.g. the peer initiated the consolidation), the consolidating machine always pushes
+as source of truth.
+
+> Sync mechanics — SSH transport, conflict resolution, row merging — live in
+> `scripts/memory/claude_mem_sync.py` and `scripts/cockpit/`; do not duplicate them here.
+
 ## Sanitization (P0/P1 — formerly /sanitize-mem)
 
 Audit memory files for misplaced learnings (P0) and cross-file duplicates (P1). Run via `--sanitize` flag. Lower priorities (P2 stale refs, P3 session cruft, P4 orphans) are now manual — handle as needed during normal /lt-mem archiving.
@@ -461,3 +518,5 @@ Append to /lt-mem report:
 - ALWAYS run the consolidation pass (Step 7) after promote/archive unless `--skip-compact` or zero oversized + zero near-dup rows remain
 - The deliberate MD-WRITES — the `_system/_archive/` tombstone (Step 3) and the `--complete` checkpoint file (Step 6) — are preserved by design and flagged for owner review; do NOT remove them
 - `--dry-run`: NO DB writes and NO file writes anywhere. Output the unified plan only.
+- After any consolidation, sync to the peer DB via Step 8 — consolidating machine is SOT; use `--auto newer` (NOT `--auto safe`), unless the owner specifies otherwise
+- Structural compaction (`memory_db.py compact`) is transactional + self-verifying with rollback; always back up the DB and test on a copy before running live after large prune waves; it does NOT propagate via Step 8 — run it on the peer separately
