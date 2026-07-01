@@ -6,10 +6,14 @@ Chain of command, write scopes, and workspace boundaries for ALL superclaude age
 
 | Level | Agent | CAN | CANNOT |
 |-------|-------|-----|--------|
-| Strategic | Meta | Write directives/bootstrap/plans, read reports, manage comms bus, spawn read-only helpers | Edit project code, git in repos, write state.md during Orch execution, edit settings.json |
-| Infrastructure | Scaffolder | Edit `~/.claude/` files (agents, hooks, rules, skills, settings.json), validate infra, write own reports | Edit project code, git in repos, architecture decisions alone, remove deny rules or disable sandbox |
+| Strategic | Meta | Write directives/bootstrap/plans, read reports, manage comms bus, spawn read-only helpers, superclaude infra edits (rules/hooks/skills/CLAUDE.md/wrappers) via meta-supervised w-* swarms | Edit project code, git in repos, write state.md during Orch execution, edit settings.json |
+| Infrastructure | Scaffolder (LEGACY 2026-07-01: optional; routine infra now runs on meta+w-* swarms; retained only for large isolated infra campaigns) | Edit `~/.claude/` files (agents, hooks, rules, skills, settings.json), validate infra, write own reports | Edit project code, git in repos, architecture decisions alone, remove deny rules or disable sandbox |
 | Tactical | Orch / Orch-* | Edit project code, git (except push), spawn workers, write state/reports | Push, architecture decisions alone, write plan.md/directives/bootstrap, touch local `.claude/`, edit settings.json |
 | Worker | w-merger, w-debugger, w-refactorer, w-reviewer, w-planner, w-design-reviewer, w-implementer, w-doc, w-explorer, w-tester, w-committer (+ ephemeral via `/autocommission`) | Edit within assigned scope, run scoped commands | Push, touch local `.claude/`, write to comms, unscoped changes, edit settings.json, spawn children |
+
+## Scaf status (2026-07-01)
+
+Scaf is a legacy v2 pattern; routine superclaude infra edits (rules, hooks, skills, CLAUDE.md, wrappers) now run via meta-supervised w-* swarms with per-diff verification (R-3), not a separate scaf session. Scaf is retained only for large, isolated infra campaigns, the same way orks are reserved for AOS-scale work. `settings.json` stays the one file meta does not edit (permissions boundary unchanged).
 
 ## Multi-Orch
 
@@ -87,6 +91,14 @@ Persistent memory lives in a hybrid-search SQLite DB at `~/.claude/agent-memory/
 2. **Proactive recall** (do this whenever a task touches prior work, a project, or a known pitfall): run `memory_db.py search "<natural-language query>" -k 8` (see §1 for the full invocation), then `get --name <slug>` for the full body. Hybrid search matches prose, jargon, paths, and error codes. To find memories related to one you already hold (near-dups / same-topic-different-words), use `memory_db.py similar --name <slug>` (hybrid cosine + token-Jaccard; also via `/mem-similar`).
 3. **Scope by tier**: `instance/<your-agent>` (your own memories), `shared-projects` (project gotchas/wins), `shared-global` (cross-project lessons), `class` (your agent-class patterns) — via `list --tier <t>` or natural queries.
 4. **Write** via the memory skills (/remember, /good-idea, /lt-mem, /mistake); they upsert to the DB. Never write `.md` memory files.
+
+**Search discipline (mandatory before you answer)**: recall is only useful when queried PROPERLY. A single shallow query, no `similar` pass, and reading only snippets has produced answers from assumption when the correct answer was already in the DB. BEFORE answering any prompt that touches a project, tool, machine, convention, or past decision:
+
+1. Run SEVERAL searches with varied vocabulary (synonyms, jargon, file paths, error codes); then run `memory_db.py similar --name <slug>` (hybrid cosine + token-Jaccard) on the closest hit to surface same-topic-different-words rows; then `get --name <slug>` the FULL bodies of the top matches. Never answer from search snippets alone.
+2. FLAG every discrepancy explicitly at the TOP of your answer, before proceeding (for example: "memory says X; the plan or my assumption said Y"). Silent divergence produces garbage.
+3. Pair recall with empirical verification when state is volatile: memory plus a quick live probe (read the file, grep the code, run the diagnostic). A memory naming a file, flag, or alias is a claim about a past moment; confirm it still holds before acting on it. See the `meta-verify-infra-state-empirically` lesson.
+
+A shorthand wrapper exists at `~/.claude/bin/mem`: `mem search "<q>" [-k N]` | `mem get "<name>"` | `mem similar "<name>" [-k N]` | `mem list [--tier T]`. Prefer it over the long `HF_HUB_OFFLINE=1 ... memory_db.py` invocation to cut token cost.
 
 ## Reviewer Attribution on Dirty Trees
 

@@ -6,6 +6,8 @@ Applies to ALL spawn-capable agents (meta, orch, scaf). NOT applied to `w-*` the
 
 **Default delegation pattern**: Meta+w-swarm. Ork handoff is the EXCEPTION, reserved for work that genuinely benefits from persistent multi-hour state.
 
+Infra edits (rules, hooks, skills, CLAUDE.md, wrappers) are handled by meta-supervised w-* swarms by default; scaf is legacy/optional (see rules/12).
+
 ### Pre-Action Trigger
 
 Before performing ANY task that takes >3 tool calls, ask:

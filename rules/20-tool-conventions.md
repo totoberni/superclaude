@@ -46,6 +46,13 @@ Bidirectional isolation rule — meta-tier agent memory must stay invisible from
 - Common trap: a call that may fail — a `memory_db.py search` before the venv/DB is confirmed, a ref lookup, a maybe-missing file — run it separately, not batched with safe calls.
 - Pattern: run safe discovery calls first, then use results to construct the next batch.
 
+## Shell `!` Mangling in Content/DB Writes (Claude Code bash tool)
+
+- The bash tool inserts a stray backslash before `!` (history-expansion-style escaping, byte `0x5C` before `0x21`) inside command strings, observed in BOTH double-quoted commands AND `<<'EOF'` quoted heredocs. Any string written THROUGH bash that contains `!` is silently corrupted: SQLite `UPDATE ... SET text='...!...'`, HTML-comment markers (`<!-- ... -->`), regexes, file content.
+- **Self-masking trap**: a verification predicate typed in the SAME bash command receives the SAME mangling, so it appears to match the corrupted value. NEVER verify a `!`-bearing write with a bash-typed `LIKE`/grep predicate. Verify the raw bytes, e.g. `hex(substr(text,1,N))`: clean `<!--` is `3C212D2D`; a `5C` after the leading `3C` means mangled.
+- **Rule**: to write a content string containing `!` (or other history-expansion-sensitive chars) into the memory DB, comms, or any file, do NOT build it in a bash command. Write a small Python file with the **Write tool** (exact bytes, no shell layer) and run it with `~/.claude/.venv/bin/python` using a parameterized query. This is load-bearing across superclaude v3: every agent that edits memories transversely (`memory_db.py` content, `<!-- budget-exempt -->` markers, recovery contexts) or comms can hit this.
+- Source: meta 2026-06-13 (a `<!-- budget-exempt -->` marker on a memory row was stored as `<\!--`, defeating the line-anchored exempt predicate; cost 3 attempts incl. a quoted heredoc). Memory: `gotcha-bash-tool-bang-mangling` (shared-global tier).
+
 ## Merge Conflicts
 
 - `git merge` returns exit code 1 when there are conflicts. This is expected workflow, not a failure.
