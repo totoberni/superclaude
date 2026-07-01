@@ -252,17 +252,78 @@ score_mem() {
     corpus_detail="rows=$row_count (ref $ROW_REF), footprint min/avg/max=${fp_min}/${fp_avg}/${fp_max}B (max-ref $MAX_REF, exempt-aware), latency=$lat_str; penalty=-$corpus_penalty"
   fi
 
-  # Apply the cap LAST, THEN subtract the corpus penalty, flooring at 0. A broken
-  # search store is a hard ceiling (min); corpus bloat is a graduated deduction below
-  # that ceiling. final_mem = max(0, min(mh_score, mdb_cap) - corpus_penalty).
+  # --- Memory capabilities facet (v3 Tier-0/1 query-time improvements) ---
+  # DEEP MODE ONLY (loads python; the fast default stays python-free, like the
+  # latency prong). Exercises the NEW query-time capabilities END-TO-END so a
+  # regression dents the score instead of passing silently:
+  #   CAP1 get-ladder resolves a filename SLUG when the stored name is a human
+  #        title (the canonical resolver fix)              -> CLI exit 0
+  #   CAP2 an AMBIGUOUS name is REFUSED (not guessed), listing
+  #        'did you mean' candidates                       -> CLI exit 3 + stderr
+  #   CAP3 a hybrid search over the LIVE store returns a ranked hit (the
+  #        fts+vec+model pipeline actually answers)        -> non-empty --json
+  # CAP1/CAP2 run against a THROWAWAY temp DB built with sqlite3 (NO model, NO
+  # live-DB write): the resolver ladder is pure-SQL, so two same-named rows give a
+  # deterministic ambiguity with no embedding needed. CAP3 is a READ-ONLY hybrid
+  # search against the live DB (never writes it). Graceful-skip (python/memory_db.py
+  # absent, or fixture setup fails) costs NOTHING; only a capability that RUNS and
+  # answers WRONG deducts (bounded caps_penalty, cap 6).
+  local caps_penalty=0 caps_detail="not exercised (fast mode)"
+  if [ "$EFFECTIVE_TIER" = "deep" ]; then
+    local capdb pybin3="$CLAUDE/.venv/bin/python" memdb3="$SCRIPTS/memory/memory_db.py"
+    if [ ! -x "$pybin3" ] || [ ! -f "$memdb3" ]; then
+      caps_detail="not exercised (memory_db.py or venv absent)"
+    else
+      local caps_fail=0 cap1="?" cap2="?" cap3="?" c2err="" c2rc=0 c3out=""
+      capdb=$(mktemp --tmpdir="${TMPDIR:-/tmp}" super-health-caps.XXXXXX)
+      # Fixture: init schema via memory_db.py (creates the vec0+fts tables), then
+      # INSERT three rows via sqlite3 so the AFTER-INSERT trigger fills FTS with NO
+      # model loaded. Two rows share name/slug 'dup_probe' (ambiguous); one is a
+      # human-title row whose filename slug is 'zeta_slug_probe'.
+      if command -v sqlite3 >/dev/null 2>&1 \
+         && HF_HUB_OFFLINE=1 "$pybin3" "$memdb3" --db "$capdb" init >/dev/null 2>&1 \
+         && sqlite3 "$capdb" \
+              "INSERT INTO memories(path,tier,type,name,description,text) VALUES ('shared/zeta_slug_probe.md','shared','project','Zeta Retrieval Title','t','body one');
+               INSERT INTO memories(path,tier,type,name,description,text) VALUES ('instance/x/dup_probe.md','instance','project','dup_probe','t','body two');
+               INSERT INTO memories(path,tier,type,name,description,text) VALUES ('instance/y/dup_probe.md','instance','project','dup_probe','t','body three');" >/dev/null 2>&1
+      then
+        # CAP1: filename slug resolves the human-title row.
+        if HF_HUB_OFFLINE=1 "$pybin3" "$memdb3" --db "$capdb" get --name zeta_slug_probe >/dev/null 2>&1; then
+          cap1="ok"
+        else cap1="FAIL"; caps_fail=$((caps_fail + 1)); fi
+        # CAP2: ambiguous name refused (exit 3) with a 'did you mean' list on stderr.
+        c2err=$(HF_HUB_OFFLINE=1 "$pybin3" "$memdb3" --db "$capdb" get --name dup_probe 2>&1 >/dev/null); c2rc=$?
+        if [ "$c2rc" -eq 3 ] && printf '%s' "$c2err" | grep -qi "did you mean"; then
+          cap2="ok"
+        else cap2="FAIL(rc=$c2rc)"; caps_fail=$((caps_fail + 1)); fi
+      else
+        cap1="skip(setup)"; cap2="skip(setup)"
+      fi
+      rm -f "$capdb"
+      # CAP3: live-store hybrid search returns a ranked hit (read-only). --json makes
+      # the emptiness test robust (an empty result set prints '[]', with no '"id"').
+      c3out=$(HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 "$pybin3" "$memdb3" search "memory health corpus" -k 5 --json 2>/dev/null)
+      if printf '%s' "$c3out" | grep -q '"id"'; then
+        cap3="ok"
+      else cap3="FAIL"; caps_fail=$((caps_fail + 1)); fi
+      caps_penalty=$((caps_fail * 2)); [ "$caps_penalty" -gt 6 ] && caps_penalty=6
+      caps_detail="get-slug=$cap1, ambiguous-refusal=$cap2, hybrid-topk=$cap3; penalty=-$caps_penalty"
+    fi
+  fi
+
+  # Apply the cap LAST, THEN subtract the corpus + capabilities penalties, flooring
+  # at 0. A broken search store is a hard ceiling (min); corpus bloat and a failed
+  # capability are graduated deductions below that ceiling.
+  # final_mem = max(0, min(mh_score, mdb_cap) - corpus_penalty - caps_penalty).
   local final_mem=$mh_score
   [ "$final_mem" -gt "$mdb_cap" ] && final_mem=$mdb_cap
-  final_mem=$((final_mem - corpus_penalty))
+  final_mem=$((final_mem - corpus_penalty - caps_penalty))
   [ "$final_mem" -lt 0 ] && final_mem=0
 
   printf '%s\n' "$mh_out" | grep -v '^SCORE:'
   echo "Memory .memory.db facet: $mdb_detail (mem-health=$mh_score, cap=$mdb_cap)"
   echo "Memory corpus facet: $corpus_detail"
+  echo "Memory capabilities facet: $caps_detail"
   echo "SCORE: $final_mem/100"
 }
 

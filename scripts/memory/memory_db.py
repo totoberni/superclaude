@@ -31,7 +31,24 @@ VEC_CHUNK_SIZE = 256  # vec0 chunk slots; tight fit for our corpus (~393KB/256 r
 # is ephemeral AND differs per shell/sandbox, causing "model not found" across
 # contexts (warm-up shell vs hook/skill runtime). Pin it so it is found everywhere.
 EMBED_CACHE_DIR = Path.home() / ".claude" / ".cache" / "fastembed"
-RRF_K = 60  # Reciprocal Rank Fusion constant (standard default)
+# --- Hybrid retrieval tuning (ALL query-time; stored vectors are NOT affected) ---
+# Reciprocal Rank Fusion constant. Lower k => sharper emphasis on each arm's top
+# ranks. Tuned to the 20-30 band (was 60): the corpus is small and jargon-dense, so
+# a sharper fusion pulls the right note up without the smoothing a large k imposes.
+RRF_K = 30
+# EQUAL fusion weights. Notes are jargon / path / error-code heavy, so the lexical
+# (FTS/BM25) arm is as trustworthy as the semantic (vector) arm; never down-weight it.
+RRF_W_FTS = 1.0
+RRF_W_VEC = 1.0
+# Minimum candidates pulled from EACH arm before fusion. A miss is usually the right
+# note dropping out of one arm's narrow head; a wide pool lets the other arm recover
+# it during fusion. Acts as a floor under the existing k*4 over-fetch.
+CANDIDATE_POOL = 50
+# bge-small-en-v1.5 is ASYMMETRIC: the query carries a short retrieval instruction,
+# passages are embedded bare. Stored passage vectors here are bare (see
+# _refresh_embedding), so ONLY the query embedding gets this prefix at search
+# time; no stored vector is mutated. Text is bge-small-en-v1.5's documented prompt.
+BGE_QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 ARCHIVE_TIER = "archive"  # Re-tiered, out-of-active-recall memories (still queryable).
 
 # Migration walk rules (spec §Migration rules).
@@ -62,6 +79,16 @@ def _embed(text: str) -> list[float]:
     """Embed one document → 384-dim float list."""
     vec = next(iter(_get_embedder().embed([text])))
     return [float(x) for x in vec]
+
+
+def _embed_query(text: str) -> list[float]:
+    """Embed a QUERY with bge-small's retrieval instruction prefix (asymmetric).
+
+    Passages are stored bare; only the query side carries the instruction, matching
+    how bge-small-en-v1.5 was trained for retrieval. Stored vectors are untouched;
+    this only shapes the query vector at search time.
+    """
+    return _embed(BGE_QUERY_INSTRUCTION + (text or ""))
 
 
 # --- Connection --------------------------------------------------------------
@@ -308,6 +335,46 @@ def search(
         conn.close()
 
 
+def search_many(
+    queries,
+    k: int = 8,
+    mode: str = "hybrid",
+    db_path: Path | str = DB_PATH,
+    include_archived: bool = False,
+    tier: str | None = None,
+) -> list[dict]:
+    """Union hybrid-search over MULTIPLE query strings, de-duped by note identity.
+
+    Each query is embedded + retrieved independently via `search`; the per-query
+    result lists are unioned and de-duplicated by row id, KEEPING each note's BEST
+    (max) `score` across the queries, then re-ranked best-first and capped at `k`.
+
+    `queries` may be a single str (treated as one query) or a sequence of strings;
+    blank/whitespace-only entries are ignored. A single effective query is delegated
+    straight to `search`, so single-query behavior is byte-for-byte unchanged.
+    """
+    if isinstance(queries, str):
+        queries = [queries]
+    qs = [q for q in queries if q and q.strip()]
+    if not qs:
+        return []
+    if len(qs) == 1:
+        return search(
+            qs[0], k=k, mode=mode, db_path=db_path,
+            include_archived=include_archived, tier=tier,
+        )
+    best: dict[int, dict] = {}
+    for q in qs:
+        for r in search(
+            q, k=k, mode=mode, db_path=db_path,
+            include_archived=include_archived, tier=tier,
+        ):
+            rid = r["id"]
+            if rid not in best or r["score"] > best[rid]["score"]:
+                best[rid] = r
+    return sorted(best.values(), key=lambda d: d["score"], reverse=True)[:k]
+
+
 def _apply_tier_filter(
     conn: sqlite3.Connection,
     scored: list[tuple[int, float]],
@@ -360,7 +427,7 @@ def _fts_ranked(conn: sqlite3.Connection, query: str, k: int) -> list[tuple[int,
 
 def _vec_ranked(conn: sqlite3.Connection, query: str, k: int) -> list[tuple[int, float]]:
     """Return [(rowid, distance)] nearest-first via sqlite-vec KNN."""
-    q = sqlite_vec.serialize_float32(_embed(query))
+    q = sqlite_vec.serialize_float32(_embed_query(query))
     rows = conn.execute(
         """SELECT rowid, distance
            FROM memories_vec
@@ -372,24 +439,41 @@ def _vec_ranked(conn: sqlite3.Connection, query: str, k: int) -> list[tuple[int,
 
 
 def _hybrid_scored(
-    conn: sqlite3.Connection, query: str, k: int
+    conn: sqlite3.Connection,
+    query: str,
+    k: int,
+    *,
+    rrf_k: float | None = None,
+    w_fts: float | None = None,
+    w_vec: float | None = None,
+    pool: int | None = None,
 ) -> list[tuple[int, float]]:
-    """Fuse FTS and vec ranked lists with Reciprocal Rank Fusion → (rowid, score).
+    """Fuse FTS and vec ranked lists with weighted Reciprocal Rank Fusion.
 
-    Each list contributes 1/(RRF_K + rank) per document; documents are sorted by
-    summed contribution. Over-fetch each arm (k*4) so fusion has signal beyond
-    the final cut. Returns the fused (rowid, RRF-score) list (best-first, capped
-    at k) without materializing — so callers can post-filter on rowid metadata.
+        score(doc) = w_fts / (rrf_k + rank_fts) + w_vec / (rrf_k + rank_vec)
+
+    Ranks are 0-based per arm (best = 0); a doc absent from an arm contributes 0
+    from that arm. Each arm over-fetches a WIDE candidate pool of max(k*4, pool)
+    BEFORE fusion, so a note that falls out of one arm's narrow head can still be
+    recovered by the other arm. Returns the fused (rowid, score) list best-first,
+    capped at k, unmaterialized so callers can post-filter on rowid metadata.
+
+    rrf_k / w_fts / w_vec / pool default to the module constants; they are exposed
+    as parameters so the retrieval path stays tunable and unit-testable.
     """
-    fetch = max(k * 4, k)
+    rrf_k = RRF_K if rrf_k is None else rrf_k
+    w_fts = RRF_W_FTS if w_fts is None else w_fts
+    w_vec = RRF_W_VEC if w_vec is None else w_vec
+    pool = CANDIDATE_POOL if pool is None else pool
+    fetch = max(k * 4, k, pool)
     fts = _fts_ranked(conn, query, fetch)
     vec = _vec_ranked(conn, query, fetch)
 
     scores: dict[int, float] = {}
     for rank, (rid, _) in enumerate(fts):
-        scores[rid] = scores.get(rid, 0.0) + 1.0 / (RRF_K + rank)
+        scores[rid] = scores.get(rid, 0.0) + w_fts / (rrf_k + rank)
     for rank, (rid, _) in enumerate(vec):
-        scores[rid] = scores.get(rid, 0.0) + 1.0 / (RRF_K + rank)
+        scores[rid] = scores.get(rid, 0.0) + w_vec / (rrf_k + rank)
 
     return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:k]
 
@@ -748,6 +832,131 @@ def _db_get_by_path(conn: sqlite3.Connection, path: str):
     return conn.execute(
         "SELECT * FROM memories WHERE path = ?", (path,)
     ).fetchone()
+
+
+# --- Name resolution ladder --------------------------------------------------
+# A --name argument may be the stored human title ("European academic writing
+# style"), the filename slug (Path(path).stem, e.g. "feedback_european_style"),
+# a case variant, or a unique prefix of either. Resolve through a strict ladder
+# that AUTO-RESOLVES ONLY ON A UNIQUE MATCH and never guesses; an ambiguous or
+# unknown name yields "did you mean" candidates for the caller to surface.
+
+
+def _slug_of(path: str) -> str:
+    """Path-stem slug of a memory's logical path (filename without the .md)."""
+    return Path(path or "").stem
+
+
+def _fts_name_desc(conn: sqlite3.Connection, arg: str, limit: int) -> list[int]:
+    """Up to `limit` rowids whose name/description best match `arg` (BM25).
+
+    Restricts the MATCH to the name + description columns (the 'title' surface) and
+    splits underscore slugs into words, so 'feedback_european_style' still matches a
+    note titled 'European ... style'. Returns [] on any FTS syntax edge case.
+    """
+    words: list[str] = []
+    for tok in _FTS_TOKEN_RE.findall(arg or ""):
+        words.extend(w for w in tok.split("_") if w)
+    if not words:
+        return []
+    match = "{name description} : (" + " OR ".join(f'"{w}"' for w in words) + ")"
+    try:
+        rows = conn.execute(
+            "SELECT rowid FROM memories_fts WHERE memories_fts MATCH ? "
+            "ORDER BY bm25(memories_fts) LIMIT ?",
+            (match, limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [r["rowid"] for r in rows]
+
+
+def _did_you_mean(idx, arg: str, fts_ids: list[int], limit: int) -> list[dict]:
+    """Build up to `limit` (name, slug, tier) suggestions for an unresolved name.
+
+    FTS candidates (already BM25-ranked) come first, then substring matches on the
+    name or slug, enough for a human to spot the note they meant.
+    """
+    by_id = {r["id"]: r for r in idx}
+    ordered: list = []
+    seen: set[int] = set()
+    for rid in fts_ids:
+        r = by_id.get(rid)
+        if r is not None and rid not in seen:
+            ordered.append(r)
+            seen.add(rid)
+    low = (arg or "").lower()
+    if low:
+        for r in idx:
+            if r["id"] in seen:
+                continue
+            if low in (r["name"] or "").lower() or low in _slug_of(r["path"]).lower():
+                ordered.append(r)
+                seen.add(r["id"])
+            if len(ordered) >= limit:
+                break
+    return [
+        {"name": r["name"], "slug": _slug_of(r["path"]), "tier": r["tier"]}
+        for r in ordered[:limit]
+    ]
+
+
+def _resolve_name(
+    conn: sqlite3.Connection, arg: str, limit: int = 5
+) -> tuple[int | None, list[dict]]:
+    """Resolve a --name argument to ONE memory rowid via a strict ladder.
+
+    Ladder (first UNIQUE match wins; never guesses):
+      1. exact `name`
+      2. path-stem slug            (Path(path).stem == arg)  [human-title-vs-file fix]
+      3. steps 1-2 case-insensitively
+      4. unique prefix on name OR slug (resolve only if exactly one row)
+      5. FTS over name/description  (resolve only if exactly one candidate)
+
+    Returns (rowid, []) on a unique resolve, else (None, suggestions) where
+    suggestions is up to `limit` (name, slug, tier) "did you mean" dicts.
+    """
+    arg = arg or ""
+    low = arg.lower()
+    idx = conn.execute(
+        "SELECT id, name, description, tier, path FROM memories"
+    ).fetchall()
+
+    def only(matches) -> int | None:
+        return matches[0]["id"] if len(matches) == 1 else None
+
+    # 1. exact name
+    rid = only([r for r in idx if r["name"] == arg])
+    if rid is not None:
+        return rid, []
+    # 2. path-stem slug (the canonical fix: filename slug vs stored human title)
+    rid = only([r for r in idx if _slug_of(r["path"]) == arg])
+    if rid is not None:
+        return rid, []
+    # 3. case-insensitive name, then slug
+    rid = only([r for r in idx if (r["name"] or "").lower() == low])
+    if rid is not None:
+        return rid, []
+    rid = only([r for r in idx if _slug_of(r["path"]).lower() == low])
+    if rid is not None:
+        return rid, []
+    # 4. unique prefix on name OR slug
+    rid = only(
+        [
+            r
+            for r in idx
+            if (r["name"] or "").lower().startswith(low)
+            or _slug_of(r["path"]).lower().startswith(low)
+        ]
+    ) if low else None
+    if rid is not None:
+        return rid, []
+    # 5. FTS over name/description; resolve iff a single candidate
+    fts_ids = _fts_name_desc(conn, arg, limit)
+    if len(fts_ids) == 1:
+        return fts_ids[0], []
+    # 6. unresolved: hand back "did you mean" suggestions
+    return None, _did_you_mean(idx, arg, fts_ids, limit)
 
 
 def _prune_row(row_id: int, db_path: Path | str = DB_PATH) -> None:
@@ -1171,6 +1380,24 @@ if __name__ == "__main__":
         print(f"error: {msg}", file=sys.stderr)
         sys.exit(code)
 
+    def _resolve_name_or_die(conn, arg):
+        """Resolve --name via the resolution ladder; return the full row on a UNIQUE
+        match. On an ambiguous/unknown name, print up to 5 'did you mean' (name, slug,
+        tier) suggestions to stderr and exit non-zero. Never guesses.
+        """
+        row_id, suggestions = _resolve_name(conn, arg)
+        if row_id is not None:
+            return _db_get_by_id(conn, row_id)
+        print(f"error: no memory uniquely matches name/slug {arg!r}", file=sys.stderr)
+        if suggestions:
+            print("did you mean:", file=sys.stderr)
+            for s in suggestions:
+                print(
+                    f"  {s['name']}   (slug: {s['slug']}, tier: {s['tier']})",
+                    file=sys.stderr,
+                )
+        sys.exit(3)
+
     parser = argparse.ArgumentParser(
         prog="memory_db",
         description="v3 memory DB — manage and query the hybrid-search SQLite memory store.",
@@ -1191,7 +1418,12 @@ if __name__ == "__main__":
         "search",
         help="Search memories by query.",
     )
-    p_search.add_argument("query", help="Free-text search query.")
+    p_search.add_argument(
+        "query",
+        nargs="+",
+        help="Free-text search query. Pass several (space-separated, each quoted) "
+        "for a multi-query UNION: 'q1' 'q2' 'q3'.",
+    )
     p_search.add_argument(
         "-k", type=int, default=5, metavar="N", help="Max results (default 5)."
     )
@@ -1377,7 +1609,9 @@ if __name__ == "__main__":
         print(f"init_db ok → {db}")
 
     elif ns.cmd == "search":
-        results = search(
+        # ns.query is a list (nargs="+"); search_many delegates to `search` for a
+        # single query, so single-query behavior is unchanged.
+        results = search_many(
             ns.query,
             k=ns.k,
             mode=ns.mode,
@@ -1434,17 +1668,15 @@ if __name__ == "__main__":
         try:
             if ns.id is not None:
                 row = _db_get_by_id(conn, ns.id)
-                row_id = ns.id
             else:
-                row = _db_get_by_name(conn, ns.name)
-                row_id = row["id"] if row else None
+                row = _resolve_name_or_die(conn, ns.name)
         finally:
             conn.close()
 
-        if row is None:
-            ref = f"id={ns.id}" if ns.id is not None else f"name={ns.name!r}"
-            _die(f"memory not found: {ref}")
+        if row is None:  # reachable only via --id (name path exits with suggestions)
+            _die(f"memory not found: id={ns.id}")
 
+        row_id = row["id"]
         if ns.html:
             print(get_html(row_id, db_path=db))
         else:
@@ -1483,17 +1715,12 @@ if __name__ == "__main__":
             elif ns.path is not None:
                 row = _db_get_by_path(conn, ns.path)
             else:
-                row = _db_get_by_name(conn, ns.name)
+                row = _resolve_name_or_die(conn, ns.name)
         finally:
             conn.close()
 
-        if row is None:
-            if ns.id is not None:
-                ref = f"id={ns.id}"
-            elif ns.path is not None:
-                ref = f"path={ns.path!r}"
-            else:
-                ref = f"name={ns.name!r}"
+        if row is None:  # reachable only via --id / --path
+            ref = f"id={ns.id}" if ns.id is not None else f"path={ns.path!r}"
             _die(f"memory not found: {ref}")
 
         row_id = row["id"]
@@ -1507,12 +1734,11 @@ if __name__ == "__main__":
             if ns.id is not None:
                 row = _db_get_by_id(conn, ns.id)
             else:
-                row = _db_get_by_name(conn, ns.name)
+                row = _resolve_name_or_die(conn, ns.name)
         finally:
             conn.close()
-        if row is None:
-            ref = f"id={ns.id}" if ns.id is not None else f"name={ns.name!r}"
-            _die(f"memory not found: {ref}")
+        if row is None:  # reachable only via --id
+            _die(f"memory not found: id={ns.id}")
 
         try:
             results = similar(row["id"], k=ns.k, tier=ns.tier, db_path=db)
@@ -1544,12 +1770,11 @@ if __name__ == "__main__":
             if ns.id is not None:
                 row = _db_get_by_id(conn, ns.id)
             else:
-                row = _db_get_by_name(conn, ns.name)
+                row = _resolve_name_or_die(conn, ns.name)
         finally:
             conn.close()
-        if row is None:
-            ref = f"id={ns.id}" if ns.id is not None else f"name={ns.name!r}"
-            _die(f"memory not found: {ref}")
+        if row is None:  # reachable only via --id
+            _die(f"memory not found: id={ns.id}")
 
         try:
             info = archive(row["id"], unarchive=ns.unarchive, db_path=db)
@@ -1569,12 +1794,11 @@ if __name__ == "__main__":
             if ns.id is not None:
                 row = _db_get_by_id(conn, ns.id)
             else:
-                row = _db_get_by_name(conn, ns.name)
+                row = _resolve_name_or_die(conn, ns.name)
         finally:
             conn.close()
-        if row is None:
-            ref = f"id={ns.id}" if ns.id is not None else f"name={ns.name!r}"
-            _die(f"memory not found: {ref}")
+        if row is None:  # reachable only via --id
+            _die(f"memory not found: id={ns.id}")
 
         try:
             info = retier(row["id"], ns.tier, db_path=db)
