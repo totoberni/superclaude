@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PY="$HOME/.claude/.venv/bin/python"
+DB_SCRIPT="$HOME/.claude/scripts/memory/memory_db.py"
+
+sub="${1:-}"
+
+case "$sub" in
+    search)
+        shift
+        # query stays positional, remaining flags pass through unchanged
+        set -- search "$@"
+        ;;
+    get)
+        shift
+        name="${1:-}"
+        shift || true
+        # auto-insert --name before the slug, keep any trailing flags
+        set -- get --name "$name" "$@"
+        ;;
+    similar)
+        shift
+        name="${1:-}"
+        shift || true
+        # auto-insert --name before the slug, keep any trailing flags
+        set -- similar --name "$name" "$@"
+        ;;
+    list)
+        # plain passthrough, same shape as memory_db.py's own list subcommand
+        set -- "$@"
+        ;;
+    *)
+        # unrecognized (or no) subcommand, pass everything through verbatim
+        set -- "$@"
+        ;;
+esac
+
+exec env HF_HUB_OFFLINE=1 "$PY" "$DB_SCRIPT" "$@"
