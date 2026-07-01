@@ -15,7 +15,7 @@
   agents/                          # Specialist agents (+ _ephemeral/, _pending_promotion/, _archive/)
   comms/                           # Meta <> Orch(s) communication bus
   plans/                           # Cross-project orchestration
-  agent-memory/                    # 3-tier memory matrix
+  agent-memory/                    # Hybrid-search memory DB (.memory.db)
   skills/                          # Slash commands and agent-loaded skills
   docs/                            # This guide + manifests + hcom-design.md
   upstream/                        # Curated external references
@@ -100,7 +100,7 @@ Aggregate distribution if fully adopted: ~5% haiku / ~70% sonnet / ~25% opus.
 
 For one-off tasks where no permanent `w-*` fits, `/autocommission "<task>"` writes a temporary `w-X.md` to `~/.claude/agents/_ephemeral/`, spawns it, and auto-cleans the file when the task finishes. Authority: meta + orch only.
 
-If an autocommissioned pattern recurs >=3 times across sessions (tracked in `shared/global/ltm.md`), `/promote` drafts a permanent `w-*.md` candidate to `~/.claude/agents/_pending_promotion/` for Meta review.
+If an autocommissioned pattern recurs >=3 times across sessions (tracked in the `shared-global` memory tier), `/promote` drafts a permanent `w-*.md` candidate to `~/.claude/agents/_pending_promotion/` for Meta review.
 
 ### Hierarchy + Write Scopes
 
@@ -125,8 +125,8 @@ maxTurns: 200
 You are **o-<project>-<seq>**, a named orchestrator instance.
 
 - **Comms**: `~/.claude/comms/o-<project>-<seq>/`
-- **Memory**: `~/.claude/agent-memory/instance/o-<project>-<seq>/MEMORY.md`
-- **Gotchas**: `~/.claude/agent-memory/shared/projects/<project>.md`
+- **Memory**: your `instance/o-<project>-<seq>` tier in the memory DB (`~/.claude/agent-memory/.memory.db`)
+- **Gotchas**: the `shared-projects` tier (query `memory_db.py search "<project> gotchas"`)
 
 **Startup**: Memory -> `~/.claude/agents/orch.md` (full protocol) -> bootstrap -> plan/state -> gotchas -> execute directive.
 ```
@@ -143,7 +143,7 @@ You are **o-<project>-<seq>**, a named orchestrator instance.
 | `/autocommission` | Spawn ephemeral `w-*` worker for one-off task; auto-cleanup on done |
 | `/swarm-dispatch` | Launch parallel `w-*` worker batch using W-1/W-4/W-7/W-11 patterns |
 | `/topology-producer-reviewer` | Producer-Reviewer dyad: pair worker output with reviewer audit (FG or BG) |
-| `/promote` | Scan `ltm.md` for >=3-occurrence autocommission patterns; draft permanent `w-*.md` |
+| `/promote` | Scan the `shared-global` tier for >=3-occurrence autocommission patterns; draft permanent `w-*.md` |
 | `/swarm-status` | Live snapshot of in-flight workers, BG reviewer queue, ephemeral agents |
 
 ### Orchestration (7)
@@ -157,7 +157,7 @@ You are **o-<project>-<seq>**, a named orchestrator instance.
 | `/lt-mem` | Mutator: consolidate, promote, archive, compact, sanitize |
 | `/mem-health` | Score memory matrix /100 (6 criteria + v3 trigger checks) |
 | `/memory-prune` | Advisory scan for stale or broken entries |
-| `/mem-index` | Auto-regen `MEMORY.md` index files from filenames + first-line titles |
+| `/mem-index` | Browse the memory DB: list entries by tier/type, show DB stats |
 | `/memory-search` | Search across all agent memory files |
 | `/remember` | Meta context save/load (cheaper than compaction) |
 | `/good-idea` | Promote a session win to project gotchas |
@@ -198,17 +198,16 @@ Shared scanner: `~/.claude/scripts/scan-mem-matrix.sh`.
 
 ## Memory Matrix
 
-3-tier persistent memory. Details: `~/.claude/docs/memory-matrix.md`. Canonical load order: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order.
+DB-backed persistent memory: a hybrid-search SQLite store at `~/.claude/agent-memory/.memory.db` (FTS5 + vec0). No `MEMORY.md`, `ltm.md`, `mtm.md`, or line budgets. Structure detail: `~/.claude/docs/memory-matrix.md`. Access protocol: `~/.claude/rules/12-agent-hierarchy.md` § Memory Access.
 
-| Row | Scope | Path | Budget |
-|-----|-------|------|--------|
-| Shared | Cross-agent | `shared/global/ltm.md`, `shared/projects/<proj>.md` | 60 lines each |
-| Class | Per agent type | `class/<class>/mtm.md` | 40 lines |
-| Instance | Per agent | `instance/<name>/MEMORY.md` | 80/40/30 lines |
+| Tier | Scope |
+|------|-------|
+| `instance/<agent>` | A single agent's own memory |
+| `shared-projects` | One project, all agents |
+| `shared-global` | Cross-project, all agents |
+| `class` | One agent class |
 
-All paths relative to `~/.claude/agent-memory/`. Root symlinks provide shorthand access (e.g., `agent-memory/meta/` -> `instance/meta/`).
-
-Mutations go through `/lt-mem`. Health checks via `/mem-health`. Index regeneration via `/mem-index`.
+Types: `feedback`, `project`, `reference`, `user`. Query via `memory_db.py search|get|similar|list` or the `~/.claude/bin/mem` shorthand. Write only through `/remember`, `/good-idea`, `/lt-mem`, `/mistake`; never hand-edit the DB.
 
 ---
 
@@ -219,7 +218,7 @@ Mutations go through `/lt-mem`. Health checks via `/mem-health`. Index regenerat
 | `00-universal.md` | Read before edit; minimal changes; git discipline; stop conditions |
 | `05-coding-standards.md` | Language-specific standards (path-scoped) |
 | `10-orchestrator-protocol.md` | Plan/state protocol (in-project + superclaude) |
-| `12-agent-hierarchy.md` | Meta/Orch/Worker hierarchy; write scopes; comms; Memory Load Order SOT |
+| `12-agent-hierarchy.md` | Meta/Orch/Worker hierarchy; write scopes; comms; Memory Access SOT |
 | `13-worker-first-mandate.md` | Swarm-first defaults; decision boundary; SOT model x effort x thinking matrix |
 | `15-programming-principles.md` | DRY, KISS, separation of concerns, defensive design |
 | `20-tool-conventions.md` | Universal tool patterns (git -C, parallel batches, merge conflicts, worktrees) |

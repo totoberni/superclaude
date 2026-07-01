@@ -55,8 +55,8 @@ claude --agent o-<name>      # Named orch instance (project-specific thin alias)
 | **Skills** | `skills/` | 30 slash commands — user-invocable or preloaded into agents |
 | **Comms** | `comms/` | Structured message bus: directives (meta->orch), reports (orch->meta), escalations |
 | **Hooks** | `hooks/` | Session timer (35/40/48 min), pre-compaction snapshots, cleanup |
-| **Memory** | `agent-memory/` | Hybrid FTS5 + sqlite-vec SQLite store — shared project gotchas, per-agent instance context, wins. Self-maintains via `/lt-mem` (`memory_db.py compact` = FTS-optimize + vec-rebuild + VACUUM) |
-| **Memory search** | `scripts/memory/memory_db.py` | Hybrid retrieval uses an asymmetric bge-small query-instruction prefix (queries only, passages stay bare), a widened per-arm candidate pool before fusion, RRF rank fusion (k=30, equal FTS/vector weight), and multi-query union (several phrasings, one call). `get`/`similar`/prune/archive/retier resolve `--name` through a ladder (exact, path-stem slug, case-insensitive, unique prefix, FTS fallback, then a "did you mean" list) instead of guessing on an ambiguous match. A Tier 2 follow-up (field-split embeddings, local cross-encoder reranker, one-time re-embed) is pending owner approval |
+| **Memory** | `agent-memory/` | Hybrid FTS5 + sqlite-vec SQLite store: shared project gotchas, per-agent instance context, wins. Self-maintains via `/lt-mem` (`memory_db.py compact` = FTS-optimize + vec-rebuild + VACUUM) |
+| **Memory search** | `scripts/memory/memory_db.py` | Hybrid FTS5 + vector retrieval (query-instruction prefix, widened candidate pool, RRF fusion, multi-query union) with a `--name` resolution ladder that refuses ambiguous guesses. Full protocol, search discipline, and get-ladder detail: `rules/12 § Memory Access` |
 
 ## Key Scripts
 

@@ -45,7 +45,7 @@ If resuming after compaction, also check `~/.claude/agent-memory/_compact-snapsh
 
 ## Memory Access
 
-Persistent memory lives in `~/.claude/agent-memory/.memory.db` (hybrid FTS5 + vector). Your slice is injected at session start; query the DB for deeper recall; write via the memory skills (/remember, /good-idea, /lt-mem, /mistake). See `rules/12 § Memory Access` for tier reference (`instance/<your-name>`, `shared-projects`, `shared-global`, `class`).
+Persistent memory lives in `~/.claude/agent-memory/.memory.db` (hybrid FTS5 + vector). Your slice is injected at session start; query the DB proactively for deeper recall (shorthand: `~/.claude/bin/mem search|get|similar|list`); write via the memory skills (/remember, /good-idea, /lt-mem, /mistake). See `rules/12 § Memory Access` for the mandatory search discipline, the get-by-name resolution ladder, and the tiers (`instance/<your-name>`, `shared-projects`, `shared-global`, `class`).
 
 ## Authority
 

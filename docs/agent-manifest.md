@@ -40,7 +40,7 @@ Currently empty between sessions — files exist only while their commission is 
 
 ## Pending Promotion Candidates (`agents/_pending_promotion/`)
 
-When `/promote` finds an autocommission pattern that has recurred >=3 times in `shared/global/ltm.md`, it drafts a permanent `w-*.md` candidate here for Meta review. Promotion to `agents/` requires explicit Meta approval per R-4 (`~/.claude/rules/40-swarm-quality-gates.md`).
+When `/promote` finds an autocommission pattern that has recurred >=3 times (tracked in the `shared-global` memory tier), it drafts a permanent `w-*.md` candidate here for Meta review. Promotion to `agents/` requires explicit Meta approval per R-4 (`~/.claude/rules/40-swarm-quality-gates.md`).
 
 ## Archived (`agents/_archive/`)
 
@@ -127,13 +127,16 @@ When `/promote` finds an autocommission pattern that has recurred >=3 times in `
 
 ## Memory Matrix
 
-| Row | Cell Count | Path Pattern |
-|-----|-----------|-------------|
-| Shared | 1 global + N projects | `shared/global/ltm.md`, `shared/projects/*.md` |
-| Class | `class/{meta,orch,scaf,w-debugger,w-reviewer}/mtm.md` | per agent class |
-| Instance | per active agent | `instance/<name>/MEMORY.md` |
+Hybrid-search SQLite DB at `~/.claude/agent-memory/.memory.db` (FTS5 + vec0). No `MEMORY.md`, `ltm.md`, or `mtm.md`. Every row carries a tier and a type.
 
-Canonical Memory Load Order: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order. Mutations through `/lt-mem`. Health via `/mem-health`. Index regen via `/mem-index`. Shared scanner: `~/.claude/scripts/scan-mem-matrix.sh`.
+| Tier | Scope |
+|------|-------|
+| `instance/<agent>` | A single agent's own memory |
+| `shared-projects` | One project, all agents |
+| `shared-global` | Cross-project, all agents |
+| `class` | One agent class |
+
+Types: `feedback`, `project`, `reference`, `user`. Query via `memory_db.py search|get|similar|list` (or `~/.claude/bin/mem`); write via `/remember`, `/good-idea`, `/lt-mem`, `/mistake`. Structure detail: `~/.claude/docs/memory-matrix.md`. Access protocol: `~/.claude/rules/12-agent-hierarchy.md` § Memory Access.
 
 ## Naming Convention
 

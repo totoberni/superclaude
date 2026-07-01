@@ -1,111 +1,78 @@
 # Memory Matrix
 
-3-tier memory system for superclaude agents.
+DB-backed memory model for superclaude agents. Persistent memory is a single hybrid-search SQLite store at `~/.claude/agent-memory/.memory.db` (FTS5 lexical + sqlite-vec vector embeddings). There is no `MEMORY.md`, `ltm.md`, or `mtm.md`, and no per-file line budgets.
 
-Canonical load order for ALL spawn-capable agents: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order. Don't restate it here — link.
-
-## Matrix Structure
-
-```
-                    Global                  Per-Project
-                +-----------------------+------------------------+
-  Shared        | shared/global/ltm.md  | shared/projects/*.md   |
-  (Tier 1)      | 60 lines max          | 60 lines max each      |
-                +-----------------------+------------------------+
-  Class         | class/<class>/mtm.md  | (v3: class/projects/)  |
-  (Tier 2)      | 40 lines max          | 30 lines max each      |
-                +-----------------------+------------------------+
-  Instance      | instance/<name>/MEMORY.md                      |
-  (Tier 3)      | meta: 80 / orch: 40 / other: 30 lines max     |
-                +------------------------------------------------+
-```
+This file is the STRUCTURE reference: tiers, types, placement, and re-tiering. For the ACCESS PROTOCOL (search discipline, the get-by-name resolution ladder, hybrid-search mechanics), see the canonical SOT, `~/.claude/rules/12-agent-hierarchy.md` § Memory Access. Don't restate it here; link.
 
 ## Tiers
 
-| Tier | Path | Purpose | Lifespan |
-|------|------|---------|----------|
-| Shared | `shared/global/ltm.md` | Cross-project, cross-agent knowledge | Permanent |
-| Shared | `shared/projects/<project>.md` | Project-specific knowledge for all agents | Project lifetime |
-| Class | `class/<class>/mtm.md` | Agent-class patterns (orch, meta, scaf, w-debugger, w-reviewer, etc.) | Medium-term |
-| Instance | `instance/<name>/MEMORY.md` | Per-session recovery, agent-specific state | Session lifetime |
+Every row carries a tier. Choose it with the Placement Rule below.
 
-## Memory Skills
+| Tier | Scope | Holds |
+|------|-------|-------|
+| `instance/<agent>` | A single agent's own memory | Session recovery, agent-specific state |
+| `shared-projects` | One project, all agents | Project gotchas, wins, decisions |
+| `shared-global` | Cross-project, all agents | Cross-project lessons, tool patterns |
+| `class` | One agent class | Agent-class patterns (orch, meta, w-debugger, etc.) |
 
-Three active skills, one shared scanner. Mutators and queries are now consolidated.
+## Types
 
-| Skill | Role | Replaces |
-|-------|------|----------|
-| `/lt-mem` | Mutator: consolidate, promote, archive, compact to budgets, sanitize refs | -- |
-| `/mem-health` | Score memory matrix /100 (6 criteria + v3 trigger checks) | -- |
-| `/memory-prune` | Advisory scan for stale / broken entries (no mutation) | -- |
-| `/mem-index` | Auto-regen `MEMORY.md` index files from filenames + first-line titles | -- |
+Every row also carries a type.
 
-All four skills share `~/.claude/scripts/scan-mem-matrix.sh` for matrix LOC + budget reporting (single source of truth — no skill reimplements scanning logic).
-
-Other memory-adjacent skills (not mutators of the matrix itself): `/good-idea`, `/mistake`, `/memory-search`, `/remember`.
+| Type | Captures |
+|------|----------|
+| `feedback` | How to approach work: corrections and validated approaches |
+| `project` | Ongoing work, goals, incidents, and decisions within a project |
+| `reference` | Pointers to where information lives in external systems |
+| `user` | The user's role, goals, preferences, and knowledge |
 
 ## Placement Rule
 
-Place knowledge at the **most specific level that covers all consumers**:
+Place a memory at the most specific tier that covers all its consumers:
 
-1. Only one agent class uses it? -> `class/<class>/mtm.md`
-2. Multiple classes but one project? -> `shared/projects/<project>.md`
-3. All agents, all projects? -> `shared/global/ltm.md`
-4. Current session only? -> `instance/<name>/MEMORY.md`
+1. Only one agent uses it? -> `instance/<agent>`
+2. One agent class? -> `class`
+3. Multiple agents but one project? -> `shared-projects`
+4. All agents, all projects? -> `shared-global`
 
-## Access Control
+## Access
 
-| Agent | shared/global | shared/projects | Own class/ | Other class/ | Own instance/ |
-|-------|:---:|:---:|:---:|:---:|:---:|
-| Meta | R/W | R/W | R/W | **R** | R/W |
-| Scaf | R/W | R/W | R/W | **R** | R/W |
-| Orch | R | R/W | R/W | -- | R/W |
-| Workers | R | R | R | -- | -- |
+- **Query**: `memory_db.py search | get | similar | list`, or the `~/.claude/bin/mem` shorthand (`mem search|get|similar|list`). Search discipline and the get-by-name resolution ladder live in rules/12 § Memory Access, not here.
+- **Write**: only through the memory skills, never by hand-editing the DB or any `.md` file.
 
-**Orch max read set**: shared/global/ltm.md + shared/projects/<project>.md + class/orch/mtm.md + own instance MEMORY.md = **4 files** (+ project gotchas = 5 max).
+  | Skill | Role |
+  |-------|------|
+  | `/remember` | Save or load context, cheaper than compaction |
+  | `/good-idea` | Record an effective solution or pattern for reuse |
+  | `/mistake` | Record a mistake; promote recurring ones to prevention rules |
+  | `/lt-mem` | Consolidate: re-tier mature entries, prune stale, merge near-dups |
 
-## Archive Directories
+- **Inspect and maintain**: `/mem-health` (score DB health /100), `/memory-prune` (advisory stale/broken scan), `/mem-similar` (find near-duplicates), `/mem-index` (browse the DB by tier/type, show stats).
 
-Each memory cell has an `archive/` subdirectory:
+## Re-tiering and Archival
 
-- `shared/global/archive/` — archived global entries
-- `class/<class>/archive/` — archived class entries
+Memories move in place, preserving the row and its embedding (no re-embed, no duplicate, reversible):
 
-**Purpose**: tombstones for deleted/resolved entries, reference for solved problems. Entries move to archive when they're no longer actively relevant but may be useful for context on past decisions.
+| Operation | Effect |
+|-----------|--------|
+| `memory_db.py retier --tier <t>` | Deliberately move a row to a target tier |
+| `memory_db.py archive` | Move a row to the `archive` tier: excluded from default search and recall, still queryable via `--all` or `--tier archive`, reversible with `--unarchive` |
+| `memory_db.py prune` | Delete a row plus its FTS and vector entries |
 
-**Archive format**: `YYYY-MM-DD-<slug>.md` with original content + resolution note.
+Archival replaces the old per-cell `archive/` subdirectories: an archived row is kept for context on past decisions, not deleted.
 
 ## System Files
 
 ```
-_system/
-  _compact-snapshots/    # Auto-snapshots before context compaction
-  _archive/              # Legacy archive (pre-matrix)
+agent-memory/
+  .memory.db                    # canonical hybrid-search store (FTS5 + vec0)
+  _system/_compact-snapshots/   # state snapshots taken before context compaction
+  _system/_stop-snapshots/      # state snapshots taken on stop events
 ```
-
-## Line Budgets
-
-| Cell | Max Lines | Action When Exceeded |
-|------|-----------|---------------------|
-| `shared/global/ltm.md` | 60 | Archive least-referenced entries |
-| `shared/projects/<project>.md` | 60 | Archive resolved gotchas/old wins |
-| `class/<class>/mtm.md` | 40 | v3 trigger: split to class/projects/ tier |
-| `instance/<name>/MEMORY.md` (meta) | 80 | Compact: promote durable knowledge to class/ |
-| `instance/<name>/MEMORY.md` (orch) | 40 | Compact: promote to class/ or shared/ |
-| `instance/<name>/MEMORY.md` (other) | 30 | Compact: promote to class/ |
-
-## v3 Expansion Path
-
-When v3 triggers fire (see `shared/projects/superclaude.md`):
-
-1. **Class mtm.md > 40 lines** -> split into `class/<class>/projects/<project>.md` (30-line budget each)
-2. **Corpus > 2,000 lines** -> `/lt-mem` handles automated archival (already active)
-3. **3+ class cells > 30 lines** -> standalone manifest files per agent
-4. **Cross-cell duplication > 10%** -> `/lt-mem` promotion logic deduplicates
 
 ## Cross-References
 
-- Canonical load order: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order
-- Worker memory inheritance rule: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order, Note
+- Access protocol (canonical SOT): `~/.claude/rules/12-agent-hierarchy.md` § Memory Access
+- Worker memory inheritance: same section (subagents get no SessionStart slice, so they rely on proactive recall)
 - Programming principles governing memory writes: `~/.claude/rules/15-programming-principles.md`
 - Context lifecycle and self-compact protocol: `~/.claude/rules/25-context-management.md`

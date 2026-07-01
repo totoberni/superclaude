@@ -106,6 +106,6 @@ The tiered memory architecture is unchanged; tiers are now DB columns, not direc
 
 ## Cross-References
 
-- Memory load order: `~/.claude/rules/12-agent-hierarchy.md` § Memory Load Order
+- Memory access protocol: `~/.claude/rules/12-agent-hierarchy.md` § Memory Access
 - Memory hygiene: `/mem-health`, `/memory-prune`, `/lt-mem`
 - Search: `/memory-search` (keyword + semantic queries against the same DB)
