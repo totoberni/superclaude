@@ -698,6 +698,14 @@ score_subsystems() {
     [ -f "$f" ] && "$PYTHON" -m py_compile "$f" >/dev/null 2>&1 && ok=1
     ss_award "$w" "$ok" "$lbl"
   }
+  # ss_bashcheck <weight> <label> <file>  → deep-only `bash -n` syntax gate.
+  ss_bashcheck() {
+    local w="$1" lbl="$2" f="$3"
+    [ "$deep" -eq 1 ] || return 0
+    local ok=0
+    [ -f "$f" ] && bash -n "$f" >/dev/null 2>&1 && ok=1
+    ss_award "$w" "$ok" "$lbl"
+  }
   # ss_json_keys <weight> <label> <file> <key...>  → valid JSON with every key.
   # READ-ONLY: parses, never writes. Missing file / bad JSON / missing key → FAIL.
   ss_json_keys() {
@@ -883,6 +891,15 @@ PY
     ss_award 6 "$hyg_ok" script-hygiene
     detail="$detail script-hygiene:${sh_bad}-baked/${sh_total}"
   fi
+
+  # 11. automations-health (toto automation-layer probe). Registered
+  #     STRUCTURALLY only — super-health stays local + fast; the remote
+  #     probe itself (scp+ssh to toto) is NEVER run from inside super-health.
+  #     See `automations-health.sh --help` for the standalone probe, which is
+  #     the basis for the future W7 watchdog (pages abe-alerts on toto
+  #     401/dark — not implemented here).
+  ss_exists 5 automations-health "$SC/automations-health.sh"
+  ss_bashcheck 2 automations-health-syntax "$SC/automations-health.sh"
 
   # ── Roll up. Guard PO>0 (always true: structural checks are tier-independent). ──
   local sc=0

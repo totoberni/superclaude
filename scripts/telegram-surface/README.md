@@ -1,4 +1,10 @@
-# Telegram factory surface v0
+# Telegram factory surface v0 — RETIRED 2026-07-02
+
+**RETIRED (superclaude-v4-wt W1, WT-4): replaced by self-hosted ntfy on toto behind
+Tailscale.** HG-F3 is moot: no token was ever created, the surface never went live.
+Kept in-tree as a pattern library only: AllowlistMiddleware (sender gate), fail-closed
+env loading, and the read-only SQLite surfacing in `surfaces.py` are reused by the ntfy
+dispatcher. Do not enable; do not create a bot token.
 
 Read-only remote visibility into the superclaude factory (plan superclaude-v4, F3).
 **OFF by default** — no token exists until owner clears HG-F3

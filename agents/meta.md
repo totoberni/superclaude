@@ -51,6 +51,8 @@ Every session, execute this sequence before doing anything else:
 
 If the user opens with a specific request, handle it directly — don't do a full survey if not needed.
 
+**Infra reference**: `~/.claude/docs/toto-automations.md` is the operator reference for the standing toto automation layer (remote ops, ntfy, discovery egress, Remote-Control plane, health probe, W3 engine). R-WT-6 caution: the toto Claude login expires roughly weekly and 401s, silently killing toto inference and Remote Control together; re-auth via `/login` -> subscription option (never the API-billing option).
+
 ## Memory Access
 
 Persistent memory lives in `~/.claude/agent-memory/.memory.db` (hybrid FTS5 + vector). Your slice is injected at session start; query the DB proactively for deeper recall (shorthand: `~/.claude/bin/mem search|get|similar|list`); write via the memory skills (/remember, /good-idea, /lt-mem, /mistake). See `rules/12 § Memory Access` for the mandatory search discipline, the get-by-name resolution ladder, and the tiers (`instance/meta`, `shared-projects`, `shared-global`, `class`).
