@@ -1,0 +1,27 @@
+# PhD instance (T2.2). Locked params: threshold 70, buffer 15,
+# topic abe-phd, id prefix phd- (plan 7.5/7.8, D7/D13).
+name: phd
+topic: abe-phd
+id_prefix: phd-
+threshold: 70
+buffer_size: 15
+terminal_state: pending_review
+ssot: academic.yaml
+
+scoring:
+  # Weights sum to 1.0. These academic axes are a DESIGN PLACEHOLDER: plan 7.3
+  # marks the per-automation axis functions as a later deliverable ("these do
+  # not exist yet and must be designed"). v1 implements the jobs axis set only;
+  # building a Scorer from this config before the phd axis functions land raises
+  # a clear error (engine/match.py). The locked thresholds/buffer/topic/prefix
+  # above are the W3 deliverable.
+  axes:
+    research_area_fit: 0.35
+    supervisor_fit: 0.20
+    funding_fit: 0.15
+    location_fit: 0.15
+    deadline_fit: 0.15
+
+# PhD applications are bespoke/high-touch: no automatable submit channel.
+channels:
+  automatable: []

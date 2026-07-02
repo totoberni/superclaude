@@ -1,0 +1,37 @@
+# Toy jobhunt SSOT for tests. Deliberately omits preferences.notice_period so
+# the park/resume round trip has a MISSING required field to trigger on.
+identity:
+  full_name: Abe Example
+  email: abe@example.com
+work_authorization: eu
+education:
+  degree: bsc_computer_science
+preferences:
+  roles:
+    - backend engineer
+    - machine learning engineer
+    - product engineer
+  skills:
+    - python
+    - typescript
+    - sqlite
+    - pytorch
+    - sql
+  seniority:
+    - mid
+    - senior
+  locations:
+    - london
+    - berlin
+    - remote
+    - eu
+  remote_ok: true
+  comp_floor: 60000
+  excludes:
+    - unpaid
+    - commission only
+  capabilities:
+    - work_authorization_eu
+    - degree_bsc
+  # notice_period is intentionally absent (MISSING) for the questionnaire test.
+canned_answers: {}

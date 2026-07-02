@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# rc-project: launch a named claude Remote-Control session in its own tmux session (v4-wt W2).
+# One RC per project, ALWAYS named (D-RC-1), each in its OWN directory (never same-dir:
+# session collisions). Usage: rc-project <name> <dir>
+set -euo pipefail
+[ $# -eq 2 ] || { echo "usage: rc-project <name> <dir>" >&2; exit 1; }
+name="$1"; dir="$2"
+[ -d "$dir" ] || { echo "rc-project: no such dir: $dir" >&2; exit 1; }
+
+CLAUDE_BIN="$(command -v claude || echo "$HOME/.local/bin/claude")"
+session="rc-$name"
+if tmux has-session -t "$session" 2>/dev/null; then
+  echo "rc-project: session $session already exists (attach: tmux attach -t $session)" >&2
+  exit 1
+fi
+tmux new-session -d -s "$session" -c "$dir" "$CLAUDE_BIN --remote-control $name"
+echo "started: tmux session $session, dir $dir, RC name $name"

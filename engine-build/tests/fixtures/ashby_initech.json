@@ -1,0 +1,48 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "f7e6d5c4-aaaa-bbbb-cccc-ddddeeeeffff",
+      "title": "Product Engineer",
+      "location": "Berlin, Germany",
+      "secondaryLocations": [
+        {
+          "location": "Remote - EU",
+          "address": {
+            "postalAddress": {
+              "addressLocality": "Remote",
+              "addressRegion": "",
+              "addressCountry": "EU"
+            }
+          }
+        }
+      ],
+      "department": "Engineering",
+      "team": "Platform",
+      "employmentType": "FullTime",
+      "isListed": true,
+      "isRemote": true,
+      "workplaceType": "Remote",
+      "publishedAt": "2026-06-21T08:00:00.000Z",
+      "updatedAt": "2026-06-22T08:00:00.000Z",
+      "jobUrl": "https://jobs.ashbyhq.com/initech/f7e6d5c4-aaaa-bbbb-cccc-ddddeeeeffff",
+      "applyUrl": "https://jobs.ashbyhq.com/initech/f7e6d5c4-aaaa-bbbb-cccc-ddddeeeeffff/application",
+      "compensation": { "compensationTierSummary": "EUR 70k - 90k" },
+      "descriptionPlain": "Full stack product work in TypeScript and Python. We use SQLite and React across the platform."
+    },
+    {
+      "id": "00000000-dead-beef-0000-000000000000",
+      "title": "Unlisted Draft Role",
+      "location": "Nowhere",
+      "secondaryLocations": [],
+      "employmentType": "FullTime",
+      "isListed": false,
+      "isRemote": false,
+      "workplaceType": "Onsite",
+      "publishedAt": "2026-06-01T08:00:00.000Z",
+      "updatedAt": "2026-06-01T08:00:00.000Z",
+      "jobUrl": "https://jobs.ashbyhq.com/initech/00000000-dead-beef-0000-000000000000",
+      "descriptionPlain": "This posting is not listed and must be dropped by the liveness filter."
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+# JobHunt instance (T2.1). Locked params: threshold 70, buffer 50,
+# topic abe-jobsearch, id prefix j- (plan 7.5/7.7, D6/D13).
+name: jobhunt
+topic: abe-jobsearch
+id_prefix: j-
+threshold: 70
+buffer_size: 50
+terminal_state: submitted
+ssot: job.yaml
+
+scoring:
+  # Weights sum to 1.0. The jobs axis set is implemented in engine/match.py.
+  axes:
+    role_fit: 0.30
+    skills_overlap: 0.30
+    seniority_fit: 0.10
+    location_fit: 0.15
+    comp_fit: 0.10
+    exclusions: 0.05
+
+# ATS pre-check = show-and-warn (D5): a hard filter unmet by the profile
+# surfaces a warning, never hides the match. capability is checked against
+# preferences.capabilities in the SSOT.
+ats_rules:
+  - pattern: "security clearance|sc cleared|dv cleared"
+    capability: clearance
+  - pattern: "phd required|must hold a phd|phd is required"
+    capability: phd
+  - pattern: "must be a us citizen|us citizenship required"
+    capability: us_citizen
+
+# Apply-channel classification (7.7). Public, login-free destination ATS are
+# automatable (auto-fill + human-final); everything else is manual/copy-paste.
+channels:
+  automatable:
+    - ashby
+    - greenhouse
+    - lever

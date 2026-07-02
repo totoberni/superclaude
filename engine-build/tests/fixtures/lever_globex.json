@@ -1,0 +1,18 @@
+[
+  {
+    "id": "a1b2c3d4-1111-2222-3333-444455556666",
+    "text": "Machine Learning Engineer",
+    "categories": {
+      "team": "AI",
+      "location": "Remote - EU",
+      "commitment": "Full-time",
+      "department": "Engineering"
+    },
+    "createdAt": 1718884800000,
+    "updatedAt": 1719052800000,
+    "hostedUrl": "https://jobs.lever.co/globex/a1b2c3d4-1111-2222-3333-444455556666",
+    "applyUrl": "https://jobs.lever.co/globex/a1b2c3d4-1111-2222-3333-444455556666/apply",
+    "workplaceType": "remote",
+    "descriptionPlain": "Build machine learning systems in Python and PyTorch. Strong SQL skills wanted. You will ship models to production."
+  }
+]

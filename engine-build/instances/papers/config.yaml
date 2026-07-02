@@ -1,0 +1,22 @@
+# Papers instance (T2.3). Locked params: threshold 50, buffer 20,
+# topic abe-papers, id prefix p- (plan 7.5/7.9, D6/D13).
+name: papers
+topic: abe-papers
+id_prefix: p-
+threshold: 50
+buffer_size: 20
+terminal_state: pending_review
+ssot: academic.yaml
+
+scoring:
+  # Weights sum to 1.0. DESIGN PLACEHOLDER, same as phd: the papers axis
+  # functions are a later deliverable (plan 7.3). The locked threshold/buffer/
+  # topic/prefix above are the W3 deliverable.
+  axes:
+    topic_relevance: 0.60
+    recency: 0.20
+    venue_fit: 0.20
+
+# Pure newsletter: terminates at pending_review, no submit channel.
+channels:
+  automatable: []

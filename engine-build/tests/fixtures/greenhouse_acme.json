@@ -1,0 +1,29 @@
+{
+  "jobs": [
+    {
+      "id": 5501001,
+      "internal_job_id": 3001,
+      "title": "Senior Backend Engineer",
+      "updated_at": "2026-06-20T14:30:00-04:00",
+      "first_published": "2026-06-12T09:00:00-04:00",
+      "requisition_id": "REQ-1001",
+      "location": { "name": "London, UK" },
+      "absolute_url": "https://boards.greenhouse.io/acme/jobs/5501001",
+      "metadata": [],
+      "content": "&lt;p&gt;We are hiring a backend engineer with strong Python and SQLite experience. Remote-friendly within the EU. You will own data services end to end.&lt;/p&gt;"
+    },
+    {
+      "id": 5501002,
+      "internal_job_id": 3002,
+      "title": "Security Engineer",
+      "updated_at": "2026-06-19T09:00:00-04:00",
+      "first_published": "2026-06-10T09:00:00-04:00",
+      "requisition_id": "REQ-1002",
+      "location": { "name": "London, UK" },
+      "absolute_url": "https://boards.greenhouse.io/acme/jobs/5501002",
+      "metadata": [],
+      "content": "&lt;p&gt;This role requires active security clearance. Python is a plus but the clearance is mandatory.&lt;/p&gt;"
+    }
+  ],
+  "meta": { "total": 2 }
+}

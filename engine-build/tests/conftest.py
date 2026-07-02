@@ -1,0 +1,82 @@
+"""Shared test fixtures.
+
+Includes the no-network guard mandated by the W3 gate: sockets are blocked for
+every test, so any accidental live call (ntfy publish, ATS fetch) fails loudly
+instead of reaching the network. Discovery and the store are fixture-fed and
+file-based, so nothing legitimate needs a socket.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import socket
+from pathlib import Path
+
+import pytest
+
+from engine.config import load_config
+from engine.store import Store
+
+ROOT = Path(__file__).parents[1]
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Block all socket creation for the duration of every test (W3 gate)."""
+    def _blocked(*args, **kwargs):
+        raise RuntimeError("network access is blocked in tests (no-network fixture)")
+
+    monkeypatch.setattr(socket, "socket", _blocked)
+    monkeypatch.setattr(socket, "create_connection", _blocked)
+    yield
+
+
+def load_fixture_json(name: str):
+    return json.loads((FIXTURES / name).read_text())
+
+
+@pytest.fixture
+def jobhunt_config():
+    return load_config(ROOT / "instances" / "jobhunt" / "config.yaml")
+
+
+@pytest.fixture
+def phd_config():
+    return load_config(ROOT / "instances" / "phd" / "config.yaml")
+
+
+@pytest.fixture
+def papers_config():
+    return load_config(ROOT / "instances" / "papers" / "config.yaml")
+
+
+@pytest.fixture
+def store(tmp_path):
+    s = Store(tmp_path / "store.db")
+    yield s
+    s.close()
+
+
+@pytest.fixture
+def job_ssot_path(tmp_path):
+    """A writable copy of the toy job SSOT (questionnaire writes back to it)."""
+    dest = tmp_path / "job.yaml"
+    shutil.copy(FIXTURES / "job.yaml", dest)
+    return dest
+
+
+@pytest.fixture
+def greenhouse_raw():
+    return load_fixture_json("greenhouse_acme.json")
+
+
+@pytest.fixture
+def lever_raw():
+    return load_fixture_json("lever_globex.json")
+
+
+@pytest.fixture
+def ashby_raw():
+    return load_fixture_json("ashby_initech.json")

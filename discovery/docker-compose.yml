@@ -1,0 +1,58 @@
+# Discovery egress stack (superclaude v4-wt W1; D3 discovery-only VPN masking).
+# gluetun (NordVPN, WireGuard/NordLynx) + a Playwright browser container whose ONLY
+# network path is gluetun's namespace. Fail-closed by construction: VPN down = the
+# browser has no egress. Host routing, Tailscale, ssh, ntfy are never touched.
+#
+# WireGuard chosen over OpenVPN (R-WT-8b research 2026-07-02): one static key, far
+# fewer AUTH_FAILED foot-guns, lower CPU on the headless box; gluetun auto-resolves
+# the endpoint + peer pubkey for the built-in nordvpn provider.
+#
+# Bring-up (after .env holds WIREGUARD_PRIVATE_KEY):
+#   cd ~/automations/discovery && docker compose up -d
+# Verify egress split:
+#   docker compose exec scraper-browser sh -c 'wget -qO- https://ifconfig.me'  # VPN IP
+#   curl -s https://ifconfig.me                                                 # home IP
+services:
+  gluetun:
+    # Pinned (research: WireGuard healthcheck regressions have shipped in point
+    # releases #3093/#3305; do not float :latest).
+    image: qmcgaw/gluetun:v3.41.0
+    container_name: discovery-gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      VPN_SERVICE_PROVIDER: nordvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY}
+      # Country filter, never a single SERVER_HOSTNAMES (breaks when the host
+      # rotates out of the pool). gluetun fills endpoint IP/port/pubkey itself.
+      SERVER_COUNTRIES: ${SERVER_COUNTRIES:-Netherlands}
+      # DNS-over-TLS on for privacy. If DNS flaps post-connect (gluetun #3104),
+      # set DOT=off and DNS_ADDRESS to a working resolver.
+      DOT: "on"
+    ports:
+      - "127.0.0.1:9222:9222"
+    restart: unless-stopped
+
+  scraper-browser:
+    image: mcr.microsoft.com/playwright:v1.56.1-noble
+    container_name: discovery-browser
+    command: npx -y playwright@1.56.1 run-server --port 9222 --host 0.0.0.0
+    network_mode: "service:gluetun"
+    shm_size: 2gb
+    mem_limit: 3g
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: unless-stopped
+# Note (gluetun #3285): restarting gluetun orphans this container's network
+# interface. If you ever `docker compose restart gluetun`, also restart
+# scraper-browser. Normal `up -d` / `down` is unaffected.
+#
+# OpenVPN fallback (only if a NordLynx key is ever rejected): set
+#   VPN_TYPE: openvpn
+#   OPENVPN_USER: ${NORD_SVC_USER}
+#   OPENVPN_PASSWORD: ${NORD_SVC_PASS}
+# using the Service-credentials tab (NOT your account email/password).

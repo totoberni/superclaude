@@ -1,0 +1,24 @@
+# Toy academic SSOT for tests. Shared by the phd and papers instances. Only used
+# to exercise config loading and SSOT MISSING-detection; the phd/papers axis
+# functions are a later deliverable (plan 7.3), so no scorer runs against it yet.
+identity:
+  full_name: Abe Example
+  orcid: 0000-0000-0000-0000
+research_interests:
+  - reinforcement learning
+  - multi-agent systems
+  - probabilistic modelling
+target_fields:
+  - machine learning
+  - computational neuroscience
+qualifications:
+  degree: bsc_computer_science
+target_qualifications:
+  - maths gre >= 90th percentile
+  - a publication at a top venue
+phd_preferences:
+  locations:
+    - uk
+    - eu
+  funding_required: true
+  # supervisor_shortlist intentionally absent (MISSING) for refinement tests.

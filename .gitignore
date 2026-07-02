@@ -1,0 +1,28 @@
+# ~/automations — the `automations` branch of superclaude. CODE ONLY.
+# Everything sensitive/runtime lives on toto and NEVER travels (WT-2/WT-3).
+
+# SSOT identikits + document locker + living docs + career archive (PII, toto-only)
+ssot/
+documents/
+docs/
+career-archive/
+
+# Secrets + runtime data
+.env
+*.env
+!*.env.example
+ntfy/credentials
+ntfy/inbox.jsonl
+discovery/pull.log
+*.age
+*.db
+*.db-wal
+*.db-shm
+
+# Local envs + caches + stray project dirs
+.venv/
+**/__pycache__/
+*.pyc
+**/.pytest_cache/
+**/.claude/
+*.log
