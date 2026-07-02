@@ -28,10 +28,10 @@ Load-bearing gotchas, not covered there:
 
 ## ntfy
 
-Self-hosted `ntfysh-bin` on toto, bound to `100.64.0.0:2586`. Tailnet-only; the base URL is a raw IP because MagicDNS is broken on toto (not a hostname you can swap in later without checking).
+Self-hosted `ntfysh-bin` on toto, bound to toto's Tailscale IP on the ntfy port (both live in the gitignored `config/toto.env`; see `config/toto.env.example`). Tailnet-only; the base URL is a raw IP because MagicDNS is broken on toto (not a hostname you can swap in later without checking).
 
 - **Units**: `ntfy.service` (root, system-level server; check with `systemctl is-active ntfy.service`, no sudo needed to read status) and `ntfy-listener.service` (toto user, runs `ntfy subscribe --from-config` against the four topics below, writes to `~/automations/ntfy/inbox.jsonl`, acks on `abe-alerts`).
-- **Health**: `curl -s http://100.64.0.0:2586/v1/health` returns `{"healthy":true}`.
+- **Health**: `curl -s http://$TOTO_TAILSCALE_IP:$NTFY_PORT/v1/health` (values from `config/toto.env`) returns `{"healthy":true}`.
 - **Topics** (four separate subscriptions, each with a message-ID prefix):
 
   | Topic | Prefix |
@@ -79,7 +79,7 @@ The toto Claude login expires roughly weekly and 401s, which silently kills **bo
 
 ## W3 Engine
 
-Built at WSL `~/projects/cash/automations-engine-build/` (not yet a git repo); deployed to toto `~/automations/engine-build/`. Runtime venv on toto is `~/automations/.venv` (Python 3.14, pyyaml + pytest). Current build is fixtures-only (v1, no live network calls) with 54 passing tests on both machines.
+Developed on WSL at `~/automations/engine-build/` (home level, alongside `~/.claude`, never inside it); deployed to toto `~/automations/engine-build/`. The automation CODE (engine, `bin/rc-project`, `ntfy/`, `discovery/` compose) is version-controlled on the `automations` branch of the superclaude repo; SSOT, documents, `.env`, credentials, and runtime data are gitignored and never leave toto. Runtime venv on toto is `~/automations/.venv` (Python 3.14, pyyaml + pytest). Current build is fixtures-only (v1, no live network calls) with 54 passing tests on both machines.
 
 Run the suite on toto from the engine directory:
 

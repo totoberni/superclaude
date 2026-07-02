@@ -75,6 +75,16 @@ na_exit() {
   exit 0
 }
 
+# Machine-specific toto connection params (Tailscale IP + ntfy port) live in a
+# gitignored config, never hardcoded here (public repo). Absent config => cannot
+# probe => graceful N/A. See config/toto.env.example.
+TOTO_ENV="$CLAUDE/config/toto.env"
+[ -f "$TOTO_ENV" ] && . "$TOTO_ENV"
+TOTO_IP="${TOTO_TAILSCALE_IP:-}"
+NTFY_PORT="${NTFY_PORT:-2586}"
+[ -n "$TOTO_IP" ] || na_exit
+NTFY_HEALTH_URL="http://${TOTO_IP}:${NTFY_PORT}/v1/health"
+
 LOCAL_COLLECTOR=$(mktemp "${TMPDIR:-/tmp}/automations-collect.XXXXXX.sh") || na_exit
 cleanup() {
   rm -f "$LOCAL_COLLECTOR"
@@ -84,8 +94,12 @@ cleanup() {
 trap cleanup EXIT
 
 # ── Collector script (bash, runs ON toto) ──────────────────────────────────
-cat > "$LOCAL_COLLECTOR" <<'COLLECTOR'
-#!/bin/bash
+# The Tailscale IP:port comes from config (never hardcoded); inject it as a
+# variable line ahead of the quoted heredoc body (%q-quoted so it is safe).
+{
+  printf '#!/bin/bash\n'
+  printf 'NTFY_HEALTH_URL=%q\n' "$NTFY_HEALTH_URL"
+  cat <<'COLLECTOR'
 # automations-collect.sh — runs ON toto (bash, not fish). Read-only. Never
 # prints secrets. One "<key>=pass|fail" line per check.
 set -uo pipefail
@@ -94,7 +108,7 @@ ok()  { echo "$1=pass"; }
 bad() { echo "$1=fail"; }
 
 # 1. ntfy /v1/health
-if curl -s --max-time 5 http://100.64.0.0:2586/v1/health 2>/dev/null | grep -q '"healthy":true'; then
+if curl -s --max-time 5 "$NTFY_HEALTH_URL" 2>/dev/null | grep -q '"healthy":true'; then
   ok ntfy_health
 else
   bad ntfy_health
@@ -152,6 +166,7 @@ else
   bad engine_build_dir
 fi
 COLLECTOR
+} > "$LOCAL_COLLECTOR"
 chmod +x "$LOCAL_COLLECTOR"
 
 # ── Ship + run on toto ──────────────────────────────────────────────────────
