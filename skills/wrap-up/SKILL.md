@@ -1,6 +1,6 @@
 ---
 name: wrap-up
-description: "Post-directive bundle: RPT + /mistake + /good-idea + state"
+description: "Post-work bundle: record outcome + /mistake + /good-idea + state/recovery"
 category: workflow
 user-invocable: true
 disable-model-invocation: true
@@ -8,29 +8,35 @@ argument-hint: "<project>"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
-# /wrap-up — Post-Directive Bundle
+# /wrap-up: Post-Work Bundle
 
-Bundles the 4-step post-directive ceremony into one command. Prevents the failure mode where orchs write RPT but forget retrospectives.
+Bundles the 4-step post-work ceremony into one command. Prevents the failure mode where a runner finishes work but forgets retrospectives. Meta is the primary runner (v3); orch is a legacy branch used only for the rare multi-hour handoff.
 
 **Project**: $ARGUMENTS
 
 ## Procedure
 
-Execute steps in order (each depends on the previous):
+Execute steps in order (each depends on the previous).
 
-### Step 1: Write RPT
+### Step 1: Record the Outcome
 
-1. Read your `~/.claude/comms/<your-orch>/reports.md` to find next RPT number
-2. Summarize the directive outcome:
-   - What was the directive? (DIR ref + title)
-   - What was delivered? (files changed, tests, key decisions)
-   - What's the status? (DONE / PARTIAL / BLOCKED)
-   - Any follow-up needed?
-3. Write `## RPT-NNN` entry to `reports.md` with standard format:
+Branch by runner.
+
+**Meta (primary)**:
+1. Identify the plan: `~/.claude/plans/$ARGUMENTS/plan.md`
+2. Mark the relevant task(s)/section(s) DONE in `plan.md` (status field or checkbox, per the plan's existing convention)
+3. Re-render the human view: `~/.claude/.venv/bin/python ~/.claude/scripts/plan/render_plan.py ~/.claude/plans/$ARGUMENTS/plan.md`
+4. Note a 2-3 line outcome summary (what was delivered, DONE/PARTIAL/BLOCKED, follow-up) for reuse in Step 4's recovery snapshot
+5. Meta writes no `reports.md` entry; it has no comms directory of its own
+
+**Orch (legacy, rare)**:
+1. Read `~/.claude/comms/<your-orch>/reports.md` to find the next RPT number
+2. Summarize the directive outcome (DIR ref + title, what was delivered, status, follow-up)
+3. Write `## RPT-NNN` to `reports.md`:
    ```markdown
    ## RPT-NNN
    **Time**: <YYYY-MM-DD HH:MM>
-   **Directive**: DIR-NNN — <title>
+   **Directive**: DIR-NNN, <title>
    **Status**: DONE | PARTIAL | BLOCKED
    **Summary**: <2-3 lines>
    **Deliverables**: <list>
@@ -40,7 +46,9 @@ Execute steps in order (each depends on the previous):
 ### Step 2: Run /mistake
 
 Invoke the `/mistake` skill for `$ARGUMENTS`:
-- Review session for errors, retries, failed approaches
+- Review the session for errors, retries, failed approaches
+- Memory is DB-only: never hand-write a `.md` memory file
+- Search first (`memory_db.py search`) to check for an existing entry; prefer updating over adding a duplicate
 - **Primary**: upsert to the DB (`shared-projects` tier, `--agent $ARGUMENTS`)
 - **Dual-write**: class-applicable mistakes also go to DB `class` tier (see /mistake Step 0)
 - If no mistakes found, note "Clean session" and move on
@@ -48,33 +56,42 @@ Invoke the `/mistake` skill for `$ARGUMENTS`:
 ### Step 3: Run /good-idea
 
 Invoke the `/good-idea` skill for `$ARGUMENTS`:
-- Review session for wins, effective patterns, good decisions
+- Review the session for wins, effective patterns, good decisions
+- Memory is DB-only: never hand-write a `.md` memory file
+- Search first to check for an existing entry; prefer updating over adding a duplicate
 - **Primary**: upsert to the DB (`shared-projects` tier, `--agent $ARGUMENTS`)
 - **Dual-write**: class-applicable wins also go to DB `class` tier (see /good-idea Step 0)
 - If no notable wins, note "Standard execution" and move on
 
-### Step 4: Update State
+### Step 4: Update State / Recovery
 
+Branch by runner.
+
+**Meta (primary)**:
+1. Refresh the program-level recovery memory: search for the existing `meta-recovery-context` (or campaign-specific) slug, then `memory_db.py upsert --tier instance --type user --name <slug> ...` with the Step 1 outcome summary folded in (this is the `/remember --save` semantic, applied inline)
+2. Update the master `~/.claude/plans/$ARGUMENTS/state.md` only if no orchs are currently active on that plan; otherwise leave it, orchs own their own state files while running
+
+**Orch (legacy, rare)**:
 1. Read your state file (`~/.claude/plans/$ARGUMENTS/state-<your-orch>.md` or `state.md`)
-2. Mark completed tasks as DONE
-3. Update current phase/status
-4. Write changes
+2. Mark completed tasks DONE, update current phase/status, write changes
 
 ## Output
 
 After all 4 steps:
 ```
 ## Wrap-Up Complete
-- RPT: RPT-NNN written to reports.md
+- Outcome: plan.md tasks marked DONE + plan.html re-rendered (meta) | RPT-NNN written (orch)
 - Mistakes: <count> recorded (or "Clean session") + <count> dual-written to class
 - Wins: <count> recorded (or "Standard execution") + <count> dual-written to class
-- State: updated, <N> tasks marked DONE
+- State: recovery memory upserted (meta) | state-<X>.md updated, <N> tasks DONE (orch)
 ```
 
 ## Constraints
 
-- Execute steps sequentially — RPT must exist before retrospectives reference it
+- Execute steps sequentially: the outcome record must exist before retrospectives reference it
 - If any step fails, continue with remaining steps and note the failure
 - Dual-write is handled by /mistake and /good-idea (Step 0 class detection). No extra logic needed here
-- Class writes are layer 2 only — never write to the `shared-global` tier directly. Use `/lt-mem` for promotions to global.
-- After completing a multi-session campaign (3+ directives), consider running `/lt-mem --quick <project>` as a final consolidation step.
+- Class writes are layer 2 only, never write to the `shared-global` tier directly. Use `/lt-mem` for promotions to global
+- Never put PII in a memory body; keys, tokens, personal data belong nowhere in the DB
+- After completing a multi-session campaign (3+ directives), consider running `/lt-mem --quick <project>` as a final consolidation step
+</content>

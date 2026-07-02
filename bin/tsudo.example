@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# tsudo.example — TEMPLATE for the remote-root shortcut (agent-keyed sudo via pam_ssh_agent_auth).
+#
+# ADOPTION NOTES:
+#   1. Copy this file to bin/tsudo (tsudo is gitignored; only this .example ships in the public repo).
+#   2. Replace PEERHOST with your ~/.ssh/config host alias, PEERNAME with the peer's hostname
+#      (the guard that makes the same command degrade to plain sudo when run ON the peer),
+#      and KEYFILE with your private key path.
+#   3. Peer-side setup required: pam_ssh_agent_auth in /etc/pam.d/sudo +
+#      Defaults env_keep += "SSH_AUTH_SOCK" (see your infra notes).
+#   4. NEVER pass -n to the remote sudo: sudo -n bypasses pam_ssh_agent_auth.
+set -euo pipefail
+
+[ "$(hostname)" = "PEERNAME" ] && exec sudo "$@"
+
+[ $# -eq 0 ] && { echo "usage: tsudo <command...>" >&2; exit 1; }
+
+SOCK="$HOME/.ssh/agent.sock"
+if ! { [ -S "$SOCK" ] && SSH_AUTH_SOCK="$SOCK" ssh-add -l >/dev/null 2>&1; }; then
+  echo "tsudo: agent not ready. Fix: rm -f $SOCK; ssh-agent -a $SOCK; SSH_AUTH_SOCK=$SOCK ssh-add KEYFILE" >&2
+  exit 2
+fi
+
+exec timeout "${TSUDO_TIMEOUT:-300}" env SSH_AUTH_SOCK="$SOCK" ssh -A PEERHOST "sudo $*"

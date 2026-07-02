@@ -311,19 +311,53 @@ score_mem() {
     fi
   fi
 
-  # Apply the cap LAST, THEN subtract the corpus + capabilities penalties, flooring
-  # at 0. A broken search store is a hard ceiling (min); corpus bloat and a failed
-  # capability are graduated deductions below that ceiling.
-  # final_mem = max(0, min(mh_score, mdb_cap) - corpus_penalty - caps_penalty).
+  # --- Bin wrappers facet (existence + exec-bit only, tsudo/tsh ssh out, never invoked) ---
+  # `bin/mem` is the git-tracked memory shorthand (rules/12 § Memory Access); missing or
+  # non-executable is a real fault (penalized). `bin/tsudo` and `bin/tsh` are machine-local,
+  # gitignored LIVE copies of this box's ssh targets: their absence is expected on a fresh
+  # clone/checkout, so it's a WARN (informational, zero penalty). Their `.example`
+  # counterparts ARE git-tracked, so a missing `.example` is a real fault (penalized).
+  local binw_penalty=0 binw_detail="" BIN="$CLAUDE/bin"
+  if [ -x "$BIN/mem" ]; then
+    binw_detail="mem=ok"
+  else
+    binw_detail="mem=FAIL"
+    binw_penalty=$((binw_penalty + 2))
+  fi
+  local ex
+  for ex in tsudo.example tsh.example; do
+    if [ -f "$BIN/$ex" ]; then
+      binw_detail="$binw_detail, $ex=ok"
+    else
+      binw_detail="$binw_detail, $ex=FAIL"
+      binw_penalty=$((binw_penalty + 1))
+    fi
+  done
+  local live
+  for live in tsudo tsh; do
+    if [ -x "$BIN/$live" ]; then
+      binw_detail="$binw_detail, $live=ok"
+    else
+      binw_detail="$binw_detail, $live=WARN(absent, machine-local)"
+    fi
+  done
+  [ "$binw_penalty" -gt 4 ] && binw_penalty=4
+
+  # Apply the cap LAST, THEN subtract the corpus + capabilities + bin-wrappers
+  # penalties, flooring at 0. A broken search store is a hard ceiling (min); corpus
+  # bloat, a failed capability, and a missing tracked wrapper are graduated
+  # deductions below that ceiling.
+  # final_mem = max(0, min(mh_score, mdb_cap) - corpus_penalty - caps_penalty - binw_penalty).
   local final_mem=$mh_score
   [ "$final_mem" -gt "$mdb_cap" ] && final_mem=$mdb_cap
-  final_mem=$((final_mem - corpus_penalty - caps_penalty))
+  final_mem=$((final_mem - corpus_penalty - caps_penalty - binw_penalty))
   [ "$final_mem" -lt 0 ] && final_mem=0
 
   printf '%s\n' "$mh_out" | grep -v '^SCORE:'
   echo "Memory .memory.db facet: $mdb_detail (mem-health=$mh_score, cap=$mdb_cap)"
   echo "Memory corpus facet: $corpus_detail"
   echo "Memory capabilities facet: $caps_detail"
+  echo "Memory bin-wrappers facet: $binw_detail; penalty=-$binw_penalty"
   echo "SCORE: $final_mem/100"
 }
 

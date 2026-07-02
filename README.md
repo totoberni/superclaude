@@ -57,6 +57,7 @@ claude --agent o-<name>      # Named orch instance (project-specific thin alias)
 | **Hooks** | `hooks/` | Session timer (35/40/48 min), pre-compaction snapshots, cleanup |
 | **Memory** | `agent-memory/` | Hybrid FTS5 + sqlite-vec SQLite store: shared project gotchas, per-agent instance context, wins. Self-maintains via `/lt-mem` (`memory_db.py compact` = FTS-optimize + vec-rebuild + VACUUM) |
 | **Memory search** | `scripts/memory/memory_db.py` | Hybrid FTS5 + vector retrieval (query-instruction prefix, widened candidate pool, RRF fusion, multi-query union) with a `--name` resolution ladder that refuses ambiguous guesses. Full protocol, search discipline, and get-ladder detail: `rules/12 § Memory Access` |
+| **Two-machine git model** | git (`main`) | Single shared `main`, one machine is SOT and sole pusher, the peer is a pull-only mirror (`git fetch && git reset --hard origin/main`). Machine-local state (`plans/`, `agent-memory/`, live `bin/` wrappers) is gitignored and travels via sync tools, not git |
 
 ## Key Scripts
 
@@ -66,6 +67,7 @@ claude --agent o-<name>      # Named orch instance (project-specific thin alias)
 | `scripts/super-health.sh` | Weighted health score (0-100, letter grade) across 7 infrastructure components. `--quick` / `--standard` / `--deep` / `--complete` tiers. `--deep` also asserts the memory get-ladder, ambiguous-name refusal, and live hybrid top-k |
 | `scripts/mem-health.sh` | Memory DB health score (6 criteria, 100 pts). DB-aware: measures row size, FTS index cohesion, and embedding coverage |
 | `bin/mem` | Shorthand CLI over `memory_db.py`: `mem search "..." [-k N]`, `mem get "..."`, `mem similar "..."`, `mem list [--tier T]`. Drops the long invocation and the `HF_HUB_OFFLINE=1` prefix |
+| `bin/tsudo`, `bin/tsh` | Peer-machine root/exec shortcuts over an ssh-agent-keyed channel (`pam_ssh_agent_auth`). Live wrappers are machine-specific and gitignored; adopt via the `bin/*.example` templates (same convention as `scripts/cockpit/*.example`), replacing the `PEERHOST`/`PEERNAME`/`KEYFILE` placeholders |
 | `scripts/better-super-deps.sh` | Manage the `.venv` dependency set: `--pip-install` to refresh, `--export --out <file>` to dump a requirements file |
 | `scripts/cockpit/cockpit.{bash,fish}.example` | Optional shell shortcuts (templates): reconcile memory with a peer host, then open SSH. Copy to `cockpit.{bash,fish}` (gitignored), replace `PEER` with your SSH host alias, and source from your shell rc |
 

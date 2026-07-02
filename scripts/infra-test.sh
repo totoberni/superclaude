@@ -707,31 +707,41 @@ test_matrix() {
     pass "M1 root symlinks (none, OK)"
   fi
 
-  # M2: Inline load-order paths in agent definitions exist
+  # M2: Memory-section paths in agent definitions are live, not dead per-file references.
+  # v3 migrated from per-file `agent-memory/*.md` paths (old "Memory Load Order" section) to
+  # a DB-backed model ("Memory Access" section, see rules/12). Accept either header via a
+  # grouped regex so this check keeps working across both generations of agent definitions.
   local ALL_LOAD=true
   for agent in "$AGENT_DIR"/*.md; do
     [ -f "$agent" ] || continue
     [ -L "$agent" ] && continue
     local NAME
     NAME=$(basename "$agent" .md)
-    # Only check agents with Memory Load Order sections
-    if grep -q "## Memory Load Order" "$agent" 2>/dev/null; then
-      # Extract agent-memory paths from the load order section
-      local PATHS
-      PATHS=$(sed -n '/## Memory Load Order/,/^##/p' "$agent" 2>/dev/null | grep -oP '`agent-memory/[^`]+`' | tr -d '`')
+    if grep -qE '^## (Memory Load Order|Memory Access)$' "$agent" 2>/dev/null; then
+      # Extract the section body (up to the next section header)
+      local SECTION
+      SECTION=$(sed -n -E '/^## (Memory Load Order|Memory Access)$/,/^##[^#]/p' "$agent" 2>/dev/null)
+      # Dead-path check: legacy per-file `agent-memory/*.md` backtick references no longer
+      # exist under the v3 DB model, so any literal (non-placeholder) one is dead weight.
+      local DEAD_PATHS
+      DEAD_PATHS=$(printf '%s\n' "$SECTION" | grep -oP '`agent-memory/[^`]+\.md`' | tr -d '`')
       while IFS= read -r relpath; do
         [ -z "$relpath" ] && continue
-        # These are pattern paths (contain <...>), skip them
+        # Pattern paths (contain <...>) are illustrative, not literal, so skip them
         echo "$relpath" | grep -q '<' && continue
-        local FULLPATH="$HOME/.claude/$relpath"
-        if [ ! -e "$FULLPATH" ]; then
-          ALL_LOAD=false
-          fail "M2 load-order paths" "$NAME: missing $relpath"
-        fi
-      done <<< "$PATHS"
+        ALL_LOAD=false
+        fail "M2 memory-section paths" "$NAME: dead per-file reference $relpath (v3 uses the DB, not MD files)"
+      done <<< "$DEAD_PATHS"
+      # Live-pointer check: the section must point at the canonical v3 artifacts instead
+      # of a dead file path: rules/12 (the memory-access protocol) or memory_db.py/.memory.db
+      # (the DB itself).
+      if ! printf '%s\n' "$SECTION" | grep -qE 'rules/12|memory_db\.py|\.memory\.db'; then
+        ALL_LOAD=false
+        fail "M2 memory-section paths" "$NAME: Memory section doesn't reference rules/12 or memory_db.py"
+      fi
     fi
   done
-  [ "$ALL_LOAD" = true ] && pass "M2 inline load-order paths in agents resolve"
+  [ "$ALL_LOAD" = true ] && pass "M2 memory-section paths point to live v3 artifacts (rules/12 / memory_db.py), no dead per-file refs"
 
   # M3: No orphan matrix directories (dir exists but no .md inside)
   # Skip structural/archive containers recursively — they hold decommissioned cells by design.

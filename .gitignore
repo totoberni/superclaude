@@ -151,3 +151,6 @@ settings.local.json.bak*
 # === Cockpit live scripts — peer-host-specific; .example counterparts are tracked ===
 scripts/cockpit/cockpit.bash
 scripts/cockpit/cockpit.fish
+bin/tsudo
+bin/tsh
+.last-cleanup

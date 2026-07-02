@@ -26,6 +26,12 @@ Bidirectional isolation rule — meta-tier agent memory must stay invisible from
 - **Why**: a teammate cloning the project repo, a reviewer reading a paper submission, or a future-you on a different machine sees the local files only. References to meta files resolve to nothing and leak internal tooling.
 - Source: G-27 (example-project S33 retrospective, 4 contaminated files stripped).
 
+## toto Remote Ops (`tsudo` / `tsh`)
+
+- Root or plain commands on toto go through the wrappers, never the raw ssh incantation: `~/.claude/bin/tsudo <cmd>` (root via pam_ssh_agent_auth, keyed to the WSL agent) and `~/.claude/bin/tsh <cmd>` (plain exec; no args = interactive session). Both degrade gracefully when run ON toto (same name on both machines), preflight the agent with a self-describing fix message, and carry a timeout guard (`TSUDO_TIMEOUT`/`TSH_TIMEOUT`).
+- NEVER pass `-n` to sudo on this channel: `sudo -n` bypasses pam_ssh_agent_auth and fails with "a password is required".
+- Bash-tool calls still need `dangerouslyDisableSandbox` (ssh + agent socket). Long remote operations: launch remote-persistent (`tsudo nohup ... &` with a remote log), never tied to the local session. Full pattern + setup: memory `toto-passwordless-sudo-agent-pattern`.
+
 ## Git with `-C`
 
 - `git -C <dir>` sets the repo working directory. All pathspecs after it are **relative to the repo root**.
