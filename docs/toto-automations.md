@@ -11,6 +11,7 @@ Standing automation runtime stood up on toto during superclaude-v4-wt (W1-W3): r
 5. [Remote-Control Coding Plane](#remote-control-coding-plane)
 6. [Health Probe](#health-probe)
 7. [W3 Engine](#w3-engine)
+8. [W4 JobHunt Pipeline](#w4-jobhunt-pipeline)
 
 ## Two-Machine Split
 
@@ -75,14 +76,27 @@ The toto Claude login expires roughly weekly and 401s, which silently kills **bo
 
 ## Health Probe
 
-`~/.claude/scripts/automations-health.sh` checks, per subsystem: ntfy `/v1/health`, `ntfy.service` + `ntfy-listener.service` unit status, the discovery gluetun/browser container health filters above, the `rc-*` tmux sessions, and the presence of the deployed W3 engine directory on toto. It is a status probe, not a fixer, and is the basis for the W7 watchdog (proactive re-login reminder + `abe-alerts` paging on 401/dark-toto).
+`~/.claude/scripts/automations-health.sh` checks, per subsystem: ntfy `/v1/health`, `ntfy.service` + `ntfy-listener.service` unit status, the discovery gluetun/browser container health filters above, the `rc-*` tmux sessions, the presence of the deployed W3 engine directory on toto, and (see [W4 JobHunt Pipeline](#w4-jobhunt-pipeline) below) three W4 checks: the jobhunt runtime dir plus `store.db`, the `jobhunt-daily.timer` state, and `runs.jsonl` freshness. It is a status probe, not a fixer, and is the basis for the W7 watchdog (proactive re-login reminder + `abe-alerts` paging on 401/dark-toto).
+
+Scoring is denominator-honest: each check is an equal slice of 100, except the `runs.jsonl` freshness check, which gracefully skips (counts toward neither the pass count nor the denominator) while the jobhunt timer is gated-disabled, since there is nothing to freshness-check yet. A gated-but-installed timer is scored `ok`, never a failure; only missing unit files fail that check.
 
 ## W3 Engine
 
-Developed on WSL at `~/automations/engine-build/` (home level, alongside `~/.claude`, never inside it); deployed to toto `~/automations/engine-build/`. The automation CODE (engine, `bin/rc-project`, `ntfy/`, `discovery/` compose) is version-controlled on the `automations` branch of the superclaude repo; SSOT, documents, `.env`, credentials, and runtime data are gitignored and never leave toto. Runtime venv on toto is `~/automations/.venv` (Python 3.14, pyyaml + pytest). Current build is fixtures-only (v1, no live network calls) with 54 passing tests on both machines.
+Developed on WSL at `~/automations/engine-build/` (home level, alongside `~/.claude`, never inside it); deployed to toto `~/automations/engine-build/`. The automation CODE (engine, `bin/rc-project`, `ntfy/`, `discovery/` compose) is version-controlled on the `automations` branch of the superclaude repo; SSOT, documents, `.env`, credentials, and runtime data are gitignored and never leave toto. Runtime venv on toto is `~/automations/.venv` (Python 3.14, pyyaml + pytest). The original build was fixtures-only (v1, no live network calls) with 54 passing tests on both machines; `engine-build/` now also carries the live W4 JobHunt engine described below, bringing the suite to 127 passing tests.
 
 Run the suite on toto from the engine directory:
 
 ```bash
 ~/automations/.venv/bin/python -m pytest tests/ -q
 ```
+
+## W4 JobHunt Pipeline
+
+The JobHunt pipeline lives in the same `~/automations/engine-build/` checkout as the W3 engine (see above); its runtime state is kept separate, in `~/automations/jobhunt/` (dir mode 0700), so credentials and run data never mix with the versioned engine code.
+
+- **Runtime dir**: `~/automations/jobhunt/` holds `store.db` (the pipeline's persistent job/application store), `runs.jsonl` (append-only run telemetry), and `artifacts/` (per-run generated artifacts, e.g. the attachments described below).
+- **Runner invocation**: the pipeline is invoked as `jobhunt-daily.service`, a systemd user unit. For a manual one-off run outside the timer schedule: `systemctl --user start jobhunt-daily.service`; follow along with `journalctl --user -u jobhunt-daily.service -f`.
+- **Telemetry**: each run appends one JSON line to `runs.jsonl`, at minimum a `ts` field (ISO 8601 timestamp of the run). This is the freshness signal the health probe reads (see [Health Probe](#health-probe) above).
+- **Per-item ntfy delivery**: for each job item the run surfaces, the pipeline sends an ntfy message with an attachment (drawn from `artifacts/`) to the `abe-jobsearch` topic (prefix `j-`; see [ntfy](#ntfy) above). This follows the same durable-source-of-truth invariant as the rest of ntfy usage: the push is a convenience notification, `store.db` and `runs.jsonl` are the source of truth, and a missed push is non-lossy.
+- **Timer, disabled until gate**: `jobhunt-daily.service` and its companion `jobhunt-daily.timer` are installed on toto but deliberately left disabled pending an owner cost and grounding review. Once enabled, the timer fires daily at 08:00 Europe/Rome. Until then, no JobHunt run happens automatically; this is an intentional, non-degraded state.
+- **Health checks**: `automations-health.sh` (see [Health Probe](#health-probe) above) verifies the runtime dir plus `store.db` are present, reports the timer as `ok` whether it is enabled+active or installed-but-gated (only missing unit files fail), and checks `runs.jsonl` freshness (last run within 26h) only once the timer is enabled, gracefully skipping that one check while the gate is closed.
