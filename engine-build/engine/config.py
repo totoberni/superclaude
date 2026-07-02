@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 WEIGHT_SUM_TOLERANCE = 1e-6
+_ATTACH_MODES = ("per_item", "bundle", "none")
 
 
 class ConfigError(ValueError):
@@ -32,6 +33,16 @@ class Config:
     axes: dict[str, float]
     ats_rules: list[dict] = field(default_factory=list)
     automatable_vendors: tuple[str, ...] = ()
+    # W4 live-pipeline knobs. Defaults keep the phd/papers configs (which omit
+    # these keys) loading unchanged; only jobhunt sets them today.
+    draft_cap: int = 10
+    drafter: dict = field(default_factory=lambda: {"model": "sonnet",
+                                                   "effort": "medium"})
+    sources: str | None = None
+    # Attachment routing for drafted PDFs (W4 3.9): per_item ships one message
+    # per drafted item, bundle ships a single zip, none keeps the digest only.
+    # Default per_item so phd/papers configs (which omit the key) stay valid.
+    attach_mode: str = "per_item"
 
     def channel_for(self, vendor: str) -> str:
         """automatable when the destination ATS is public + login-free (7.7)."""
@@ -56,7 +67,19 @@ def load_config(path: str | Path) -> Config:
         axes=axes,
         ats_rules=list(raw.get("ats_rules", [])),
         automatable_vendors=tuple(channels.get("automatable", [])),
+        draft_cap=int(raw.get("draft_cap", 10)),
+        drafter=dict(raw.get("drafter") or {"model": "sonnet",
+                                            "effort": "medium"}),
+        sources=raw.get("sources"),
+        attach_mode=_validated_attach_mode(raw.get("attach_mode", "per_item")),
     )
+
+
+def _validated_attach_mode(value: str) -> str:
+    if value not in _ATTACH_MODES:
+        raise ConfigError(
+            f"attach_mode must be one of {_ATTACH_MODES}, got {value!r}")
+    return value
 
 
 def _require(raw: dict, keys: tuple[str, ...]) -> None:

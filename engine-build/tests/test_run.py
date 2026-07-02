@@ -1,0 +1,353 @@
+"""End-to-end pipeline runner tests: one push, telemetry, cap, dry-run, guards.
+
+Everything is faked: the fetcher wraps a scripted opener over the JSON fixtures,
+the drafter and transport are in-memory. No socket is created, so the autouse
+no-network fixture is satisfied throughout.
+"""
+
+import dataclasses
+import json
+import re
+
+import urllib.error
+
+from engine.draft import DraftResult
+from engine.fetch import HttpFetcher, Source
+from engine.notify import FakeTransport
+from engine.run import RunOptions, run_pipeline
+from engine.ssot import SSOT
+from engine.store import Store
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.t += seconds
+
+
+class _Resp:
+    def __init__(self, body):
+        self._body = body
+        self.headers = {}
+
+    def read(self):
+        return self._body
+
+
+class _Opener:
+    def __init__(self, bodies):
+        self.bodies = list(bodies)
+
+    def open(self, req, timeout=None):
+        return _Resp(self.bodies.pop(0))
+
+
+class _ErrorOpener:
+    def __init__(self, code):
+        self.code = code
+
+    def open(self, req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, self.code, "err", {}, None)
+
+
+class FakeDrafter:
+    def __init__(self):
+        self.calls = []
+
+    def draft(self, posting, breakdown, ssot):
+        self.calls.append(posting)
+        return DraftResult(
+            material="COVER LETTER\n\nFIELD DATA\nnotice_period: 1 month",
+            usage={"input_tokens": 10, "output_tokens": 5, "cache_read": 1,
+                   "cache_creation": 0},
+            cost_usd=0.002, model="claude-sonnet-4-5", ok=True)
+
+
+def _sources():
+    return [Source("greenhouse", "acme", "Acme"),
+            Source("lever", "globex", "Globex"),
+            Source("ashby", "initech", "Initech")]
+
+
+def _fetcher(store, *raws):
+    clock = _Clock()
+    bodies = [json.dumps(raw).encode("utf-8") for raw in raws]
+    return HttpFetcher(store, opener=_Opener(bodies), sleep=clock.sleep,
+                       clock=clock)
+
+
+def test_run_end_to_end_one_push_and_telemetry(tmp_path, jobhunt_config,
+                                              real_ssot_path, greenhouse_raw,
+                                              lever_raw, ashby_raw,
+                                              fake_pdflatex):
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    artifacts_dir = tmp_path / "artifacts"
+    transport = FakeTransport()
+    drafter = FakeDrafter()
+    fetcher = _fetcher(store, greenhouse_raw, lever_raw, ashby_raw)
+
+    record = run_pipeline(jobhunt_config, _sources(), SSOT.load(real_ssot_path),
+                          store, options=RunOptions(), drafter=drafter,
+                          transport=transport, fetcher=fetcher, runs_path=runs,
+                          artifacts_dir=artifacts_dir, runner=fake_pdflatex())
+    store.close()
+
+    # exactly one DIGEST push, to the configured topic (attachments ride the
+    # separate sent_files channel, so the digest count stays at 1)
+    assert len(transport.sent) == 1
+    topic, message = transport.sent[0]
+    assert topic == jobhunt_config.topic
+    assert record["push_sent"] is True
+
+    header = message.splitlines()[0]
+    assert re.fullmatch(r"\d+ ready · \d+ manual · \d+ held · \d+ demoted today",
+                        header)
+    ready = int(header.split(" ready")[0])
+
+    # 2 greenhouse + 1 lever + 1 listed ashby = 4 live; unlisted ashby dropped
+    assert record["counts"]["new"] == 4
+    assert record["counts"]["enqueued"] == 4
+    assert record["counts"]["closed"] == 0
+    assert record["counts"]["fetched_ok"] == 3
+
+    # every drafted item is a visible automatable pending_review item (the ready
+    # bucket); usage + cost totals scale with the number drafted
+    drafted = record["counts"]["drafted"]
+    assert drafted >= 1
+    assert drafted == ready == len(drafter.calls)
+    assert record["usage_totals"]["input_tokens"] == 10 * drafted
+
+    # per_item: one PDF rendered + one attachment published per drafted item
+    assert record["artifacts"] == {"rendered_pdf": drafted, "fallback_txt": 0,
+                                   "published": drafted, "publish_failed": 0}
+    assert len(transport.sent_files) == drafted
+    for sent_topic, _path, caption, filename in transport.sent_files:
+        assert sent_topic == jobhunt_config.topic
+        assert caption.startswith("[j-")
+        assert filename.endswith("-cover-letter.pdf")
+    # the PDF files really landed under artifacts/<item_id>/
+    assert list(artifacts_dir.glob("*/*-cover-letter.pdf"))
+    assert record["cost_usd_total"] == round(0.002 * drafted, 6)
+
+    # runs.jsonl: exactly one parseable telemetry line carrying artifacts counts
+    lines = runs.read_text().splitlines()
+    assert len(lines) == 1
+    parsed = json.loads(lines[0])
+    assert parsed["counts"]["new"] == 4
+    assert parsed["artifacts"]["published"] == drafted
+
+
+def test_dry_run_pushes_nothing(tmp_path, jobhunt_config, real_ssot_path,
+                               greenhouse_raw, lever_raw, ashby_raw,
+                               fake_pdflatex):
+    store = Store(tmp_path / "store.db")
+    transport = FakeTransport()
+    fetcher = _fetcher(store, greenhouse_raw, lever_raw, ashby_raw)
+
+    record = run_pipeline(jobhunt_config, _sources(), SSOT.load(real_ssot_path),
+                          store, options=RunOptions(dry_run=True),
+                          drafter=FakeDrafter(), transport=transport,
+                          fetcher=fetcher, runs_path=tmp_path / "runs.jsonl",
+                          artifacts_dir=tmp_path / "artifacts",
+                          runner=fake_pdflatex())
+    store.close()
+    # no digest AND no attachment publishes; rendering still happened locally
+    assert transport.sent == []
+    assert transport.sent_files == []
+    assert record["push_sent"] is False
+    assert record["artifacts"]["published"] == 0
+    assert record["artifacts"]["rendered_pdf"] >= 1
+
+
+def test_draft_cap_bounds_drafts(tmp_path, jobhunt_config, real_ssot_path,
+                                greenhouse_raw, lever_raw, ashby_raw,
+                                fake_pdflatex):
+    capped = dataclasses.replace(jobhunt_config, draft_cap=1)
+    store = Store(tmp_path / "store.db")
+    drafter = FakeDrafter()
+    transport = FakeTransport()
+    fetcher = _fetcher(store, greenhouse_raw, lever_raw, ashby_raw)
+
+    record = run_pipeline(capped, _sources(), SSOT.load(real_ssot_path), store,
+                          options=RunOptions(), drafter=drafter,
+                          transport=transport, fetcher=fetcher,
+                          runs_path=tmp_path / "runs.jsonl",
+                          artifacts_dir=tmp_path / "artifacts",
+                          runner=fake_pdflatex())
+    store.close()
+    assert len(drafter.calls) == 1
+    assert record["counts"]["drafted"] == 1
+    # the cap bounds artifacts + attachments too, not just drafts
+    assert record["artifacts"]["rendered_pdf"] == 1
+    assert len(transport.sent_files) == 1
+
+
+def test_no_draft_skips_drafting(tmp_path, jobhunt_config, real_ssot_path,
+                                greenhouse_raw, lever_raw, ashby_raw):
+    store = Store(tmp_path / "store.db")
+    drafter = FakeDrafter()
+    transport = FakeTransport()
+    fetcher = _fetcher(store, greenhouse_raw, lever_raw, ashby_raw)
+
+    record = run_pipeline(jobhunt_config, _sources(), SSOT.load(real_ssot_path),
+                          store, options=RunOptions(no_draft=True),
+                          drafter=drafter, transport=transport,
+                          fetcher=fetcher, runs_path=tmp_path / "runs.jsonl",
+                          artifacts_dir=tmp_path / "artifacts")
+    store.close()
+    assert drafter.calls == []
+    assert record["counts"]["drafted"] == 0
+    # no drafts -> no artifacts rendered or published
+    assert record["artifacts"] == {"rendered_pdf": 0, "fallback_txt": 0,
+                                   "published": 0, "publish_failed": 0}
+    assert transport.sent_files == []
+
+
+def test_failed_fetch_source_never_closes(tmp_path, jobhunt_config,
+                                         real_ssot_path, greenhouse_raw):
+    store = Store(tmp_path / "store.db")
+    ssot = SSOT.load(real_ssot_path)
+    sources = [Source("greenhouse", "acme", "Acme")]
+    runs = tmp_path / "runs.jsonl"
+
+    # run 1: healthy fetch enqueues the backend role (scores >= threshold, visible)
+    run_pipeline(jobhunt_config, sources, ssot, store,
+                 options=RunOptions(no_draft=True), transport=FakeTransport(),
+                 fetcher=_fetcher(store, greenhouse_raw), runs_path=runs,
+                 artifacts_dir=tmp_path / "artifacts")
+    before = [r for r in store.all_queue_rows()
+              if r["visible"] and r["state"] == "pending_review"]
+    assert before  # at least the backend role is visible
+
+    # run 2: the same board 404s. A failed fetch is unavailability, not absence,
+    # so close_absent must NOT run and the items stay visible and unclosed.
+    clock = _Clock()
+    fetcher = HttpFetcher(store, opener=_ErrorOpener(404), sleep=clock.sleep,
+                          clock=clock)
+    run_pipeline(jobhunt_config, sources, ssot, store,
+                 options=RunOptions(no_draft=True), transport=FakeTransport(),
+                 fetcher=fetcher, runs_path=runs,
+                 artifacts_dir=tmp_path / "artifacts")
+
+    after = {r["item_id"]: r for r in store.all_queue_rows()}
+    for row in before:
+        current = after[row["item_id"]]
+        assert current["visible"] == 1
+        assert not current["payload"].get("closed")
+    store.close()
+
+
+def _run_with_attach_mode(tmp_path, config, real_ssot_path, raws, runner,
+                          mode):
+    store = Store(tmp_path / "store.db")
+    transport = FakeTransport()
+    fetcher = _fetcher(store, *raws)
+    tuned = dataclasses.replace(config, attach_mode=mode)
+    record = run_pipeline(tuned, _sources(), SSOT.load(real_ssot_path), store,
+                          options=RunOptions(), drafter=FakeDrafter(),
+                          transport=transport, fetcher=fetcher,
+                          runs_path=tmp_path / "runs.jsonl",
+                          artifacts_dir=tmp_path / "artifacts",
+                          runner=runner)
+    store.close()
+    return record, transport
+
+
+def test_attach_mode_bundle_publishes_single_zip(tmp_path, jobhunt_config,
+                                                real_ssot_path, greenhouse_raw,
+                                                lever_raw, ashby_raw,
+                                                fake_pdflatex):
+    record, transport = _run_with_attach_mode(
+        tmp_path, jobhunt_config, real_ssot_path,
+        (greenhouse_raw, lever_raw, ashby_raw), fake_pdflatex(), "bundle")
+    drafted = record["counts"]["drafted"]
+    assert drafted >= 2  # a bundle is only meaningful with several PDFs
+    assert record["artifacts"]["rendered_pdf"] == drafted
+    assert record["artifacts"]["published"] == 1  # one zip, published once
+    assert len(transport.sent) == 1               # digest still exactly once
+    assert len(transport.sent_files) == 1
+    _topic, _path, _caption, filename = transport.sent_files[0]
+    assert filename.endswith(".zip")
+
+
+def test_attach_mode_none_publishes_no_files(tmp_path, jobhunt_config,
+                                            real_ssot_path, greenhouse_raw,
+                                            lever_raw, ashby_raw,
+                                            fake_pdflatex):
+    record, transport = _run_with_attach_mode(
+        tmp_path, jobhunt_config, real_ssot_path,
+        (greenhouse_raw, lever_raw, ashby_raw), fake_pdflatex(), "none")
+    drafted = record["counts"]["drafted"]
+    assert len(transport.sent) == 1                 # digest only
+    assert transport.sent_files == []               # zero attachments
+    assert record["artifacts"]["published"] == 0
+    assert record["artifacts"]["rendered_pdf"] == drafted  # still rendered
+
+
+def test_render_failure_falls_back_to_txt_attachments(tmp_path, jobhunt_config,
+                                                     real_ssot_path,
+                                                     greenhouse_raw, lever_raw,
+                                                     ashby_raw, fake_pdflatex):
+    # pdflatex fails for every item -> each drafted item ships a .txt fallback
+    record, transport = _run_with_attach_mode(
+        tmp_path, jobhunt_config, real_ssot_path,
+        (greenhouse_raw, lever_raw, ashby_raw), fake_pdflatex(False), "per_item")
+    drafted = record["counts"]["drafted"]
+    assert record["artifacts"] == {"rendered_pdf": 0, "fallback_txt": drafted,
+                                   "published": drafted, "publish_failed": 0}
+    assert len(transport.sent_files) == drafted
+    for _topic, _path, _caption, filename in transport.sent_files:
+        assert filename.endswith("-cover-letter.txt")
+
+
+class _FlakyTransport(FakeTransport):
+    """Publishes normally except raising on one scripted attachment call."""
+
+    def __init__(self, fail_on_call_index):
+        super().__init__()
+        self._fail_on = fail_on_call_index
+        self._calls = 0
+
+    def publish_file(self, topic, path, message, filename):
+        self._calls += 1
+        if self._calls == self._fail_on:
+            raise RuntimeError("simulated attachment publish failure")
+        super().publish_file(topic, path, message, filename)
+
+
+def test_attachment_publish_failure_is_fail_soft_and_recorded(
+        tmp_path, jobhunt_config, real_ssot_path, greenhouse_raw, lever_raw,
+        ashby_raw, fake_pdflatex):
+    # Lower the threshold so every discovered posting is visible/drafted,
+    # guaranteeing enough attachments for a mid-batch failure to have both a
+    # predecessor and a successor (proving the rest still publish, W4 3.9).
+    tuned = dataclasses.replace(jobhunt_config, threshold=0)
+    store = Store(tmp_path / "store.db")
+    transport = _FlakyTransport(fail_on_call_index=2)
+    fetcher = _fetcher(store, greenhouse_raw, lever_raw, ashby_raw)
+
+    record = run_pipeline(tuned, _sources(), SSOT.load(real_ssot_path), store,
+                          options=RunOptions(), drafter=FakeDrafter(),
+                          transport=transport, fetcher=fetcher,
+                          runs_path=tmp_path / "runs.jsonl",
+                          artifacts_dir=tmp_path / "artifacts",
+                          runner=fake_pdflatex())
+    store.close()
+
+    drafted = record["counts"]["drafted"]
+    assert drafted >= 3  # a predecessor and a successor around item 2
+
+    # the digest already went out; the mid-batch attachment failure never
+    # aborted it, nor the remaining attachments
+    assert len(transport.sent) == 1
+    assert len(transport.sent_files) == drafted - 1
+    assert record["artifacts"]["published"] == drafted - 1
+    assert record["artifacts"]["publish_failed"] == 1
+    # rendering itself is untouched by a downstream publish failure
+    assert record["artifacts"]["rendered_pdf"] == drafted

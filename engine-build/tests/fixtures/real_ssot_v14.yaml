@@ -1,0 +1,48 @@
+# SYNTHETIC SSOT mirroring the real schema v1.4 key structure (W4 3.2 tests).
+# Every value here is invented placeholder data. NO real PII: this fixture must
+# never carry real identikit content (PII firewall, spec constraints).
+identity:
+  name: Test Candidate
+  email: test.candidate@example.invalid
+work_authorization: "EU citizen; full EU work rights, no visa sponsorship needed"
+education:
+  - degree: BSc Computer Science
+    institution: Example University
+    year: 2025
+experience:
+  - "Built a synthetic backend service in Python for a demo project"
+  - "Shipped a toy machine learning model with PyTorch for coursework"
+links:
+  github: https://example.invalid/testcandidate
+  site: https://example.invalid
+preferences:
+  target_roles:
+    - Senior Backend Engineer
+    - Machine Learning Engineer
+    - Graduate Software Engineer
+  target_locations:
+    - "Milan, Italy"
+    - "Remote (EU)"
+    - "London, UK"
+  remote: "Open to fully remote roles within the EU"
+  comp_floor: "EUR 26,000 gross annual (RAL)"
+  excludes:
+    - unpaid
+    - commission only
+skills:
+  programming_languages:
+    - Python
+    - TypeScript
+    - C++
+  frameworks_libraries:
+    - PyTorch
+    - React
+  tools_platforms:
+    - SQLite
+    - Docker
+  domains:
+    - machine learning
+    - backend
+canned_answers:
+  notice_period: "1 month"
+  visa_sponsorship_required: "no"

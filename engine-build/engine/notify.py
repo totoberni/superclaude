@@ -15,10 +15,17 @@ loading is fail-closed: absent or world-readable credentials raise (7.8/Section 
 
 from __future__ import annotations
 
+import unicodedata
+from email.header import Header
 from pathlib import Path
 from typing import Protocol
 
 from engine.queue_sm import QueueItem
+
+# RFC 5322's practical line-length ceiling; passed to email.header.Header so a
+# long non-latin1 caption stays on ONE encoded-word (no "\n " fold, which would
+# otherwise embed a literal newline in an HTTP header value).
+_HEADER_MAXLINELEN = 998
 
 
 class CredentialsError(RuntimeError):
@@ -29,15 +36,24 @@ class Transport(Protocol):
     def publish(self, topic: str, message: str) -> None:
         ...
 
+    def publish_file(self, topic: str, path: str | Path, message: str,
+                     filename: str) -> None:
+        ...
+
 
 class FakeTransport:
     """Test transport: captures publishes instead of sending them."""
 
     def __init__(self):
         self.sent: list[tuple[str, str]] = []
+        self.sent_files: list[tuple[str, str, str, str]] = []
 
     def publish(self, topic: str, message: str) -> None:
         self.sent.append((topic, message))
+
+    def publish_file(self, topic: str, path: str | Path, message: str,
+                     filename: str) -> None:
+        self.sent_files.append((topic, str(path), message, filename))
 
 
 class NtfyTransport:
@@ -64,6 +80,25 @@ class NtfyTransport:
         self._authorize(req)
         urllib.request.urlopen(req, timeout=10)
 
+    def publish_file(self, topic: str, path: str | Path, message: str,
+                     filename: str) -> None:
+        """Publish a file as an ntfy attachment (W4 3.9).
+
+        Verified against docs.ntfy.sh/publish (Attachments): PUT the raw file
+        bytes as the body with a `Filename` header for the attachment name; the
+        caption rides the `Message` header (documented alias of `X-Message`).
+        Auth reuses the existing Bearer/Basic scheme.
+        """
+        import urllib.request
+
+        req = urllib.request.Request(f"{self.url}/{topic}",
+                                     data=Path(path).read_bytes(), method="PUT")
+        req.add_header("Filename", _safe_filename(filename))
+        if message:
+            req.add_header("Message", _safe_header_value(message))
+        self._authorize(req)
+        urllib.request.urlopen(req, timeout=60)
+
     def _authorize(self, req) -> None:
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
@@ -71,6 +106,34 @@ class NtfyTransport:
             import base64
             raw = base64.b64encode(f"{self.user}:{self.password}".encode())
             req.add_header("Authorization", f"Basic {raw.decode()}")
+
+
+def _safe_header_value(value: str) -> str:
+    """Guarantee a header-safe caption; never raise on content alone (W4 3.9).
+
+    HTTP header values are sent latin-1 encoded (RFC 7230 / http.client);
+    Italian accented text ("societa", "e") round-trips as-is (it IS latin-1),
+    but a stray euro sign, curly quote, or emoji in a posting title would
+    otherwise raise UnicodeEncodeError deep inside http.client at send time.
+    Fall back to a single-line RFC 2047 encoded-word (pure ASCII) when the
+    caption itself is not latin-1-safe.
+    """
+    try:
+        value.encode("latin-1")
+        return value
+    except UnicodeEncodeError:
+        return Header(value, "utf-8", maxlinelen=_HEADER_MAXLINELEN).encode()
+
+
+def _safe_filename(name: str) -> str:
+    """ASCII-safe fallback attachment filename; never raise on content alone."""
+    try:
+        name.encode("ascii")
+        return name
+    except UnicodeEncodeError:
+        ascii_name = unicodedata.normalize("NFKD", name).encode(
+            "ascii", "ignore").decode("ascii")
+        return ascii_name or "attachment"
 
 
 def load_credentials(path: str | Path) -> dict:
@@ -97,6 +160,7 @@ def _require_0600(p: Path) -> None:
 
 def render_digest(items: list[QueueItem], demoted_today: int = 0) -> str:
     """Render the one-push digest: header + ready bucket + manual bucket (D2)."""
+    items = [i for i in items if not _is_closed(i)]
     ready = [i for i in items if _is_visible_review(i) and i.channel == "automatable"]
     manual = [i for i in items if _is_visible_review(i) and i.channel == "manual"]
     held = [i for i in items if not i.visible and i.state == "demoted"]
@@ -136,6 +200,12 @@ def publish_digest(transport: Transport, topic: str, items: list[QueueItem],
 
 def _is_visible_review(item: QueueItem) -> bool:
     return item.visible and item.state == "pending_review"
+
+
+def _is_closed(item: QueueItem) -> bool:
+    # Board-absent items are hidden but keep their last state (W4 3.4); the
+    # payload flag is the sole marker so no new queue state is invented.
+    return bool(item.payload.get("closed"))
 
 
 def _append_bucket(lines: list[str], heading: str, items: list[QueueItem],

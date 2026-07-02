@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS questionnaire (
   status     TEXT NOT NULL,
   created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS fetch_cache (
+  url           TEXT PRIMARY KEY,
+  etag          TEXT,
+  last_modified TEXT,
+  body          TEXT,
+  fetched_at    TEXT
+);
 """
 
 
@@ -205,9 +212,13 @@ class Store:
     def held_count(self) -> int:
         # Held backlog = demoted items only. Blacklisted items are also visible=0
         # but are not backlog, so the state filter keeps this in step with the
-        # digest's own held count (notify.render_digest).
+        # digest's own held count (notify.render_digest). Board-absent (payload
+        # closed=true, set by close_absent) rows are excluded too: they are no
+        # longer a demoted backlog awaiting promotion, they are gone for good
+        # (w-reviewer HIGH).
         cur = self._conn.execute(
-            "SELECT COUNT(*) AS n FROM queue WHERE visible=0 AND state='demoted'"
+            "SELECT COUNT(*) AS n FROM queue WHERE visible=0 AND state='demoted' "
+            "AND COALESCE(json_extract(payload,'$.closed'),0)=0"
         )
         return int(cur.fetchone()["n"])
 
@@ -227,6 +238,70 @@ class Store:
             "UPDATE questionnaire SET status='answered' WHERE q_id=?", (q_id,)
         )
         self._conn.commit()
+
+    # -- conditional-GET cache (W4 3.4; keyed by absolute request URL) --------
+    def get_fetch_cache(self, url: str) -> dict | None:
+        cur = self._conn.execute(
+            "SELECT url, etag, last_modified, body, fetched_at "
+            "FROM fetch_cache WHERE url=?",
+            (url,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def set_fetch_cache(self, url: str, etag: str | None,
+                        last_modified: str | None, body: str) -> None:
+        self._conn.execute(
+            "INSERT INTO fetch_cache(url, etag, last_modified, body, fetched_at) "
+            "VALUES(?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET etag=excluded.etag, "
+            "last_modified=excluded.last_modified, body=excluded.body, "
+            "fetched_at=excluded.fetched_at",
+            (url, etag, last_modified, body, _now()),
+        )
+        self._conn.commit()
+
+    # -- board-presence liveness (W4 3.4; R-WT-8 invariant 4) ----------------
+    def close_absent(self, vendor: str, slug: str,
+                     present_identity_keys: set[str]) -> list[str]:
+        """Close queue items for vendor+slug no longer present on the board.
+
+        7.5 has no `closed` queue state, so absence is modelled without inventing
+        one: the ledger row is marked `closed`, the queue row is hidden
+        (visible=0) with its state untouched, and a payload `closed` flag lets the
+        digest exclude it (notify.render_digest). Only pending_review and demoted
+        rows are eligible, so awaiting_input / blacklisted / submitted are spared.
+        The caller is responsible for the critical guard: pass only sources whose
+        fetch succeeded this run, since a failed fetch is unavailability, not
+        absence.
+        """
+        cur = self._conn.execute(
+            "SELECT q.item_id, q.identity_key, q.payload FROM queue q "
+            "JOIN ledger l ON l.identity_key = q.identity_key "
+            "WHERE l.vendor=? AND l.company_slug=? "
+            "AND q.state IN ('pending_review', 'demoted')",
+            (vendor, slug),
+        )
+        rows = cur.fetchall()
+        closed: list[str] = []
+        for row in rows:
+            if row["identity_key"] in present_identity_keys:
+                continue
+            payload = json.loads(row["payload"]) if row["payload"] else {}
+            payload["closed"] = True
+            now = _now()
+            self._conn.execute(
+                "UPDATE queue SET visible=0, payload=?, updated_at=? "
+                "WHERE item_id=?",
+                (json.dumps(payload), now, row["item_id"]),
+            )
+            self._conn.execute(
+                "UPDATE ledger SET status='closed', last_seen=? "
+                "WHERE identity_key=?",
+                (now, row["identity_key"]),
+            )
+            closed.append(row["item_id"])
+        self._conn.commit()
+        return closed
 
 
 def _detect_fts5(conn: sqlite3.Connection) -> bool:

@@ -36,3 +36,20 @@ channels:
     - ashby
     - greenhouse
     - lever
+
+# W4 live-pipeline extensions (spec 3.6).
+# draft_cap bounds cost: only the top-N visible pending_review items lacking
+# material are drafted per run; the rest render with a "material pending" note.
+draft_cap: 10
+# drafter mechanism knobs consumed by engine.draft.ClaudeCliDrafter.
+drafter:
+  model: sonnet
+  effort: medium
+# Live board list, relative to this instance dir. Runtime data: the real
+# sources.yaml is gitignored; sources.yaml.example is the committed template.
+# Runtime-overridable via `--sources` on engine.run.
+sources: sources.yaml
+# Attachment routing for drafted PDFs (spec 3.9). per_item: the digest push
+# first, then one ntfy attachment per drafted item. bundle: one zip of all
+# PDFs. none: digest only. Owner-flagged; default stays per_item unless vetoed.
+attach_mode: per_item

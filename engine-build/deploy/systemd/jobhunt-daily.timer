@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule the JobHunt daily pipeline at 08:00 Europe/Rome (W4)
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 Europe/Rome
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

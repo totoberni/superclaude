@@ -1,0 +1,23 @@
+# JobHunt live sources template (W4 spec 3.7) - R-1 SHARED SCHEMA.
+#
+# Copy to sources.yaml (gitignored) and fill with real board tokens. The real
+# seed list is merged by meta after validation (separate workstream) and
+# deployed by rsync; only this .example is committed. Vendor must be one of
+# greenhouse | lever | ashby (LinkedIn/Indeed/Glassdoor are read-avoid). The
+# region field applies to Lever only (us | eu); it is ignored for the others.
+sources:
+  - vendor: greenhouse        # greenhouse | lever | ashby
+    slug: acme                # board token / company slug
+    company: Acme Corp        # display name
+    region: us                # lever only; us | eu
+    enabled: true
+  - vendor: lever
+    slug: globex
+    company: Globex
+    region: eu
+    enabled: true
+  - vendor: ashby
+    slug: initech
+    company: Initech
+    region: us
+    enabled: true

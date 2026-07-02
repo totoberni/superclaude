@@ -1,0 +1,9 @@
+# Runtime board-token list: the real sources.yaml is runtime data merged by
+# meta after validation and deployed by rsync; only sources.yaml.example is
+# committed (W4 spec 3.7). The parent ~/automations/.gitignore already covers
+# *.db, *.log, __pycache__, .venv/, and PII dirs; this file adds engine-build
+# local runtime + dev-only artefacts.
+instances/jobhunt/sources.yaml
+
+# Local dev-only virtualenv used to run the test suite off-toto.
+.venv-dev/

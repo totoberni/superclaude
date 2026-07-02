@@ -37,6 +37,27 @@ def test_channel_classification(jobhunt_config):
     assert jobhunt_config.channel_for("workday") == "manual"
 
 
+def test_jobhunt_attach_mode(jobhunt_config):
+    assert jobhunt_config.attach_mode == "per_item"
+
+
+def test_attach_mode_defaults_per_item_when_absent(phd_config, papers_config):
+    # phd/papers omit attach_mode; the default keeps their configs valid.
+    assert phd_config.attach_mode == "per_item"
+    assert papers_config.attach_mode == "per_item"
+
+
+def test_invalid_attach_mode_rejected(tmp_path):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        "name: x\ntopic: t\nid_prefix: x-\nthreshold: 70\nbuffer_size: 10\n"
+        "terminal_state: pending_review\nssot: job.yaml\nattach_mode: email\n"
+        "scoring:\n  axes:\n    role_fit: 0.5\n    skills_overlap: 0.5\n"
+    )
+    with pytest.raises(ConfigError):
+        load_config(bad)
+
+
 def test_bad_weight_sum_rejected(tmp_path):
     bad = tmp_path / "bad.yaml"
     bad.write_text(

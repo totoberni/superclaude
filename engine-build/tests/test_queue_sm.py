@@ -113,3 +113,30 @@ def test_cannot_park_terminal_item(store):
     sm.blacklist(item_id, reason="manual")
     with pytest.raises(InvalidTransition):
         sm.park(item_id)
+
+
+def test_rerank_never_revives_closed_demoted_item(store):
+    # Board-absent items (payload.closed, set by store.close_absent) must not
+    # re-enter the rerank pool: rerank's own promotion branch would otherwise
+    # flip a closed demoted row back to visible pending_review (w-reviewer
+    # HIGH, W4 6b finding 1).
+    sm = QueueStateMachine(store, _config(buffer_size=50, threshold=0))
+    posting = _posting("1", "Backend Engineer")
+    item_id = sm.enqueue(posting, _breakdown(80))
+    row = store.get_queue_row(item_id)
+    # simulate a demoted, hidden item (as rerank's own demote branch leaves it)
+    store.upsert_queue(item_id, row["identity_key"], "demoted", row["prev_state"],
+                       row["score"], 0, row["channel"], row["payload"])
+
+    closed = store.close_absent("greenhouse", "acme", set())
+    assert closed == [item_id]
+
+    result = sm.rerank()
+
+    item = sm.get(item_id)
+    assert item.state == "demoted"
+    assert not item.visible
+    assert item_id not in result.demoted_today
+    # held_count also excludes the closed row: it is gone for good, not a
+    # demoted backlog awaiting promotion (W4 6b finding 1).
+    assert result.held == 0

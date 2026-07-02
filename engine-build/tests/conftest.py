@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import socket
+import types
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,35 @@ def job_ssot_path(tmp_path):
     dest = tmp_path / "job.yaml"
     shutil.copy(FIXTURES / "job.yaml", dest)
     return dest
+
+
+@pytest.fixture
+def real_ssot_path():
+    """Path to the SYNTHETIC v1.4-shaped SSOT (profile_map + run tests)."""
+    return FIXTURES / "real_ssot_v14.yaml"
+
+
+@pytest.fixture
+def fake_pdflatex():
+    """Factory for a runner standing in for pdflatex (no real TeX in tests).
+
+    `make()` writes a stub PDF next to the .tex and returns rc 0; `make(False)`
+    returns rc 1 so render_pdf reports failure and the caller falls back to txt.
+    """
+    def make(create_pdf: bool = True):
+        def runner(cmd, **kwargs):
+            out_dir = None
+            for i, arg in enumerate(cmd):
+                if arg == "-output-directory":
+                    out_dir = cmd[i + 1]
+            stem = Path(cmd[-1]).stem
+            if create_pdf:
+                (Path(out_dir) / f"{stem}.pdf").write_bytes(
+                    b"%PDF-1.4 stub\n%%EOF\n")
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="fail")
+        return runner
+    return make
 
 
 @pytest.fixture

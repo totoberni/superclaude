@@ -100,8 +100,13 @@ class QueueStateMachine:
             )
 
     def rerank(self) -> RerankResult:
+        # Board-absent items (payload.closed, set by store.close_absent) must
+        # never re-enter the rerank pool: they are not a ranked backlog to
+        # promote from, and the revival branch below would otherwise flip a
+        # closed demoted row back to visible pending_review (w-reviewer HIGH).
         rows = [r for r in self.store.all_queue_rows()
-                if r["state"] in ("pending_review", "demoted")]
+                if r["state"] in ("pending_review", "demoted")
+                and not r["payload"].get("closed")]
         rows.sort(key=lambda r: r["score"], reverse=True)
         demoted_today: list[str] = []
         for rank, row in enumerate(rows):

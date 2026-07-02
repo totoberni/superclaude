@@ -1,0 +1,11 @@
+[Unit]
+Description=JobHunt daily read-only discovery, draft, and one ntfy push (W4)
+Documentation=file:%h/automations/engine-build/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/automations/engine-build
+# Minimal PATH: %h/.local/bin carries the `claude` CLI used by the drafter,
+# /usr/bin carries python3. No secrets live in this unit (spec 3.8).
+Environment=PATH=%h/.local/bin:/usr/bin
+ExecStart=%h/automations/engine-build/bin/jobhunt-daily

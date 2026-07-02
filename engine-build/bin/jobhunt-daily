@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Thin launcher for the once-daily JobHunt pipeline (W4 spec 3.5).
+#
+# Runs engine.run against the jobhunt instance under the automations home. The
+# systemd unit (deploy/systemd/jobhunt-daily.service) sets WorkingDirectory and a
+# minimal PATH; overrides below let a manual or test invocation redirect the
+# interpreter, SSOT, and store without editing this file. Extra flags (--dry-run,
+# --no-draft, --no-push) pass straight through.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="${JOBHUNT_PYTHON:-python3}"
+
+exec "$PY" -m engine.run \
+  --config "${JOBHUNT_CONFIG:-$HERE/instances/jobhunt/config.yaml}" \
+  --ssot "${JOBHUNT_SSOT:-$HOME/automations/ssot/job.yaml}" \
+  --store "${JOBHUNT_STORE:-$HOME/automations/jobhunt/store.db}" \
+  "$@"
