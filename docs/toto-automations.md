@@ -14,7 +14,7 @@ Standing automation runtime stood up on toto during superclaude-v4-wt (W1-W3): r
 
 ## Two-Machine Split
 
-WSL (`totob@<this box>`) is the cockpit: agents, plans, comms, memory DB, this doc. toto (host TOTO-HOST, user `toto`, Tailscale IP `100.64.0.0`, CachyOS/Arch, fish login shell) is the always-on automation runtime: ntfy server, discovery stack, Remote-Control sessions, the deployed W3 engine. See `rules/12-agent-hierarchy.md` for the agent hierarchy this split sits under, and `~/.claude/plans/superclaude-v4-wt/plan.md` for the campaign that built it.
+WSL (`totob@<this box>`) is the cockpit: agents, plans, comms, memory DB, this doc. toto (host TOTO-HOST, user `toto`, Tailscale IP in `config/toto.env`, CachyOS/Arch, fish login shell) is the always-on automation runtime: ntfy server, discovery stack, Remote-Control sessions, the deployed W3 engine. See `rules/12-agent-hierarchy.md` for the agent hierarchy this split sits under, and `~/.claude/plans/superclaude-v4-wt/plan.md` for the campaign that built it.
 
 ## Remote Ops
 
