@@ -95,7 +95,7 @@ class LeverAdapter:
             title=job.get("text", ""),
             locations=[location] if location else [],
             remote_flag=workplace == "remote" or _looks_remote(location),
-            comp=job.get("salaryRange"),
+            comp=_lever_comp(job.get("salaryRange")),
             posted_ts=_ms_to_iso(job.get("createdAt")),
             updated_ts=_ms_to_iso(job.get("updatedAt") or job.get("createdAt")),
             url=job.get("hostedUrl", ""),
@@ -142,6 +142,27 @@ def run_discovery(sources: list[tuple[SourceAdapter, object, str]],
             postings.append(posting)
     live = [p for p in postings if p.listed]
     return [p for p in live if not store.is_known(p.identity_key())]
+
+
+def _lever_comp(salary_range) -> str | None:
+    """Lever's live `salaryRange` is a {min, max, currency, interval} dict; the
+    fixtures predate this and never exercised the field. Render it down to the
+    plain string Posting.comp expects; pass through strings/None unchanged."""
+    if salary_range is None or isinstance(salary_range, str):
+        return salary_range
+    if not isinstance(salary_range, dict):
+        return None
+    lo, hi = salary_range.get("min"), salary_range.get("max")
+    if lo is not None and hi is not None:
+        amount = f"{lo}-{hi}"
+    elif lo is not None:
+        amount = f"{lo}+"
+    elif hi is not None:
+        amount = f"up to {hi}"
+    else:
+        return None
+    parts = [amount, salary_range.get("currency"), salary_range.get("interval")]
+    return " ".join(p for p in parts if p)
 
 
 def _looks_remote(location: str | None) -> bool:

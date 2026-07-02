@@ -1,10 +1,11 @@
 import pytest
 
-from engine.discover import GreenhouseAdapter, Posting
+from engine.discover import GreenhouseAdapter, LeverAdapter, Posting
 from engine.match import (
     Scorer,
     TokenOverlapSimilarity,
     Vec0Similarity,
+    _max_amount,
     profile_from_ssot,
 )
 from engine.ssot import SSOT
@@ -74,3 +75,21 @@ def test_scorer_rejects_unimplemented_axes(phd_config, job_ssot_path):
     # phd/papers axis functions are a later deliverable (plan 7.3): fail fast.
     with pytest.raises(ValueError):
         Scorer(phd_config, _profile(job_ssot_path))
+
+
+def test_scores_lever_posting_with_dict_salary_range_without_raising(
+        jobhunt_config, job_ssot_path, lever_raw):
+    # Regression: live Lever's dict-shaped salaryRange used to reach
+    # _max_amount as a dict and crash on comp.replace(); the adapter now
+    # normalizes it, so scoring must complete and credit the comp match.
+    scorer = Scorer(jobhunt_config, _profile(job_ssot_path))
+    posting = LeverAdapter().parse(lever_raw, "globex")[0]
+    breakdown = scorer.score(posting)
+    assert any("comp:" in m for m in breakdown.matched)
+
+
+def test_max_amount_handles_dict_shaped_comp():
+    assert _max_amount({"min": 50000, "max": 70000}) == 70000
+    assert _max_amount({"min": 50000}) == 50000
+    assert _max_amount({}) is None
+    assert _max_amount(None) is None

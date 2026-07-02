@@ -13,6 +13,12 @@
     "hostedUrl": "https://jobs.lever.co/globex/a1b2c3d4-1111-2222-3333-444455556666",
     "applyUrl": "https://jobs.lever.co/globex/a1b2c3d4-1111-2222-3333-444455556666/apply",
     "workplaceType": "remote",
+    "salaryRange": {
+      "min": 50000,
+      "max": 70000,
+      "currency": "EUR",
+      "interval": "per-year-salary"
+    },
     "descriptionPlain": "Build machine learning systems in Python and PyTorch. Strong SQL skills wanted. You will ship models to production."
   }
 ]

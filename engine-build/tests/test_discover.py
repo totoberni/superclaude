@@ -25,6 +25,14 @@ def test_lever_adapter_maps_workplace_and_timestamp(lever_raw):
     assert posting.url.startswith("https://jobs.lever.co/globex/")
 
 
+def test_lever_adapter_normalizes_dict_salary_range(lever_raw):
+    # Live Lever returns salaryRange as {min, max, currency, interval}, not a
+    # string; the fixture predates this shape and would otherwise crash
+    # match.py's _max_amount downstream (comp.replace on a dict).
+    posting = LeverAdapter().parse(lever_raw, "globex")[0]
+    assert posting.comp == "50000-70000 EUR per-year-salary"
+
+
 def test_ashby_adapter_captures_secondary_locations(ashby_raw):
     postings = AshbyAdapter().parse(ashby_raw, "initech")
     listed = next(p for p in postings if p.listed)

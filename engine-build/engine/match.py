@@ -187,7 +187,16 @@ def _has_all_tokens(text: str, phrase: str) -> bool:
     return bool(phrase_tokens) and phrase_tokens <= _tokens(text)
 
 
-def _max_amount(comp: str) -> int | None:
+def _max_amount(comp) -> int | None:
+    """`comp` should be str|None (Posting.comp), but a future vendor shape that
+    slips an un-normalized dict past the adapter boundary must degrade to
+    "comp unknown" rather than crash the whole scoring pass."""
+    if isinstance(comp, dict):
+        numeric = [v for v in (comp.get("max"), comp.get("min"))
+                  if isinstance(v, (int, float))]
+        return int(max(numeric)) if numeric else None
+    if not isinstance(comp, str):
+        return None
     # Strip thousands separators first so "120,000" reads as one amount, not two.
     plain = comp.replace(",", "")
     amounts = [int(num) * (1000 if suffix else 1)
