@@ -1,0 +1,103 @@
+{
+  "id": 5501001,
+  "internal_job_id": 3001,
+  "title": "Senior Backend Engineer",
+  "updated_at": "2026-06-20T14:30:00-04:00",
+  "location": { "name": "London, UK" },
+  "absolute_url": "https://boards.greenhouse.io/acme/jobs/5501001",
+  "content": "&lt;p&gt;Backend role owning data services end to end.&lt;/p&gt;",
+  "questions": [
+    {
+      "label": "First Name",
+      "required": true,
+      "fields": [{ "name": "first_name", "type": "input_text", "values": [] }]
+    },
+    {
+      "label": "Last Name",
+      "required": true,
+      "fields": [{ "name": "last_name", "type": "input_text", "values": [] }]
+    },
+    {
+      "label": "Email",
+      "required": true,
+      "fields": [{ "name": "email", "type": "input_text", "values": [] }]
+    },
+    {
+      "label": "Phone",
+      "required": false,
+      "fields": [{ "name": "phone", "type": "input_text", "values": [] }]
+    },
+    {
+      "label": "Resume/CV",
+      "required": true,
+      "fields": [{ "name": "resume", "type": "input_file", "values": [] }]
+    },
+    {
+      "label": "Cover Letter",
+      "required": false,
+      "fields": [{ "name": "cover_letter", "type": "input_file", "values": [] }]
+    },
+    {
+      "label": "LinkedIn Profile",
+      "required": false,
+      "fields": [{ "name": "question_40001", "type": "input_text", "values": [] }]
+    },
+    {
+      "label": "Are you legally authorized to work in the United Kingdom?",
+      "required": true,
+      "fields": [{
+        "name": "question_40002",
+        "type": "multi_value_single_select",
+        "values": [
+          { "value": 0, "label": "Yes" },
+          { "value": 1, "label": "No" }
+        ]
+      }]
+    },
+    {
+      "label": "Will you now or in the future require visa sponsorship for employment?",
+      "required": true,
+      "fields": [{
+        "name": "question_40003",
+        "type": "multi_value_single_select",
+        "values": [
+          { "value": 0, "label": "Yes" },
+          { "value": 1, "label": "No" }
+        ]
+      }]
+    },
+    {
+      "label": "How many years of professional Python experience do you have?",
+      "required": true,
+      "fields": [{ "name": "question_40004", "type": "input_text", "values": [] }]
+    }
+  ],
+  "location_questions": [],
+  "compliance": [],
+  "demographic_questions": {
+    "header": "Voluntary Self-Identification",
+    "description": "Completion is voluntary and will not affect your application.",
+    "questions": [
+      {
+        "id": 90001,
+        "label": "Gender",
+        "required": false,
+        "type": "multi_value_single_select",
+        "answer_options": [
+          { "id": 1, "label": "Man" },
+          { "id": 2, "label": "Woman" },
+          { "id": 3, "label": "Prefer not to disclose" }
+        ]
+      },
+      {
+        "id": 90002,
+        "label": "Race/Ethnicity",
+        "required": false,
+        "type": "multi_value_single_select",
+        "answer_options": [
+          { "id": 4, "label": "Prefer not to disclose" }
+        ]
+      }
+    ]
+  }
+}

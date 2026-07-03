@@ -50,6 +50,23 @@ class _Opener:
         return _Resp(self.bodies.pop(0))
 
 
+class _CaptureOpener:
+    """Serves one questions=true body for every field-map GET (no network)."""
+
+    def __init__(self, raw):
+        self._body = json.dumps(raw).encode("utf-8")
+        self.calls = 0
+
+    def open(self, req, timeout=None):
+        self.calls += 1
+        return _Resp(self._body)
+
+
+class _FailingCaptureOpener:
+    def open(self, req, timeout=None):
+        raise RuntimeError("simulated field-map capture failure")
+
+
 class _ErrorOpener:
     def __init__(self, code):
         self.code = code
@@ -388,6 +405,183 @@ class _FlakyTransport(FakeTransport):
         if self._calls == self._fail_on:
             raise RuntimeError("simulated attachment publish failure")
         super().publish_file(topic, path, message, filename)
+
+
+def _backend_board(greenhouse_raw):
+    """Greenhouse board trimmed to just the Senior Backend Engineer (visible)."""
+    return {"jobs": [greenhouse_raw["jobs"][0]]}
+
+
+def test_capture_fieldmaps_off_by_default_records_zero(tmp_path, jobhunt_config,
+                                                       real_ssot_path,
+                                                       greenhouse_raw, lever_raw,
+                                                       ashby_raw):
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    record = run_pipeline(
+        jobhunt_config, _sources(), SSOT.load(real_ssot_path), store,
+        options=RunOptions(no_draft=True), transport=FakeTransport(),
+        fetcher=_fetcher(store, greenhouse_raw, lever_raw, ashby_raw),
+        runs_path=runs, artifacts_dir=tmp_path / "artifacts")
+    store.close()
+    assert record["fieldmaps"] == {"captured": 0, "cached": 0, "failed": 0}
+    parsed = json.loads(runs.read_text().splitlines()[0])
+    assert parsed["fieldmaps"] == {"captured": 0, "cached": 0, "failed": 0}
+
+
+def test_capture_fieldmaps_captures_and_attaches_coverage(
+        tmp_path, jobhunt_config, real_ssot_path, greenhouse_raw,
+        greenhouse_questions_raw):
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    board = _backend_board(greenhouse_raw)
+    record = run_pipeline(
+        jobhunt_config, [Source("greenhouse", "acme", "Acme")],
+        SSOT.load(real_ssot_path), store,
+        options=RunOptions(no_draft=True, capture_fieldmaps=5),
+        transport=FakeTransport(), fetcher=_fetcher(store, board),
+        capture_opener=_CaptureOpener(greenhouse_questions_raw),
+        runs_path=runs, artifacts_dir=tmp_path / "artifacts")
+
+    assert record["fieldmaps"] == {"captured": 1, "cached": 0, "failed": 0}
+
+    # the visible greenhouse item now carries a one-line coverage summary
+    row = [r for r in store.all_queue_rows()
+           if r["payload"].get("posting", {}).get("vendor") == "greenhouse"][0]
+    summary = row["payload"]["fieldmap_coverage"]
+    assert summary == "5 answerable, 1 missing, 1 manual-only of 7 required"
+
+    # the field map persisted under vendor+posting_id+updated_at
+    stored = store.get_fieldmap("greenhouse", "5501001",
+                                "2026-06-20T14:30:00-04:00")
+    assert stored is not None
+    assert stored["body"]["vendor"] == "greenhouse"
+    store.close()
+
+    parsed = json.loads(runs.read_text().splitlines()[0])
+    assert parsed["fieldmaps"]["captured"] == 1
+
+
+def test_capture_fieldmaps_reuses_cache_on_second_run(
+        tmp_path, jobhunt_config, real_ssot_path, greenhouse_raw,
+        greenhouse_questions_raw):
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    board = _backend_board(greenhouse_raw)
+    ssot = SSOT.load(real_ssot_path)
+    source = [Source("greenhouse", "acme", "Acme")]
+
+    first = run_pipeline(
+        jobhunt_config, source, ssot, store,
+        options=RunOptions(no_draft=True, capture_fieldmaps=5),
+        transport=FakeTransport(), fetcher=_fetcher(store, board),
+        capture_opener=_CaptureOpener(greenhouse_questions_raw),
+        runs_path=runs, artifacts_dir=tmp_path / "artifacts")
+    assert first["fieldmaps"] == {"captured": 1, "cached": 0, "failed": 0}
+
+    # same board + same updated_at -> cache hit, no recapture
+    opener = _CaptureOpener(greenhouse_questions_raw)
+    second = run_pipeline(
+        jobhunt_config, source, ssot, store,
+        options=RunOptions(no_draft=True, capture_fieldmaps=5),
+        transport=FakeTransport(), fetcher=_fetcher(store, board),
+        capture_opener=opener, runs_path=runs,
+        artifacts_dir=tmp_path / "artifacts")
+    store.close()
+    assert second["fieldmaps"] == {"captured": 0, "cached": 1, "failed": 0}
+    assert opener.calls == 0  # a cache hit performs zero GETs
+
+
+def test_capture_fieldmaps_only_greenhouse(tmp_path, jobhunt_config,
+                                           real_ssot_path, greenhouse_raw,
+                                           lever_raw, ashby_raw,
+                                           greenhouse_questions_raw):
+    store = Store(tmp_path / "store.db")
+    record = run_pipeline(
+        jobhunt_config, _sources(), SSOT.load(real_ssot_path), store,
+        options=RunOptions(no_draft=True, capture_fieldmaps=10),
+        transport=FakeTransport(),
+        fetcher=_fetcher(store, greenhouse_raw, lever_raw, ashby_raw),
+        capture_opener=_CaptureOpener(greenhouse_questions_raw),
+        runs_path=tmp_path / "runs.jsonl", artifacts_dir=tmp_path / "artifacts")
+
+    captured_plus_cached = (record["fieldmaps"]["captured"]
+                            + record["fieldmaps"]["cached"])
+    assert captured_plus_cached >= 1
+    for row in store.all_queue_rows():
+        vendor = row["payload"].get("posting", {}).get("vendor")
+        has_summary = "fieldmap_coverage" in row["payload"]
+        if vendor == "greenhouse" and row["visible"]:
+            continue  # greenhouse visible items may carry a summary
+        assert not (has_summary and vendor in ("lever", "ashby"))
+    store.close()
+
+
+def test_capture_fieldmaps_is_fail_soft_per_item(tmp_path, jobhunt_config,
+                                                 real_ssot_path, greenhouse_raw,
+                                                 lever_raw, ashby_raw):
+    # The capture GET raises for every item; the run still completes and the
+    # failures are counted, never fatal (W4 3.3 fail-soft).
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    record = run_pipeline(
+        jobhunt_config, _sources(), SSOT.load(real_ssot_path), store,
+        options=RunOptions(no_draft=True, capture_fieldmaps=10),
+        transport=FakeTransport(),
+        fetcher=_fetcher(store, greenhouse_raw, lever_raw, ashby_raw),
+        capture_opener=_FailingCaptureOpener(),
+        runs_path=runs, artifacts_dir=tmp_path / "artifacts")
+    store.close()
+    assert record["fieldmaps"]["captured"] == 0
+    assert record["fieldmaps"]["cached"] == 0
+    assert record["fieldmaps"]["failed"] >= 1
+    # the rest of the record is intact (the run did not abort)
+    assert record["counts"]["enqueued"] == 4
+
+
+def test_capture_fieldmaps_routes_ashby_to_browse_capture(
+        tmp_path, jobhunt_config, real_ssot_path, ashby_raw, monkeypatch):
+    # An ashby item must dispatch to browse.capture_ashby (NOT the greenhouse
+    # HTTP path). A fake stands in for the browser capture so no playwright or
+    # network is touched; threshold=0 guarantees the ashby posting is visible.
+    import engine.browse as browse
+    from engine.fieldmap import Field, FieldMap, Locator
+
+    calls = []
+
+    def fake_capture_ashby(slug, job_id, browser_factory=None):
+        calls.append((slug, job_id))
+        return FieldMap(
+            vendor="ashby", posting_id=job_id, captured_at="2026-07-03T00:00:00+00:00",
+            fields=[Field(key="_systemfield_name", label="Full name",
+                          type="input_text", required=True, options=[],
+                          source="ashby_graphql",
+                          locator=Locator(role="textbox", name="Full name"),
+                          step_index=0, conditional_on=None)])
+
+    monkeypatch.setattr(browse, "capture_ashby", fake_capture_ashby)
+
+    tuned = dataclasses.replace(jobhunt_config, threshold=0)
+    store = Store(tmp_path / "store.db")
+    record = run_pipeline(
+        tuned, [Source("ashby", "initech", "Initech")],
+        SSOT.load(real_ssot_path), store,
+        options=RunOptions(no_draft=True, capture_fieldmaps=5),
+        transport=FakeTransport(), fetcher=_fetcher(store, ashby_raw),
+        runs_path=tmp_path / "runs.jsonl", artifacts_dir=tmp_path / "artifacts")
+
+    # the browser capture ran for the listed ashby posting (slug + job_id routed)
+    assert calls == [("initech", "f7e6d5c4-aaaa-bbbb-cccc-ddddeeeeffff")]
+    assert record["fieldmaps"] == {"captured": 1, "cached": 0, "failed": 0}
+
+    # the field map persisted under the ashby vendor + posting_id + updated_at key
+    stored = store.get_fieldmap("ashby", "f7e6d5c4-aaaa-bbbb-cccc-ddddeeeeffff",
+                                "2026-06-22T08:00:00.000Z")
+    assert stored is not None and stored["body"]["vendor"] == "ashby"
+    row = [r for r in store.all_queue_rows()
+           if r["payload"].get("posting", {}).get("vendor") == "ashby"][0]
+    assert "fieldmap_coverage" in row["payload"]
+    store.close()
 
 
 def test_attachment_publish_failure_is_fail_soft_and_recorded(

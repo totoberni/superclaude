@@ -1,0 +1,38 @@
+{
+  "data": {
+    "jobPosting": {
+      "id": "8f2a1c40-1111-2222-3333-abcabcabcabc",
+      "title": "Staff Platform Engineer",
+      "applicationFormDefinition": {
+        "sections": [
+          {
+            "title": "Personal Information",
+            "fields": [
+              { "field": { "path": "_systemfield_name", "title": "Full name", "type": "String", "isRequired": true, "isHidden": false } },
+              { "field": { "path": "_systemfield_email", "title": "Email", "type": "Email", "isRequired": true, "isHidden": false } },
+              { "field": { "path": "_systemfield_phone", "title": "Phone", "type": "Phone", "isRequired": false, "isHidden": false } },
+              { "field": { "path": "_systemfield_resume", "title": "Resume", "type": "File", "isRequired": true, "isHidden": false } }
+            ]
+          },
+          {
+            "title": "Links",
+            "fields": [
+              { "field": { "path": "_systemfield_linkedin", "title": "LinkedIn Profile", "type": "String", "isRequired": false, "isHidden": false } },
+              { "field": { "path": "custom_github", "title": "GitHub", "type": "String", "isRequired": false, "isHidden": false } }
+            ]
+          },
+          {
+            "title": "Additional Information",
+            "fields": [
+              { "field": { "path": "custom_work_auth", "title": "Are you legally authorized to work in the United States?", "type": "Boolean", "isRequired": true, "isHidden": false } },
+              { "field": { "path": "custom_visa", "title": "Will you now or in the future require visa sponsorship?", "type": "ValueSelect", "isRequired": true, "isHidden": false, "selectableValues": [ { "label": "Yes", "value": "yes" }, { "label": "No", "value": "no" } ] } },
+              { "field": { "path": "custom_pronouns", "title": "Preferred pronouns", "type": "MultiValueSelect", "isRequired": false, "isHidden": false, "selectableValues": [ { "label": "she/her", "value": "1" }, { "label": "he/him", "value": "2" }, { "label": "they/them", "value": "3" } ] } },
+              { "field": { "path": "custom_notice", "title": "What is your notice period?", "type": "String", "isRequired": true, "isHidden": false } },
+              { "field": { "path": "_systemfield_hidden_source", "title": "How did you hear about us?", "type": "String", "isRequired": false, "isHidden": true } }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

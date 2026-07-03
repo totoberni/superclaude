@@ -74,6 +74,14 @@ CREATE TABLE IF NOT EXISTS fetch_cache (
   body          TEXT,
   fetched_at    TEXT
 );
+CREATE TABLE IF NOT EXISTS fieldmap (
+  vendor      TEXT NOT NULL,
+  posting_id  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  PRIMARY KEY (vendor, posting_id, updated_at)
+);
 """
 
 
@@ -286,6 +294,40 @@ class Store:
             "last_modified=excluded.last_modified, body=excluded.body, "
             "fetched_at=excluded.fetched_at",
             (url, etag, last_modified, body, _now()),
+        )
+        self._conn.commit()
+
+    # -- captured field maps (W4 3.1; keyed vendor+posting_id+updated_at) -----
+    def get_fieldmap(self, vendor: str, posting_id: str,
+                     updated_at: str | None) -> dict | None:
+        """Cached field map for an exact (vendor, posting_id, updated_at).
+
+        The updated_at component is load-bearing: a posting whose board
+        updated_at moved is a stale cache entry and must be recaptured, so the
+        key is content-versioned (R-WT-8: never DOM hashes). Returns the row with
+        `body` parsed back to a dict, or None on a miss.
+        """
+        cur = self._conn.execute(
+            "SELECT vendor, posting_id, updated_at, body, captured_at "
+            "FROM fieldmap WHERE vendor=? AND posting_id=? AND updated_at=?",
+            (vendor, posting_id, updated_at or ""),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["body"] = json.loads(data["body"])
+        return data
+
+    def put_fieldmap(self, vendor: str, posting_id: str,
+                     updated_at: str | None, body: dict,
+                     captured_at: str) -> None:
+        self._conn.execute(
+            "INSERT INTO fieldmap(vendor, posting_id, updated_at, body, "
+            "captured_at) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(vendor, posting_id, updated_at) DO UPDATE SET "
+            "body=excluded.body, captured_at=excluded.captured_at",
+            (vendor, posting_id, updated_at or "", json.dumps(body), captured_at),
         )
         self._conn.commit()
 

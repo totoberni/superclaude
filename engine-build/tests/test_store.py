@@ -150,6 +150,38 @@ def test_bulk_update_scores_is_a_single_transaction(store):
     assert len(begins) == 1  # one transaction for the whole batch, not per-row
 
 
+def test_fieldmap_put_get_roundtrip(store):
+    body = {"vendor": "greenhouse", "posting_id": "5501001",
+            "schema_version": "1", "captured_at": "2026-07-03T00:00:00+00:00",
+            "fields": [{"key": "email", "required": True}]}
+    assert store.get_fieldmap("greenhouse", "5501001", "u1") is None
+    store.put_fieldmap("greenhouse", "5501001", "u1", body, "2026-07-03T00:00:00+00:00")
+    row = store.get_fieldmap("greenhouse", "5501001", "u1")
+    assert row["body"] == body           # parsed back into a dict
+    assert row["captured_at"] == "2026-07-03T00:00:00+00:00"
+
+
+def test_fieldmap_cache_key_recaptures_on_updated_at_change(store):
+    # updated_at is load-bearing in the key: a posting whose board updated_at
+    # moved is a cache MISS (recapture), never a stale reuse (R-WT-8).
+    store.put_fieldmap("greenhouse", "5501001", "2026-06-20", {"v": 1}, "t1")
+    assert store.get_fieldmap("greenhouse", "5501001", "2026-06-20")["body"] == {"v": 1}
+    # same vendor+posting_id but a newer updated_at -> miss
+    assert store.get_fieldmap("greenhouse", "5501001", "2026-06-25") is None
+    store.put_fieldmap("greenhouse", "5501001", "2026-06-25", {"v": 2}, "t2")
+    assert store.get_fieldmap("greenhouse", "5501001", "2026-06-25")["body"] == {"v": 2}
+    # the older entry is untouched (both versions coexist, keyed by updated_at)
+    assert store.get_fieldmap("greenhouse", "5501001", "2026-06-20")["body"] == {"v": 1}
+
+
+def test_fieldmap_same_key_overwrites_in_place(store):
+    store.put_fieldmap("greenhouse", "5501001", "u1", {"v": 1}, "t1")
+    store.put_fieldmap("greenhouse", "5501001", "u1", {"v": 2}, "t2")
+    row = store.get_fieldmap("greenhouse", "5501001", "u1")
+    assert row["body"] == {"v": 2}
+    assert row["captured_at"] == "t2"
+
+
 def test_held_count_excludes_closed_demoted_rows(store):
     # A demoted row closed by close_absent (board-absent) is gone for good,
     # not a held backlog awaiting promotion (w-reviewer HIGH, W4 6b finding 1).

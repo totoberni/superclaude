@@ -110,3 +110,21 @@ def lever_raw():
 @pytest.fixture
 def ashby_raw():
     return load_fixture_json("ashby_initech.json")
+
+
+@pytest.fixture
+def greenhouse_questions_raw():
+    """A realistic greenhouse jobs/{id}?questions=true payload (W4 3.1)."""
+    return load_fixture_json("greenhouse_acme_questions.json")
+
+
+@pytest.fixture
+def ashby_form_raw():
+    """An Ashby non-user-graphql ApiJobPosting form response body (W4 3.2)."""
+    return load_fixture_json("ashby_initech_form.json")
+
+
+@pytest.fixture
+def lever_apply_html():
+    """A server-rendered Lever apply-page DOM: base fields + custom cards (W4 3.2)."""
+    return (FIXTURES / "lever_globex_apply.html").read_text()

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Apply to Staff Reliability Engineer - Globex</title></head>
+<body>
+  <div class="content">
+    <form class="application-form" method="POST" enctype="multipart/form-data">
+      <ul class="application-fields">
+        <li class="application-field">
+          <label class="application-label">Full name<span class="required">*</span></label>
+          <input type="text" name="name" required>
+        </li>
+        <li class="application-field">
+          <label class="application-label">Email<span class="required">*</span></label>
+          <input type="text" name="email" required>
+        </li>
+        <li class="application-field">
+          <label class="application-label">Phone</label>
+          <input type="text" name="phone">
+        </li>
+        <li class="application-field">
+          <label class="application-label">Current company</label>
+          <input type="text" name="org">
+        </li>
+        <li class="application-field">
+          <label class="application-label">LinkedIn URL</label>
+          <input type="text" name="urls[LinkedIn]">
+        </li>
+        <li class="application-field">
+          <label class="application-label">GitHub URL</label>
+          <input type="text" name="urls[GitHub]">
+        </li>
+        <li class="application-field application-field-resume">
+          <label class="application-label">Resume / CV<span class="required">*</span></label>
+          <input type="file" name="resume" required>
+        </li>
+      </ul>
+
+      <div class="section-wrapper card">
+        <div class="application-question dropdown">
+          <div class="application-label">
+            <div class="text">Years of professional experience<span class="required">&#10033;</span></div>
+          </div>
+          <select name="cards[7f3a][field0]" required>
+            <option value="">Select...</option>
+            <option value="0-2">0-2 years</option>
+            <option value="3-5">3-5 years</option>
+            <option value="6-plus">6+ years</option>
+          </select>
+        </div>
+
+        <div class="application-question freeform">
+          <div class="application-label">
+            <div class="text">Why do you want to work at Globex?<span class="required">&#10033;</span></div>
+          </div>
+          <textarea name="cards[7f3a][field1]" required></textarea>
+        </div>
+      </div>
+
+      <button type="submit">Submit application</button>
+    </form>
+  </div>
+</body>
+</html>
