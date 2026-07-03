@@ -4,6 +4,7 @@
 identity:
   name: Test Candidate
   email: test.candidate@example.invalid
+  address: "Milan, Italy"
 work_authorization: "EU citizen; full EU work rights, no visa sponsorship needed"
 education:
   - degree: BSc Computer Science
@@ -46,3 +47,4 @@ skills:
 canned_answers:
   notice_period: "1 month"
   visa_sponsorship_required: "no"
+  optional_consents: "yes, consents to the privacy policy and data processing"

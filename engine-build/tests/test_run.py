@@ -17,7 +17,8 @@ from engine.fetch import HttpFetcher, Source
 from engine.match import Scorer
 from engine.notify import FakeTransport
 from engine.profile_map import profile_from_real_ssot
-from engine.run import RunOptions, run_pipeline
+from engine.queue_sm import QueueItem
+from engine.run import RunOptions, _fieldmap_targets, run_pipeline
 from engine.ssot import SSOT
 from engine.store import Store
 
@@ -412,6 +413,75 @@ def _backend_board(greenhouse_raw):
     return {"jobs": [greenhouse_raw["jobs"][0]]}
 
 
+class _FakeQueue:
+    def __init__(self, items):
+        self._items = items
+
+    def items(self):
+        return self._items
+
+
+def _fieldmap_item(item_id, vendor, score):
+    return QueueItem(item_id=item_id, identity_key=item_id, state="pending_review",
+                     prev_state=None, score=score, visible=True,
+                     channel="automatable", payload={"posting": {"vendor": vendor}})
+
+
+def test_fieldmap_targets_spreads_across_vendors_not_all_greenhouse():
+    # Round-1 finding: a plain global top-N was all-greenhouse whenever
+    # greenhouse out-scored the other vendors, so ashby/lever never got
+    # exercised. cap == vendor-count must yield exactly one per vendor.
+    items = [_fieldmap_item("gh1", "greenhouse", 90),
+             _fieldmap_item("gh2", "greenhouse", 85),
+             _fieldmap_item("gh3", "greenhouse", 80),
+             _fieldmap_item("gh4", "greenhouse", 75),
+             _fieldmap_item("as1", "ashby", 70),
+             _fieldmap_item("lv1", "lever", 60)]
+    discovered_index = {i.identity_key: object() for i in items}
+
+    targets = _fieldmap_targets(_FakeQueue(items), discovered_index, 3)
+
+    vendors = [item.payload["posting"]["vendor"] for item, _ in targets]
+    assert len(targets) == 3
+    assert set(vendors) == {"greenhouse", "ashby", "lever"}
+    # score order within each vendor: greenhouse's best (gh1) wins its slot
+    assert [item.item_id for item, _ in targets] == ["gh1", "as1", "lv1"]
+
+
+def test_fieldmap_targets_falls_back_to_global_fill_when_vendor_short():
+    # ashby/lever only have one candidate each; the leftover cap headroom
+    # must fall back to the next-highest-scoring greenhouse items rather than
+    # leaving slots unfilled.
+    items = [_fieldmap_item("gh1", "greenhouse", 90),
+             _fieldmap_item("gh2", "greenhouse", 85),
+             _fieldmap_item("gh3", "greenhouse", 80),
+             _fieldmap_item("gh4", "greenhouse", 75),
+             _fieldmap_item("as1", "ashby", 70),
+             _fieldmap_item("lv1", "lever", 60)]
+    discovered_index = {i.identity_key: object() for i in items}
+
+    targets = _fieldmap_targets(_FakeQueue(items), discovered_index, 5)
+
+    ids = [item.item_id for item, _ in targets]
+    assert len(ids) == 5
+    assert set(ids) == {"gh1", "gh2", "as1", "lv1", "gh3"}
+
+
+def test_fieldmap_targets_ignores_non_visible_and_non_automatable_and_unsupported():
+    hidden = _fieldmap_item("hidden", "greenhouse", 99)
+    hidden.visible = False
+    other_channel = _fieldmap_item("manual", "greenhouse", 98)
+    other_channel.channel = "manual"
+    unsupported_vendor = _fieldmap_item("wf1", "workable", 97)
+    ok = _fieldmap_item("gh1", "greenhouse", 50)
+    items = [hidden, other_channel, unsupported_vendor, ok]
+    discovered_index = {i.identity_key: object() for i in items}
+
+    targets = _fieldmap_targets(_FakeQueue(items), discovered_index, 10)
+
+    assert [item.item_id for item, _ in targets] == ["gh1"]
+
+
 def test_capture_fieldmaps_off_by_default_records_zero(tmp_path, jobhunt_config,
                                                        real_ssot_path,
                                                        greenhouse_raw, lever_raw,
@@ -614,3 +684,41 @@ def test_attachment_publish_failure_is_fail_soft_and_recorded(
     assert record["artifacts"]["publish_failed"] == 1
     # rendering itself is untouched by a downstream publish failure
     assert record["artifacts"]["rendered_pdf"] == drafted
+
+
+class _StubQueue:
+    def __init__(self, items):
+        self._items = items
+
+    def items(self):
+        return self._items
+
+
+def _target_item(item_id, vendor, score, visible=True, channel="automatable"):
+    return QueueItem(item_id=item_id, identity_key=f"k-{item_id}", state="pending_review",
+                     prev_state=None, score=score, visible=visible, channel=channel,
+                     payload={"posting": {"vendor": vendor}})
+
+
+def test_fieldmap_targets_round_robin_spreads_vendors():
+    """Round-1 live finding: global top-N starved ashby/lever; spread must not."""
+    items = [_target_item("g1", "greenhouse", 90), _target_item("g2", "greenhouse", 80),
+             _target_item("g3", "greenhouse", 70), _target_item("g4", "greenhouse", 60),
+             _target_item("a1", "ashby", 85), _target_item("a2", "ashby", 75),
+             _target_item("l1", "lever", 65),
+             _target_item("hidden", "greenhouse", 99, visible=False),
+             _target_item("manual", "lever", 99, channel="manual"),
+             _target_item("offboard", "ashby", 99)]
+    index = {f"k-{i}": object() for i in
+             ("g1", "g2", "g3", "g4", "a1", "a2", "l1", "hidden", "manual")}
+    picked = [item.item_id for item, _ in _fieldmap_targets(_StubQueue(items), index, 6)]
+    assert set(picked) >= {"a1", "l1"}, "every vendor with candidates gets exercised"
+    assert picked[0] == "g1" and "g2" in picked, "score order preserved within vendor"
+    assert len(picked) == 6
+    assert not {"hidden", "manual", "offboard"} & set(picked)
+
+
+def test_fieldmap_targets_zero_cap_and_empty_pool():
+    assert _fieldmap_targets(_StubQueue([]), {}, 6) == []
+    assert _fieldmap_targets(_StubQueue([_target_item("g1", "greenhouse", 90)]),
+                             {"k-g1": object()}, 0) == []

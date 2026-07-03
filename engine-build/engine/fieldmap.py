@@ -63,6 +63,23 @@ _DEMOGRAPHIC_KEYWORDS = (
     "self identification",
 )
 
+# Greenhouse's location-autocomplete widget (round-1 live-capture finding):
+# the composite question shares one label across three sub-fields keyed
+# `location`/`longitude`/`latitude`. All three are mechanically populated by
+# the portal's JS widget, never typed by the applicant, so they are matched
+# by KEY (the shared label carries no distinguishing text) ahead of the
+# generic label matchers. `location` still resolves to real applicant data
+# (the address); `longitude`/`latitude` are pure portal telemetry.
+_LOCATION_WIDGET_KEY = "location"
+_PORTAL_WIDGET_KEYS = {"longitude", "latitude"}
+
+# A required "how much X experience do you have" question is answerable
+# in principle: the SSOT's skills bucket can decide yes/no for any named
+# technology, even if the honest answer is "no" (answerability is about
+# whether the SSOT can decide, not about the polarity of the answer).
+_SKILLS_EXPERIENCE_RE = re.compile(r"experience\s+(?:using|with|in)\b",
+                                  re.IGNORECASE)
+
 # Ordered label-keyword -> candidate SSOT dotted paths. First matcher whose any
 # keyword is a substring of the (lowercased) label wins; within it the first
 # candidate path that resolves in the SSOT makes the field answerable. Specific
@@ -94,6 +111,11 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
      ["canned_answers.relocation", "canned_answers.willing_to_relocate"]),
     (("salary", "compensation expectation", "expected", "desired compensation"),
      ["preferences.comp_floor", "canned_answers.salary_expectation"]),
+    (("country of residence", "currently located in",
+      "where are you currently located", "where are you located"),
+     ["identity.address", "identity.country"]),
+    (("please confirm", "privacy policy", "consent to", "i agree"),
+     ["canned_answers.optional_consents"]),
     (("name",), ["identity.name", "identity.full_name"]),
 ]
 
@@ -291,7 +313,7 @@ def _classify_field(fld: Field, ssot: SSOT, profile: dict) -> FieldCoverage:
     reason = _manual_only_reason(fld)
     if reason:
         return FieldCoverage(fld.key, fld.label, MANUAL_ONLY, "", reason)
-    path = _answerable_path(fld.label, ssot, profile)
+    path = _answerable_path(fld, ssot, profile)
     if path is not None:
         return FieldCoverage(fld.key, fld.label, ANSWERABLE, path)
     return FieldCoverage(fld.key, fld.label, MISSING_STATUS,
@@ -308,11 +330,18 @@ def _manual_only_reason(fld: Field) -> str:
         return "demographic/EEO"
     if any(word in label for word in _DEMOGRAPHIC_KEYWORDS):
         return "demographic/EEO"
+    if fld.key.lower() in _PORTAL_WIDGET_KEYS:
+        return "portal-widget"
     return ""
 
 
-def _answerable_path(label: str, ssot: SSOT, profile: dict) -> str | None:
-    low = label.lower()
+def _answerable_path(fld: Field, ssot: SSOT, profile: dict) -> str | None:
+    location_path = _location_widget_path(fld, ssot)
+    if location_path is not None:
+        return location_path
+    low = fld.label.lower()
+    if _SKILLS_EXPERIENCE_RE.search(low) and ssot.get("skills") is not MISSING:
+        return "skills"
     for keywords, candidates in _ANSWER_MATCHERS:
         if not any(keyword in low for keyword in keywords):
             continue
@@ -322,6 +351,19 @@ def _answerable_path(label: str, ssot: SSOT, profile: dict) -> str | None:
         if _profile_answers_work_auth(candidates, profile):
             return "profile.capabilities"
         return None
+    return None
+
+
+def _location_widget_path(fld: Field, ssot: SSOT) -> str | None:
+    """The Greenhouse location-autocomplete widget's `location` sub-field is
+    mechanically populated (never typed by the applicant): resolve it via the
+    identity address directly, ahead of the generic label matchers (its label
+    is shared with the manual-only `longitude`/`latitude` siblings, so label
+    keyword matching alone cannot distinguish it)."""
+    if fld.key.lower() != _LOCATION_WIDGET_KEY:
+        return None
+    if ssot.get("identity.address") is not MISSING:
+        return "identity.address"
     return None
 
 

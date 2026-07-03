@@ -190,3 +190,87 @@ def test_coverage_work_auth_from_profile_capability_when_ssot_string_absent():
     # With neither SSOT string nor a profile capability it is MISSING.
     bare = coverage(fm, SSOT({}), {})
     assert bare.fields[0].status == MISSING_STATUS
+
+
+def _field(key, label, *, type_="input_text", source="questions"):
+    return Field(key=key, label=label, type=type_, required=True, options=[],
+                source=source, locator=Locator(role="textbox", name=label),
+                step_index=0, conditional_on=None)
+
+
+def test_coverage_location_widget_is_answerable_and_lat_long_are_manual_only(
+        real_ssot_path):
+    # Round-1 live finding: Greenhouse's location-autocomplete widget shares
+    # one label across three sub-fields keyed location/longitude/latitude.
+    # Only `location` carries real applicant data (the address); the other
+    # two are mechanical portal telemetry and must never surface as missing.
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field("location", "Location"),
+                         _field("longitude", "Location"),
+                         _field("latitude", "Location")])
+    ssot = SSOT.load(real_ssot_path)
+    report = coverage(fm, ssot, {})
+    by_key = {f.key: f for f in report.fields}
+
+    assert by_key["location"].status == ANSWERABLE
+    assert by_key["location"].path == "identity.address"
+
+    assert by_key["longitude"].status == MANUAL_ONLY
+    assert by_key["longitude"].reason == "portal-widget"
+    assert by_key["latitude"].status == MANUAL_ONLY
+    assert by_key["latitude"].reason == "portal-widget"
+
+
+def test_coverage_identity_location_patterns_are_answerable(real_ssot_path):
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[
+                      _field("q1", "What is your country of residence?"),
+                      _field("q2", "Are you currently located in the EU?"),
+                      _field("q3", "Where are you currently located?"),
+                      _field("q4", "Where are you located?"),
+                  ])
+    ssot = SSOT.load(real_ssot_path)
+    report = coverage(fm, ssot, {})
+    for fld in report.fields:
+        assert fld.status == ANSWERABLE, fld.label
+        assert fld.path == "identity.address"
+
+
+def test_coverage_skills_experience_pattern_is_answerable(real_ssot_path):
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[
+                      _field("q1", "Do you have experience using Kubernetes?"),
+                      _field("q2", "What is your experience with Python?"),
+                      _field("q3", "How many years of experience in Java do "
+                                  "you have?"),
+                  ])
+    ssot = SSOT.load(real_ssot_path)
+    report = coverage(fm, ssot, {})
+    for fld in report.fields:
+        assert fld.status == ANSWERABLE, fld.label
+        assert fld.path == "skills"
+
+
+def test_coverage_skills_experience_pattern_missing_without_ssot_skills():
+    # Answerability requires the SSOT to actually carry a skills bucket to
+    # decide from -- an empty SSOT cannot answer, so it stays MISSING.
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field("q1", "What is your experience with Rust?")])
+    report = coverage(fm, SSOT({}), {})
+    assert report.fields[0].status == MISSING_STATUS
+
+
+def test_coverage_consent_pattern_is_answerable(real_ssot_path):
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[
+                      _field("q1", "Please confirm you have read our "
+                                  "recruiting policy."),
+                      _field("q2", "I have read the Privacy Policy."),
+                      _field("q3", "Do you consent to a background check?"),
+                      _field("q4", "I agree to the terms above."),
+                  ])
+    ssot = SSOT.load(real_ssot_path)
+    report = coverage(fm, ssot, {})
+    for fld in report.fields:
+        assert fld.status == ANSWERABLE, fld.label
+        assert fld.path == "canned_answers.optional_consents"

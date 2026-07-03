@@ -17,6 +17,7 @@ boards down) is expected and never fatal.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import subprocess
 import sys
@@ -33,7 +34,7 @@ from engine.config import Config, load_config
 from engine.discover import run_discovery
 from engine.draft import ClaudeCliDrafter, Drafter
 from engine.fetch import HttpFetcher, Source, adapter_for, fetch_all, load_sources
-from engine.fieldmap import FieldMap, capture_greenhouse
+from engine.fieldmap import MISSING_STATUS, FieldMap, capture_greenhouse
 from engine.match import Scorer
 from engine.notify import (
     FakeTransport,
@@ -202,30 +203,58 @@ def _capture_fieldmaps(config, queue, store, discovered_index, ssot, profile,
                                             options.capture_fieldmaps):
         try:
             counts[_capture_one(item, posting, store, ssot, profile, opener)] += 1
-        except Exception:
+        except Exception as exc:
             counts["failed"] += 1
+            _log_capture_failure(item, exc)
     return counts
+
+
+def _log_capture_failure(item, exc: Exception) -> None:
+    """One-line stderr diagnostic for a fail-soft capture (round-1 live-gap
+    fix): the catch above previously swallowed the exception entirely, so a
+    nohup'd daily run left zero trace of WHY an item failed. Truncated to 200
+    chars so one bad payload can't flood the log."""
+    vendor = item.payload.get("posting", {}).get("vendor", "?")
+    detail = f"{type(exc).__name__}: {exc}"[:200]
+    print(f"[fieldmap] capture failed item={item.item_id} vendor={vendor} "
+         f"{detail}", file=sys.stderr)
 
 
 _FIELDMAP_VENDORS = ("greenhouse", "ashby", "lever")
 
 
 def _fieldmap_targets(queue, discovered_index, cap) -> list[tuple]:
-    """Top-`cap` visible automatable capture-supported items still on the board.
+    """Vendor-spread top-`cap` visible automatable capture-supported items.
 
     All three tier-1 vendors are eligible now that browse.py lands; greenhouse
-    is browserless, ashby/lever go through the headless browser.
+    is browserless, ashby/lever go through the headless browser. A plain
+    global top-N (score order across ALL vendors) previously starved ashby/
+    lever whenever greenhouse's higher-scoring items filled the whole cap, so
+    the browser paths went unexercised (round-1 live finding). Round-robin
+    across vendors instead (score order WITHIN each vendor), which gives every
+    vendor up to ceil(cap / vendor-count) items; a vendor that runs out of
+    candidates is simply skipped mid-round, so its share falls back to
+    whichever vendor still has candidates (global fill).
     """
-    candidates = []
+    if cap <= 0:
+        return []
+    by_vendor: dict[str, list] = {}
     for item in queue.items():
         posting = discovered_index.get(item.identity_key)
         vendor = item.payload.get("posting", {}).get("vendor")
         if (item.visible and item.channel == "automatable" and posting is not None
                 and vendor in _FIELDMAP_VENDORS):
-            candidates.append(item)
-    candidates.sort(key=lambda i: i.score, reverse=True)
-    return [(item, discovered_index[item.identity_key])
-            for item in candidates[:cap]]
+            by_vendor.setdefault(vendor, []).append(item)
+    if not by_vendor:
+        return []
+    for vendor_items in by_vendor.values():
+        vendor_items.sort(key=lambda i: i.score, reverse=True)
+
+    rounds = itertools.zip_longest(*by_vendor.values())
+    flattened = (item for one_round in rounds for item in one_round
+                if item is not None)
+    selected = list(itertools.islice(flattened, cap))
+    return [(item, discovered_index[item.identity_key]) for item in selected]
 
 
 def _capture_one(item, posting, store, ssot, profile, opener) -> str:
@@ -246,7 +275,7 @@ def _capture_one(item, posting, store, ssot, profile, opener) -> str:
                            fieldmap.to_dict(), fieldmap.captured_at)
         bucket = "captured"
     report = fieldmap.coverage(ssot, profile)
-    _attach_coverage(store, item, report.summary_line())
+    _attach_coverage(store, item, report)
     return bucket
 
 
@@ -269,12 +298,26 @@ def _collect_fieldmap(vendor: str, posting, opener):
     raise ValueError(f"no field-map capture for vendor {vendor!r}")
 
 
-def _attach_coverage(store, item, summary: str) -> None:
+_MISSING_LABELS_CAP = 6
+_MISSING_LABEL_CHARS = 80
+
+
+def _attach_coverage(store, item, report) -> None:
     payload = dict(item.payload)
-    payload["fieldmap_coverage"] = summary
+    payload["fieldmap_coverage"] = report.summary_line()
+    payload["fieldmap_missing"] = _missing_labels(report)
     store.upsert_queue(item.item_id, item.identity_key, item.state,
                        item.prev_state, item.score, int(item.visible),
                        item.channel, payload)
+
+
+def _missing_labels(report) -> list[str]:
+    """Missing-field labels (capped + truncated) alongside the one-line
+    summary, so a round judgment never needs an offline rerun to see WHAT was
+    unanswerable."""
+    labels = [f.label[:_MISSING_LABEL_CHARS] for f in report.fields
+             if f.status == MISSING_STATUS]
+    return labels[:_MISSING_LABELS_CAP]
 
 
 def _build_capture_opener():
