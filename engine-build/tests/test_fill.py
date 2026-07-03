@@ -551,9 +551,12 @@ def test_photo_field_detection_incl_italian(label):
     assert _is_photo_field(_field("x", label, type_="input_file", role="button"))
 
 
-def test_photo_field_detection_via_image_accept():
-    fld = _field("x", "Attach something", type_="input_file", role="button")
-    fld.accept = "image/png"
+def test_photo_field_detection_is_label_based_only():
+    # `Field` (engine.fieldmap) carries no `accept` MIME attribute in
+    # production; detection is driven entirely by the label regex (a former
+    # accept-sniffing branch was dead code and has been removed).
+    fld = _field("x", "Upload your photo", type_="input_file", role="button")
+    assert not hasattr(fld, "accept")
     assert _is_photo_field(fld)
 
 
@@ -778,6 +781,161 @@ def test_hidden_portal_widgets_excluded_from_denominator(
     assert report.fillable_total == 1         # longitude/latitude are hidden
     assert report.filled == 1
     assert report.complete is True
+
+
+# -- required-upload-missing-asset regression (false-COMPLETE hole, W4 fix) ----
+
+def test_completeness_required_upload_missing_asset_is_required_unfilled(
+        tmp_path, real_ssot_path):
+    # The bug: a REQUIRED file field whose asset is missing used to be counted
+    # as a "justified skip" (matching "asset missing" unconditionally), so it
+    # never reached required_unfilled and complete stayed True with no CV
+    # ever attached. It must now land in required_unfilled.
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path, ats=False, atsi=False, photo=False)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("resume", "Resume / CV", type_="input_file", role="button"),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    assert dict(values.skipped)["resume"] == "asset missing: cv-ats"
+
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+
+    assert report.fillable_total == 2
+    assert report.filled == 1                       # first_name only
+    assert len(report.required_unfilled) == 1
+    assert report.required_unfilled[0] == {
+        "key": "resume", "label": "Resume / CV",
+        "reason": "asset missing: cv-ats"}
+    assert report.justified_skips == 0
+    assert report.complete is False
+    assert (report.caption()
+            == "Greenhouse (acme): 1/2 fields filled, "
+               "1 required unfilled - NOT COMPLETE")
+
+
+def test_completeness_required_upload_with_asset_is_filled_and_complete(
+        tmp_path, real_ssot_path):
+    # The non-regression counterpart: when the required upload's asset IS
+    # present, the CV is attached (filled), not skipped -- complete stays True.
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("resume", "Resume / CV", type_="input_file", role="button"),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+
+    assert report.fillable_total == 2
+    assert report.filled == 2                       # first_name + uploaded CV
+    assert report.required_unfilled == []
+    assert report.complete is True
+    assert (report.caption()
+            == "Greenhouse (acme): 2/2 fields filled, "
+               "0 required unfilled - COMPLETE")
+
+
+def test_completeness_optional_upload_missing_asset_stays_justified(
+        tmp_path, real_ssot_path):
+    # An OPTIONAL upload field with a missing asset is still a justified skip
+    # (never a gap) -- the requiredness gate only bites required fields.
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path, ats=False, atsi=False, photo=False)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("resume", "Resume / CV", type_="input_file", role="button",
+               required=False),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+
+    assert report.fillable_total == 2
+    assert report.filled == 1                       # first_name only
+    assert report.required_unfilled == []
+    assert report.justified_skips == 1               # optional CV, asset missing
+    assert report.complete is True
+    assert (report.caption()
+            == "Greenhouse (acme): 1/2 fields filled, "
+               "0 required unfilled - COMPLETE")
+
+
+def test_completeness_required_demographic_skip_stays_justified(
+        tmp_path, real_ssot_path):
+    # A required EEO/demographic field is justified REGARDLESS of requiredness
+    # (policy never auto-answers these) -- distinct from the upload rule above.
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("gender", "Gender", type_="multi_value_single_select",
+               options=["Man", "Woman"], source="demographic", role="combobox",
+               required=True),
+    )
+    assert fm.fields[1].required is True
+
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+
+    assert report.fillable_total == 2
+    assert report.filled == 1                       # first_name only
+    assert report.required_unfilled == []
+    assert report.justified_skips == 1               # the demographic field
+    assert report.complete is True
+    assert (report.caption()
+            == "Greenhouse (acme): 1/2 fields filled, "
+               "0 required unfilled - COMPLETE")
+
+
+def test_completeness_3_of_10_with_missing_required_cv_is_not_complete(
+        tmp_path, real_ssot_path):
+    # The owner's exact complaint scenario: a partial fill (3/10) with a
+    # required CV that was never attached must never read COMPLETE.
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path, ats=False, atsi=False, photo=False)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("email", "Email"),
+        _field("q_consent", "I agree to the Privacy Policy.",
+               type_="boolean", role="checkbox"),
+        _field("resume", "Resume / CV", type_="input_file", role="button"),
+        _field("q_opt_1", "Anything else you want to add?", required=False),
+        _field("q_opt_2", "Favourite colour?", required=False),
+        _field("q_opt_3", "Favourite programming language?", required=False),
+        _field("q_opt_4", "Preferred pronoun?", required=False),
+        _field("q_opt_5", "Referral source?", required=False),
+        _field("q_opt_6", "Anything unusual about you?", required=False),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+
+    assert report.fillable_total == 10
+    assert report.filled == 3
+    assert len(report.required_unfilled) == 1
+    assert report.required_unfilled[0]["key"] == "resume"
+    assert report.complete is False
+    assert (report.caption()
+            == "Greenhouse (acme): 3/10 fields filled, "
+               "1 required unfilled - NOT COMPLETE")
 
 
 # =============================================================================

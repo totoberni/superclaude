@@ -198,11 +198,16 @@ class FillReport:
 
     `fillable_total` (Y) is every non-hidden field on the field map; `filled`
     (X) is how many were actually populated (uploads included); `required_unfilled`
-    (Z) lists every required field left unfilled for an UNJUSTIFIED reason.
-    `justified_skips` counts non-hidden fields left unfilled for a justified
-    reason (file-upload-handled / EEO / demographic). `complete` is True only
-    when there are no required gaps AND every non-hidden field is either filled
-    or justifiably skipped, so a partial fill can never read as done.
+    (Z) lists every required field left unfilled for an UNJUSTIFIED reason --
+    this INCLUDES a required file-upload field whose asset is missing or was
+    never attached, so a mandatory CV/photo that never made it onto the page
+    can never read as done. `justified_skips` counts non-hidden fields left
+    unfilled for a justified reason: an EEO/demographic field (always, any
+    requiredness) or a file-upload/asset-missing skip on an OPTIONAL field
+    only. `complete` is True iff there are no required gaps (Z == 0); an
+    optional field left unfilled for any other reason does not, by itself,
+    force NOT COMPLETE -- the X/Y counts already surface that partial coverage,
+    and a required gap is the hard fail.
     """
     vendor: str
     company: str
@@ -221,17 +226,19 @@ class FillReport:
 
     @property
     def complete(self) -> bool:
-        return (not self.required_unfilled
-                and self.filled + self.justified_skips == self.fillable_total)
+        return not self.required_unfilled
 
     def caption(self) -> str:
         """The owner-mandated notification caption (criterion 1), exact shape:
 
             <Vendor> (<company>): X/Y fields filled, Z required unfilled - COMPLETE
 
-        with "NOT COMPLETE" whenever Z > 0 OR any non-required field is left
-        unfilled beyond a justified skip. The evidence publisher sends THIS as
-        the ntfy message, so the verdict rides the notification the owner reads.
+        with "NOT COMPLETE" whenever Z > 0 (a required field -- including a
+        required file-upload with a missing asset -- was left unfilled for a
+        non-justified reason). An optional field left unfilled does not, on
+        its own, flip this to NOT COMPLETE. The evidence publisher sends THIS
+        as the ntfy message, so the verdict rides the notification the owner
+        reads.
         """
         status = "COMPLETE" if self.complete else "NOT COMPLETE"
         return (f"{self.vendor.capitalize()} ({self.company}): "
@@ -318,13 +325,14 @@ def _is_upload_field(fld) -> bool:
 
 
 def _is_photo_field(fld) -> bool:
-    """A candidate-image field: label matches the portrait pattern (EN + IT), or
-    an image-accepting file input (criterion 3). Only consulted for fields that
-    are already upload fields, so a stray text match cannot trigger an upload."""
-    if _PHOTO_LABEL_RE.search(fld.label or ""):
-        return True
-    accept = str(getattr(fld, "accept", "") or "").lower()
-    return "file" in (fld.type or "").lower() and "image" in accept
+    """A candidate-image field: label matches the portrait pattern (EN + IT)
+    (criterion 3). Only consulted for fields that are already upload fields,
+    so a stray text match cannot trigger an upload.
+
+    `Field` (engine.fieldmap) carries no `accept` MIME attribute, so an
+    accept-sniffing branch would be dead in production; the label regex is the
+    sole detection signal."""
+    return bool(_PHOTO_LABEL_RE.search(fld.label or ""))
 
 
 def _form_has_photo_field(fieldmap: FieldMap) -> bool:
@@ -552,9 +560,12 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
     """
     skip_reason = dict(all_skips)
     if fieldmap is None:
+        # No field map means no requiredness to assert (required_unfilled stays
+        # empty either way), so an upload skip is counted justified here same
+        # as before the fix -- there is no `f.required` to gate it on.
         fillable_total = filled + len(skip_reason)
         justified = sum(1 for reason in skip_reason.values()
-                        if _is_justified_skip(reason))
+                        if _is_justified_skip(reason) or _is_upload_skip(reason))
         return fillable_total, [], justified
 
     non_hidden = [f for f in fieldmap.fields if not _is_hidden_field(f)]
@@ -565,6 +576,8 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
             continue
         reason = skip_reason.get(f.key, "not filled")
         if _is_justified_skip(reason):
+            justified += 1
+        elif _is_upload_skip(reason) and not f.required:
             justified += 1
         elif f.required:
             required_unfilled.append(
@@ -579,12 +592,23 @@ def _is_hidden_field(fld) -> bool:
 
 
 def _is_justified_skip(reason: str) -> bool:
-    """A skip that does NOT count against completeness: an EEO/demographic field
-    (never touched by policy) or a file-upload handled by the upload path
-    (uploaded, or asset absent)."""
+    """A skip that is ALWAYS justified, regardless of requiredness: an
+    EEO/demographic field. Policy forbids ever auto-answering these, so a
+    required-but-untouched demographic field is not a real gap."""
     low = (reason or "").lower()
-    return ("demographic" in low or "eeo" in low
-            or "file-upload" in low or "asset missing" in low)
+    return "demographic" in low or "eeo" in low
+
+
+def _is_upload_skip(reason: str) -> bool:
+    """A file-upload skip: either the legacy no-assets skip ("file-upload") or
+    a resolved-but-missing asset ("asset missing: <name>"). Unlike an
+    EEO/demographic skip, this is justified ONLY when the field itself is
+    OPTIONAL (see the `and not f.required` guard at the call site). A REQUIRED
+    upload field left unfilled (no CV/photo attached) is a genuine gap, never a
+    free pass -- it must land in `required_unfilled` so `complete` cannot read
+    True while a mandatory document was never attached."""
+    low = (reason or "").lower()
+    return "file-upload" in low or "asset missing" in low
 
 
 def _safe_click(target, name: str) -> None:
