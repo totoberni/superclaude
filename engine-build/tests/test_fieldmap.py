@@ -213,7 +213,7 @@ def test_coverage_location_widget_is_answerable_and_lat_long_are_manual_only(
     by_key = {f.key: f for f in report.fields}
 
     assert by_key["location"].status == ANSWERABLE
-    assert by_key["location"].path == "identity.address"
+    assert by_key["location"].path == "identity.current_location"
 
     assert by_key["longitude"].status == MANUAL_ONLY
     assert by_key["longitude"].reason == "portal-widget"
@@ -238,7 +238,7 @@ def test_coverage_identity_location_patterns_are_answerable(real_ssot_path):
     report = coverage(fm, ssot, {})
     for fld in report.fields:
         assert fld.status == ANSWERABLE, fld.label
-        assert fld.path == "identity.address"
+        assert fld.path == "identity.current_location"
 
 
 def test_coverage_skills_experience_pattern_is_answerable(real_ssot_path):

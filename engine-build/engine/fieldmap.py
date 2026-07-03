@@ -114,7 +114,7 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
     (("country of residence", "currently located in",
       "where are you currently located", "where are you located",
       "current location", "location"),
-     ["identity.address", "identity.country"]),
+     ["identity.current_location", "identity.address", "identity.country"]),
     (("please confirm", "privacy policy", "consent to", "i agree"),
      ["canned_answers.optional_consents"]),
     (("name",), ["identity.name", "identity.full_name"]),
@@ -363,8 +363,11 @@ def _location_widget_path(fld: Field, ssot: SSOT) -> str | None:
     keyword matching alone cannot distinguish it)."""
     if fld.key.lower() != _LOCATION_WIDGET_KEY:
         return None
-    if ssot.get("identity.address") is not MISSING:
-        return "identity.address"
+    # The real seeded SSOT (v1.4) keys this as identity.current_location;
+    # identity.address is kept as a legacy fallback for schema drift.
+    for candidate in ("identity.current_location", "identity.address"):
+        if ssot.get(candidate) is not MISSING:
+            return candidate
     return None
 
 

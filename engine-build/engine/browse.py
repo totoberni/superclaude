@@ -103,6 +103,11 @@ _ASHBY_TYPE_MAP = {
 # uses this table to recover the human label when neither duplicate happens
 # to carry one.
 _LEVER_BASE_LABELS = {
+    # Round-4 live finding: the apply page also carries a base `location`
+    # input (autocomplete widget) whose visible twin is "Current location";
+    # without this entry it escaped dedup and its label extraction grabbed
+    # the widget's error text.
+    "location": "Current location",
     "name": "Full name",
     "email": "Email",
     "phone": "Phone",

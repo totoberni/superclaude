@@ -4,7 +4,7 @@
 identity:
   name: Test Candidate
   email: test.candidate@example.invalid
-  address: "Milan, Italy"
+  current_location: "Milan, Italy"
 work_authorization: "EU citizen; full EU work rights, no visa sponsorship needed"
 education:
   - degree: BSc Computer Science
