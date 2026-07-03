@@ -75,7 +75,14 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
     closed = _close_board_absent(store, discovery)
 
     new_postings = run_discovery(discovery, store)
-    discovered_index = {p.identity_key(): p for p in new_postings}
+    # Draft grounding needs the posting text for CARRYOVER items too (they were
+    # discovered on an earlier run, so they are absent from new_postings). The
+    # boards were fully fetched this run anyway: index every listed posting
+    # present today, not just the net-new ones, so any queued item drafted
+    # today gets its live description merged in.
+    discovered_index = {p.identity_key(): p
+                        for adapter, raw, slug in discovery
+                        for p in adapter.parse(raw, slug) if p.listed}
 
     enqueued = 0
     for posting in new_postings:
