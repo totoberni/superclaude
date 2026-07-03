@@ -15,7 +15,9 @@ Standing automation runtime stood up on toto during superclaude-v4-wt (W1-W3): r
 
 ## Two-Machine Split
 
-WSL (`totob@<this box>`) is the cockpit: agents, plans, comms, memory DB, this doc. toto (host TOTO-HOST, user `toto`, Tailscale IP in `config/toto.env`, CachyOS/Arch, fish login shell) is the always-on automation runtime: ntfy server, discovery stack, Remote-Control sessions, the deployed W3 engine. See `rules/12-agent-hierarchy.md` for the agent hierarchy this split sits under, and `~/.claude/plans/superclaude-v4-wt/plan.md` for the campaign that built it.
+WSL (`totob@<this box>`) is the cockpit: agents, plans, comms, memory DB, this doc. toto (host + Tailscale IP + tailnet node names all in the gitignored `config/toto.env`; user `toto`, CachyOS/Arch, fish login shell) is the always-on automation runtime: ntfy server, discovery stack, Remote-Control sessions, the deployed W3 engine. See `rules/12-agent-hierarchy.md` for the agent hierarchy this split sits under, and `~/.claude/plans/superclaude-v4-wt/plan.md` for the campaign that built it.
+
+**Networking (2026-07-03)**: WSL runs its OWN native `tailscaled` (systemd service, `enabled`+`active`) as a distinct tailnet node (its name is in `config/toto.env`); the route to toto goes `dev tailscale0` directly, so every WSL to toto automation path (ssh/scp/rsync deploys, ntfy curls, memory sync, `tsh`/`tsudo`) rides the native link. The Windows Tailscale node is a dormant BACKUP only: if WSL `tailscaled` drops, traffic falls back to the eth0 default route through the Windows host automatically. This is the ultimate fix for the direct-path-flap outage class (a toto home-IP rebind that previously stranded the WSL side behind the Windows node's stale hole-punch). A connection TIMEOUT on the tunnel is a network/tailscale event, never PAM (PAM failures reject fast, they do not time out); triage with `ip route get <toto-ip>`, `tailscale status`, and plain `ssh toto` before touching the wrappers. Full detail: memory `toto-plain-ssh-fallback-and-timeout-not-pam`.
 
 ## Remote Ops
 

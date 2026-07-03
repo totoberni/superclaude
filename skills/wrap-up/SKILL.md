@@ -1,6 +1,6 @@
 ---
 name: wrap-up
-description: "Post-work bundle: record outcome + /mistake + /good-idea + state/recovery"
+description: "Post-work bundle: record outcome + /mistake + /good-idea + /remember --save + state/recovery"
 category: workflow
 user-invocable: true
 disable-model-invocation: true
@@ -10,7 +10,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 
 # /wrap-up: Post-Work Bundle
 
-Bundles the 4-step post-work ceremony into one command. Prevents the failure mode where a runner finishes work but forgets retrospectives. Meta is the primary runner (v3); orch is a legacy branch used only for the rare multi-hour handoff.
+Bundles the post-work ceremony into one command: outcome record -> `/mistake` -> `/good-idea` -> `/remember --save` -> state. Prevents the failure mode where a runner finishes work but forgets retrospectives or the recovery snapshot. Meta is the primary runner (v3); orch is a legacy branch used only for the rare multi-hour handoff. `/remember --save` is invoked as an explicit named step (Step 4), so this one skill is the complete protocol; the operator never has to remember to run the recovery-save separately.
 
 **Project**: $ARGUMENTS
 
@@ -63,13 +63,14 @@ Invoke the `/good-idea` skill for `$ARGUMENTS`:
 - **Dual-write**: class-applicable wins also go to DB `class` tier (see /good-idea Step 0)
 - If no notable wins, note "Standard execution" and move on
 
-### Step 4: Update State / Recovery
+### Step 4: /remember --save (recovery snapshot) + state
 
 Branch by runner.
 
 **Meta (primary)**:
-1. Refresh the program-level recovery memory: search for the existing `meta-recovery-context` (or campaign-specific) slug, then `memory_db.py upsert --tier instance --type user --name <slug> ...` with the Step 1 outcome summary folded in (this is the `/remember --save` semantic, applied inline)
+1. **Invoke `/remember --save`** explicitly (this step exists so the operator never has to type it separately). Per the `/remember` skill's `--save` mode: search first for the existing `meta-recovery-context` (or campaign-specific) slug to update rather than duplicate, then `memory_db.py upsert --tier instance --type user --name <slug> --description "... (<YYYY-MM-DD HH:MM>)" ...` with the Step 1 outcome summary folded into the recovery body (directive/progress/current-task/uncommitted-work/next-steps/key-findings, per `25-context-management.md` § Stash Procedure). Use `--text-stdin` with a Write-tool-authored file when the body contains `!` or other shell-history-sensitive chars (rules/20 § Shell `!` Mangling).
 2. Update the master `~/.claude/plans/$ARGUMENTS/state.md` only if no orchs are currently active on that plan; otherwise leave it, orchs own their own state files while running
+3. If memory changed and a peer is live, converge it: `claude_mem_sync.py --peer-host <peer> --auto newer --yes` (non-interactive agent path)
 
 **Orch (legacy, rare)**:
 1. Read your state file (`~/.claude/plans/$ARGUMENTS/state-<your-orch>.md` or `state.md`)
@@ -77,13 +78,14 @@ Branch by runner.
 
 ## Output
 
-After all 4 steps:
+After all steps:
 ```
 ## Wrap-Up Complete
 - Outcome: plan.md tasks marked DONE + plan.html re-rendered (meta) | RPT-NNN written (orch)
 - Mistakes: <count> recorded (or "Clean session") + <count> dual-written to class
 - Wins: <count> recorded (or "Standard execution") + <count> dual-written to class
-- State: recovery memory upserted (meta) | state-<X>.md updated, <N> tasks DONE (orch)
+- Recovery (/remember --save): recovery memory upserted (slug, <YYYY-MM-DD HH:MM>) + peer-synced
+- State: master state.md updated (meta, no orchs active) | state-<X>.md updated, <N> tasks DONE (orch)
 ```
 
 ## Constraints

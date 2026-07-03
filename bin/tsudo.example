@@ -9,6 +9,10 @@
 #   3. Peer-side setup required: pam_ssh_agent_auth in /etc/pam.d/sudo +
 #      Defaults env_keep += "SSH_AUTH_SOCK" (see your infra notes).
 #   4. NEVER pass -n to the remote sudo: sudo -n bypasses pam_ssh_agent_auth.
+#   5. The forwarded agent is REQUIRED here (pam_ssh_agent_auth) — unlike tsh, a dead agent is
+#      NOT a fallback case: sudo would otherwise hit an unattended password prompt. Transient
+#      connect failures (timeout/refused/unreachable) are retried up to 3x with 2s/4s backoff;
+#      a clean non-zero exit from the REMOTE sudo command is never retried.
 set -euo pipefail
 
 [ "$(hostname)" = "PEERNAME" ] && exec sudo "$@"
@@ -18,7 +22,31 @@ set -euo pipefail
 SOCK="$HOME/.ssh/agent.sock"
 if ! { [ -S "$SOCK" ] && SSH_AUTH_SOCK="$SOCK" ssh-add -l >/dev/null 2>&1; }; then
   echo "tsudo: agent not ready. Fix: rm -f $SOCK; ssh-agent -a $SOCK; SSH_AUTH_SOCK=$SOCK ssh-add KEYFILE" >&2
+  echo "tsudo: if the agent is already running, just: ssh-add KEYFILE" >&2
   exit 2
 fi
 
-exec timeout "${TSUDO_TIMEOUT:-300}" env SSH_AUTH_SOCK="$SOCK" ssh -A PEERHOST "sudo $*"
+TRANSIENT_RE='Connection (timed out|refused)|Network is unreachable|No route to host|Operation timed out|Could not resolve hostname'
+err_file="$(mktemp)"
+trap 'rm -f "$err_file"' EXIT
+
+attempt=1
+max_attempts=3
+delay=2
+rc=0
+set +e
+while true; do
+  timeout "${TSUDO_TIMEOUT:-300}" env SSH_AUTH_SOCK="$SOCK" ssh -A PEERHOST "sudo $*" 2>"$err_file"
+  rc=$?
+  cat "$err_file" >&2
+  if [ "$rc" -eq 255 ] && grep -qE "$TRANSIENT_RE" "$err_file" && [ "$attempt" -lt "$max_attempts" ]; then
+    echo "tsudo: transient connect failure (attempt $attempt/$max_attempts), retrying in ${delay}s..." >&2
+    sleep "$delay"
+    delay=$((delay * 2))
+    attempt=$((attempt + 1))
+    continue
+  fi
+  break
+done
+set -e
+exit "$rc"
