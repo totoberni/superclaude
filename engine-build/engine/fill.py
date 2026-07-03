@@ -254,11 +254,15 @@ class FillReport:
     """The evidence of one fill, with a completeness denominator (criterion 1).
 
     `fillable_total` (Y) is every non-hidden field on the field map; `filled`
-    (X) is how many were actually populated (uploads included); `required_unfilled`
-    (Z) lists every required field left unfilled for an UNJUSTIFIED reason --
-    this INCLUDES a required file-upload field whose asset is missing or was
-    never attached, so a mandatory CV/photo that never made it onto the page
-    can never read as done. `justified_skips` counts non-hidden fields left
+    (X) is how many were actually populated AND readback-CONFIRMED (uploads
+    included) -- a value the page silently rejected, or an upload a custom
+    widget swallowed without ever wiring the native input, never increments X.
+    `required_unfilled` (Z) lists every required field left unfilled for an
+    UNJUSTIFIED reason -- this INCLUDES a required file-upload field whose
+    asset is missing or was never attached, AND a required field whose
+    readback did not confirm the value (a value the page silently rejected),
+    so a mandatory answer or CV/photo that never made it onto the page can
+    never read as done. `justified_skips` counts non-hidden fields left
     unfilled for a justified reason: an EEO/demographic field (always, any
     requiredness) or a file-upload/asset-missing skip on an OPTIONAL field
     only. `complete` is True iff there are no required gaps (Z == 0); an
@@ -291,7 +295,8 @@ class FillReport:
             <Vendor> (<company>): X/Y fields filled, Z required unfilled - COMPLETE
 
         with "NOT COMPLETE" whenever Z > 0 (a required field -- including a
-        required file-upload with a missing asset -- was left unfilled for a
+        required file-upload with a missing asset, or ANY required field whose
+        readback did not confirm the value took -- was left unfilled for a
         non-justified reason). An optional field left unfilled does not, on
         its own, flip this to NOT COMPLETE. The evidence publisher sends THIS
         as the ntfy message, so the verdict rides the notification the owner
@@ -703,9 +708,14 @@ def fill_form(vendor: str, slug: str, job_id: str, values: ResolvedValues,
     uploads any whitelisted asset via `_safe_upload` (no submit ever), blurs after
     each fill to harvest validation errors (aria-invalid + `.error` text), reads
     every filled control back to diff against intent, screenshots the filled page,
-    and asserts the page URL is unchanged. When `fieldmap` is supplied the report
-    carries the completeness denominator (criterion 1); without it the report
-    degrades to the fields it saw. A navigation or a submit-like click raises
+    and asserts the page URL is unchanged. A field (or upload) counts toward
+    `filled` ONLY when its readback confirms the value actually landed -- a
+    value the page silently rejected, or an upload a custom widget swallowed
+    without wiring the native input, is excluded from `filled` and, if the
+    field is required, becomes a `required_unfilled` gap (never a silent
+    false-COMPLETE). When `fieldmap` is supplied the report carries the
+    completeness denominator (criterion 1); without it the report degrades to
+    the fields it saw. A navigation or a submit-like click raises
     FillSafetyError.
     """
     ts = (now or _utc_now_iso)()
@@ -735,7 +745,6 @@ def fill_form(vendor: str, slug: str, job_id: str, values: ResolvedValues,
             try:
                 locator = _locate(page, fv)
                 _apply(locator, fv)
-                filled_keys.add(fv.key)
                 locator.blur()
             except FillSafetyError:
                 raise
@@ -744,9 +753,16 @@ def fill_form(vendor: str, slug: str, job_id: str, values: ResolvedValues,
                 continue
             _harvest_field_validation(locator, fv, validation_errors)
             actual, ok = _readback(locator, fv.value)
-            if not ok:
+            if ok:
+                # Only a readback-CONFIRMED value counts as filled: a value the
+                # page silently rejected (or a custom control that swallowed it)
+                # must never read as done.
+                filled_keys.add(fv.key)
+            else:
                 readback_mismatches.append(
                     {"key": fv.key, "intended": fv.value, "actual": actual})
+                extra_skips.append(
+                    (fv.key, "value did not take (readback mismatch)"))
 
         _harvest_page_errors(page, validation_errors)
         screenshot = _screenshot(page, vendor, job_id, ts, artifacts_dir)
@@ -783,7 +799,10 @@ def _fill_upload(page, fv: FieldValue, assets: FillAssets | None,
                  filled_keys: set[str]) -> None:
     """Upload one whitelisted asset to the real page file input; a FillSafetyError
     still aborts the whole run, a per-field failure is fail-soft. A successful
-    upload counts toward filled.
+    upload counts toward filled ONLY once `_upload_attached` confirms via
+    readback that a file actually landed on the input -- a silently swallowed
+    attach (e.g. a custom widget that never wires the native input) is excluded
+    from filled and, if required, becomes a required gap.
 
     The fieldmap locator (best-effort role=button from the questions API) does
     NOT reach the actual <input type=file> on Greenhouse/Lever, so the input is
@@ -799,13 +818,36 @@ def _fill_upload(page, fv: FieldValue, assets: FillAssets | None,
     try:
         _safe_upload(control, fv.value, assets, page=page,
                      button_name=fv.locator.name or fv.label)
-        filled_keys.add(fv.key)
-        uploads.append({"key": fv.key, "asset": fv.asset,
-                        "path": str(fv.value), "reason": fv.upload_reason})
     except FillSafetyError:
         raise
     except Exception as exc:  # per-field upload error is fail-soft
         extra_skips.append((fv.key, f"upload-error: {exc}"))
+        return
+    if not _upload_attached(control):
+        extra_skips.append((fv.key, "upload did not attach (readback)"))
+        return
+    filled_keys.add(fv.key)
+    uploads.append({"key": fv.key, "asset": fv.asset,
+                    "path": str(fv.value), "reason": fv.upload_reason})
+
+
+def _upload_attached(control) -> bool:
+    """True iff the file input's readback shows a file actually attached after
+    `set_input_files`: a genuine attach leaves the control's value non-empty
+    (a real browser reports a fakepath filename); a control the upload silently
+    passed through without wiring the native input reads back empty and must
+    not count as filled. A control with no readable value (no `input_value`) is
+    assumed attached -- real <input type=file> handles always expose it; this
+    is defence in depth only, matching `_safe_get_attr`'s read-or-default
+    pattern."""
+    getter = getattr(control, "input_value", None)
+    if not callable(getter):
+        return True
+    try:
+        value = getter()
+    except Exception:
+        return True
+    return bool(value)
 
 
 def _locate_file_input(page, fv: FieldValue):

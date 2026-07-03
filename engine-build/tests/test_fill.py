@@ -130,10 +130,18 @@ class _FakeErrorLocator:
 
 class _FakeFileInput:
     """A plain <input type=file> element handle: exposes id/name/accept and the
-    direct `set_input_files` upload path (no click), like a Playwright handle."""
+    direct `set_input_files` upload path (no click), like a Playwright handle.
 
-    def __init__(self, *, id=None, name=None, accept=None):
+    `input_value` mirrors real <input type=file> behaviour: it reads back
+    whatever `set_input_files` last recorded, so a genuine attach reports
+    non-empty by default. Pass `readback` to force a specific value (e.g. ""
+    to simulate a custom widget that silently swallowed the upload without
+    ever wiring the native input)."""
+
+    def __init__(self, *, id=None, name=None, accept=None,
+                 readback=_NO_OVERRIDE):
         self._attrs = {"id": id, "name": name, "accept": accept}
+        self._readback_override = readback
         self.set_input_files_calls = 0
         self.uploaded = None
         self.clicks = 0
@@ -147,6 +155,11 @@ class _FakeFileInput:
 
     def click(self):
         self.clicks += 1
+
+    def input_value(self):
+        if self._readback_override is not _NO_OVERRIDE:
+            return self._readback_override
+        return self.uploaded or ""
 
 
 class _FakePage:
@@ -328,7 +341,9 @@ def test_fill_records_fills_blur_and_screenshot(tmp_path):
 
 def test_fill_detects_readback_mismatch(tmp_path):
     # The fake mutates the readback value: the control does not hold what we
-    # intended, so the diff must surface a mismatch.
+    # intended, so the diff must surface a mismatch. A value that did not take
+    # must NOT count as filled (the readback-gating fix): a required field the
+    # page silently rejected must never read as done.
     mutated = _FakeLocator(readback="Someone Else")
     fields = [_fv("first_name", "First Name", "input_text", "Test Candidate")]
     page = _FakePage(url="https://x/1/apply", controls={"First Name": mutated})
@@ -338,7 +353,7 @@ def test_fill_detects_readback_mismatch(tmp_path):
                        browser_factory=_factory_for(page),
                        artifacts_dir=tmp_path, now=lambda: _PINNED)
 
-    assert report.filled == 1
+    assert report.filled == 0
     assert len(report.readback_mismatches) == 1
     mismatch = report.readback_mismatches[0]
     assert mismatch["key"] == "first_name"
@@ -971,6 +986,125 @@ def test_completeness_3_of_10_with_missing_required_cv_is_not_complete(
     assert (report.caption()
             == "Greenhouse (acme): 3/10 fields filled, "
                "1 required unfilled - NOT COMPLETE")
+
+
+# =============================================================================
+# READBACK-GATED COMPLETENESS (the integrity fix): a field only counts as
+# filled once its readback CONFIRMS the value landed; a required field the
+# page silently rejected -- text/select mismatch or a swallowed upload -- must
+# force NOT COMPLETE rather than silently reading COMPLETE.
+# =============================================================================
+
+def test_readback_mismatch_required_text_field_forces_not_complete(tmp_path):
+    mutated = _FakeLocator(readback="Someone Else")
+    fields = [_fv("first_name", "First Name", "input_text", "Test Candidate")]
+    page = _FakePage(url="https://x/1/apply", controls={"First Name": mutated})
+    fm = _fieldmap(_field("first_name", "First Name"))
+
+    report = fill_form("greenhouse", "acme", "1", ResolvedValues(fields=fields),
+                       browser_factory=_factory_for(page), fieldmap=fm,
+                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+
+    assert report.filled == 0
+    assert len(report.readback_mismatches) == 1
+    assert report.required_unfilled == [{
+        "key": "first_name", "label": "First Name",
+        "reason": "value did not take (readback mismatch)"}]
+    assert report.complete is False
+    assert report.caption().endswith("NOT COMPLETE")
+
+
+def test_readback_mismatch_required_select_forces_not_complete(tmp_path):
+    # A React-combobox-like control that swallows the selection: input_value()
+    # comes back empty even though select_option() was called.
+    swallowed = _FakeLocator(readback="")
+    label = "Do you require visa sponsorship?"
+    fields = [_fv("q_visa", label, "multi_value_single_select", "No",
+                  role="combobox")]
+    page = _FakePage(url="https://x/1/apply", controls={label: swallowed})
+    fm = _fieldmap(_field("q_visa", label, type_="multi_value_single_select",
+                          options=["Yes", "No"], role="combobox"))
+
+    report = fill_form("greenhouse", "acme", "1", ResolvedValues(fields=fields),
+                       browser_factory=_factory_for(page), fieldmap=fm,
+                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+
+    assert report.filled == 0
+    assert len(report.readback_mismatches) == 1
+    assert report.required_unfilled == [{
+        "key": "q_visa", "label": label,
+        "reason": "value did not take (readback mismatch)"}]
+    assert report.complete is False
+
+
+def test_required_upload_that_does_not_attach_forces_not_complete(
+        tmp_path, real_ssot_path):
+    # The file input reports set_input_files was called, but readback shows
+    # zero files attached (e.g. a custom widget never wired the native
+    # input): the upload must NOT count as filled, and a required resume
+    # left unattached must force NOT COMPLETE.
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(_field("resume", "Resume / CV", type_="input_file",
+                          role="button"))
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    resume_input = _FakeFileInput(id="resume", accept=".pdf", readback="")
+    page = _control_page(values.fields, file_inputs=[resume_input])()
+
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(page), fieldmap=fm,
+                       assets=assets, artifacts_dir=tmp_path, now=lambda: _PINNED)
+
+    assert resume_input.set_input_files_calls == 1
+    assert report.uploads == []
+    assert report.filled == 0
+    assert report.required_unfilled == [{
+        "key": "resume", "label": "Resume / CV",
+        "reason": "upload did not attach (readback)"}]
+    assert report.complete is False
+
+
+def test_readback_confirmed_fill_and_upload_stays_complete(
+        tmp_path, real_ssot_path):
+    # Happy-path regression: readback confirms the text value and the upload
+    # attach, so both count toward filled and the report stays COMPLETE.
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("resume", "Resume / CV", type_="input_file", role="button"),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+
+    report = fill_form("lever", "globex", "req-77", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+
+    assert report.filled == 2
+    assert report.required_unfilled == []
+    assert report.complete is True
+    assert report.caption().endswith("COMPLETE")
+    assert not report.caption().endswith("NOT COMPLETE")
+
+
+def test_readback_mismatch_optional_field_excluded_but_not_a_gap(tmp_path):
+    # An OPTIONAL field whose value did not take is excluded from filled (the
+    # X/Y denominator stays honest) but must NOT force NOT COMPLETE, and it is
+    # still recorded in readback_mismatches for the evidence trail.
+    mutated = _FakeLocator(readback="Someone Else")
+    fields = [_fv("nickname", "Nickname", "input_text", "Robbo")]
+    page = _FakePage(url="https://x/1/apply", controls={"Nickname": mutated})
+    fm = _fieldmap(_field("nickname", "Nickname", required=False))
+
+    report = fill_form("greenhouse", "acme", "1", ResolvedValues(fields=fields),
+                       browser_factory=_factory_for(page), fieldmap=fm,
+                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+
+    assert report.filled == 0
+    assert report.required_unfilled == []
+    assert len(report.readback_mismatches) == 1
+    assert report.complete is True
 
 
 # =============================================================================
