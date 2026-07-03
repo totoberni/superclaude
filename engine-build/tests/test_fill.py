@@ -18,6 +18,7 @@ from engine.fill import (
     FillSafetyError,
     ResolvedValues,
     _is_photo_field,
+    _locate_file_input,
     _resolve_photo,
     _safe_click,
     _safe_upload,
@@ -127,11 +128,34 @@ class _FakeErrorLocator:
         return list(self._texts)
 
 
+class _FakeFileInput:
+    """A plain <input type=file> element handle: exposes id/name/accept and the
+    direct `set_input_files` upload path (no click), like a Playwright handle."""
+
+    def __init__(self, *, id=None, name=None, accept=None):
+        self._attrs = {"id": id, "name": name, "accept": accept}
+        self.set_input_files_calls = 0
+        self.uploaded = None
+        self.clicks = 0
+
+    def get_attribute(self, name):
+        return self._attrs.get(name)
+
+    def set_input_files(self, files):
+        self.set_input_files_calls += 1
+        self.uploaded = files
+
+    def click(self):
+        self.clicks += 1
+
+
 class _FakePage:
-    def __init__(self, *, url, controls=None, error_texts=None):
+    def __init__(self, *, url, controls=None, error_texts=None,
+                 file_inputs=None):
         self._url = url
         self._controls = {} if controls is None else controls
         self._error_texts = error_texts or []
+        self._file_inputs = [] if file_inputs is None else file_inputs
         self.goto_calls = []
         self.screenshot_calls = []
         self.requested = []
@@ -151,6 +175,11 @@ class _FakePage:
         self.requested.append(("label", label))
         return self._controls[label]
 
+    def query_selector_all(self, selector):
+        if "file" in selector:
+            return list(self._file_inputs)
+        return []
+
     def locator(self, selector):
         if selector == ".error":
             return _FakeErrorLocator(self._error_texts)
@@ -168,14 +197,20 @@ def _factory_for(page):
 
 
 def _control_page(fields, *, url="https://jobs.example.com/x/1/apply",
-                  **loc_kwargs):
-    """A fake page whose controls are keyed by each field's locator name."""
+                  file_inputs=None, **loc_kwargs):
+    """A fake page whose controls are keyed by each field's locator name, plus a
+    <input type=file> per upload field (id = field key) so the real file-input
+    location path resolves. Pass `file_inputs` to override the auto-built set."""
     controls = {}
     page = None
 
     def build():
         nonlocal page
-        page = _FakePage(url=url, controls=controls, **loc_kwargs)
+        fis = (list(file_inputs) if file_inputs is not None else
+               [_FakeFileInput(id=fv.key)
+                for fv in fields if isinstance(fv.value, Path)])
+        page = _FakePage(url=url, controls=controls, file_inputs=fis,
+                         **loc_kwargs)
         for fv in fields:
             controls[fv.locator.name] = _FakeLocator(page=page)
         return page
@@ -992,3 +1027,314 @@ def _report(*, vendor, company, fillable_total, filled, required_unfilled,
         required_unfilled=required_unfilled, justified_skips=justified_skips,
         uploads=[], skipped=[], readback_mismatches=[], validation_errors=[],
         url_unchanged=True, screenshot=screenshot, ts=_PINNED)
+
+
+# =============================================================================
+# W4 4d live-dry-run fixes: file-input location (1) + consent checkboxes (2) +
+# yes/no select normalization (3)
+# =============================================================================
+
+def _upload_fv(key, label, asset, value, *, role="button"):
+    from engine.fill import FieldValue
+    return FieldValue(key=key, label=label, type="input_file",
+                      locator=Locator(role=role, name=label), value=value,
+                      asset=asset, upload_reason="test")
+
+
+def _page_with_file_inputs(*inputs):
+    return _FakePage(url="https://x/1/apply", file_inputs=list(inputs))
+
+
+# --- (1) locate the real <input type=file>, not the fieldmap button locator ---
+
+def test_locate_file_input_prefers_key_stem_over_accept(tmp_path):
+    # A Greenhouse-style id=resume input wins by key stem even when a decoy
+    # doc-accept input precedes it.
+    decoy = _FakeFileInput(id="cover_letter", accept=".pdf,.doc")
+    resume = _FakeFileInput(id="resume", accept=".pdf,.doc,.docx,.txt,.rtf")
+    page = _page_with_file_inputs(decoy, resume)
+    fv = _upload_fv("resume", "Resume/CV", "cv-ats", tmp_path / "cv-ats.pdf")
+    assert _locate_file_input(page, fv) is resume
+
+
+def test_locate_file_input_lever_style_id_and_name(tmp_path):
+    # Lever: id="resume-upload-input" name="resume", no accept -> stem "resume".
+    lever = _FakeFileInput(id="resume-upload-input", name="resume")
+    page = _page_with_file_inputs(lever)
+    fv = _upload_fv("resume", "Resume / CV", "cv-ats", tmp_path / "cv-ats.pdf")
+    assert _locate_file_input(page, fv) is lever
+
+
+def test_locate_file_input_cv_falls_back_to_doc_accept(tmp_path):
+    # No stem match -> a CV takes the first input whose accept is a document type.
+    generic = _FakeFileInput(id="file-1", accept="application/pdf,.docx")
+    page = _page_with_file_inputs(generic)
+    fv = _upload_fv("resume", "Upload document", "cv-ats", tmp_path / "cv-ats.pdf")
+    assert _locate_file_input(page, fv) is generic
+
+
+def test_locate_file_input_cv_accepts_input_without_accept(tmp_path):
+    generic = _FakeFileInput(id="file-1")            # no accept attribute
+    page = _page_with_file_inputs(generic)
+    fv = _upload_fv("resume", "Upload document", "cv-ats", tmp_path / "cv-ats.pdf")
+    assert _locate_file_input(page, fv) is generic
+
+
+def test_locate_file_input_photo_needs_image_accept(tmp_path):
+    # A photo skips the document input and lands on the image-accept input.
+    doc = _FakeFileInput(id="file-1", accept=".pdf")
+    img = _FakeFileInput(id="avatar", accept="image/png,image/jpeg")
+    page = _page_with_file_inputs(doc, img)
+    fv = _upload_fv("headshot", "Headshot", "photo", tmp_path / "Me.png")
+    assert _locate_file_input(page, fv) is img
+
+
+def test_locate_file_input_photo_skipped_when_no_image_input(tmp_path):
+    doc = _FakeFileInput(id="file-1", accept=".pdf")
+    page = _page_with_file_inputs(doc)
+    fv = _upload_fv("headshot", "Headshot", "photo", tmp_path / "Me.png")
+    assert _locate_file_input(page, fv) is None
+
+
+def test_locate_file_input_none_when_no_file_inputs(tmp_path):
+    page = _FakePage(url="https://x/1/apply")
+    fv = _upload_fv("resume", "Resume", "cv-ats", tmp_path / "cv-ats.pdf")
+    assert _locate_file_input(page, fv) is None
+
+
+def test_cv_lands_on_greenhouse_resume_input_via_set_input_files(
+        tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(_field("resume", "Resume/CV", type_="input_file",
+                          role="button"))
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    resume_input = _FakeFileInput(id="resume",
+                                  accept=".pdf,.doc,.docx,.txt,.rtf")
+    page = _control_page(values.fields, file_inputs=[resume_input])()
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(page), fieldmap=fm,
+                       assets=assets, artifacts_dir=tmp_path, now=lambda: _PINNED)
+    assert resume_input.set_input_files_calls == 1
+    assert resume_input.uploaded == str(assets.cv_ats)
+    assert resume_input.clicks == 0                  # direct upload, no click
+    assert report.uploads[0]["key"] == "resume"
+    assert report.complete is True
+
+
+def test_cv_lands_on_lever_resume_upload_input(tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(_field("resume", "Resume / CV", type_="input_file",
+                          role="button"), vendor="lever")
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    decoy = _FakeFileInput(id="avatar", accept="image/png")
+    lever_input = _FakeFileInput(id="resume-upload-input", name="resume")
+    page = _control_page(values.fields, file_inputs=[decoy, lever_input])()
+    fill_form("lever", "globex", "req-77", values,
+              browser_factory=_factory_for(page), fieldmap=fm, assets=assets,
+              artifacts_dir=tmp_path, now=lambda: _PINNED)
+    assert lever_input.uploaded == str(assets.cv_ats)
+    assert decoy.set_input_files_calls == 0          # image input untouched
+
+
+def test_photo_lands_on_image_accept_input(tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(_field("headshot", "Headshot", type_="input_file",
+                          role="button"))
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    resume_input = _FakeFileInput(id="cv", accept=".pdf,.doc")
+    photo_input = _FakeFileInput(id="pic", accept="image/png,image/jpeg")
+    page = _control_page(values.fields,
+                         file_inputs=[resume_input, photo_input])()
+    fill_form("greenhouse", "acme", "1", values,
+              browser_factory=_factory_for(page), fieldmap=fm, assets=assets,
+              artifacts_dir=tmp_path, now=lambda: _PINNED)
+    assert photo_input.uploaded == str(assets.photo)
+    assert Path(photo_input.uploaded).name == "Me.png"
+    assert resume_input.set_input_files_calls == 0
+
+
+def test_required_resume_with_no_file_input_stays_required_unfilled(
+        tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("resume", "Resume / CV", type_="input_file", role="button"),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    page = _control_page(values.fields, file_inputs=[])()      # no file inputs
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(page), fieldmap=fm,
+                       assets=assets, artifacts_dir=tmp_path, now=lambda: _PINNED)
+    assert dict(report.skipped)["resume"] == "no file input located"
+    assert [r["key"] for r in report.required_unfilled] == ["resume"]
+    assert report.complete is False
+
+
+def test_upload_still_rejects_non_whitelisted_path(tmp_path):
+    # Safety regression: even with a real file input on the page, an arbitrary
+    # (non-asset) path is refused by the whitelist.
+    good = tmp_path / "cv-ats.pdf"
+    good.write_bytes(b"stub")
+    assets = FillAssets(cv_ats=good)
+    resume_input = _FakeFileInput(id="resume", accept=".pdf")
+    with pytest.raises(FillSafetyError, match="whitelist"):
+        _safe_upload(resume_input, tmp_path / "evil.pdf", assets)
+    assert resume_input.set_input_files_calls == 0
+
+
+# --- (2) consent / talent-pool / marketing checkboxes -------------------------
+
+def test_consent_please_confirm_is_ticked(real_ssot_path):
+    # The live Greenhouse "Please confirm the following:" required box.
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field("q_confirm", "Please confirm the following:",
+                          type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert resolved.values["q_confirm"] is True
+    assert resolved.skipped == []
+
+
+def test_consent_ticked_even_when_coverage_classifier_misses_path(
+        real_ssot_path):
+    # The live mechanism: a consent box whose SSOT matcher path is absent used
+    # to classify MISSING and be skipped. The label-based checkbox classifier
+    # now ticks it True from the SSOT's ratified consent answer, independent of
+    # the coverage matcher.
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field("q_ack", "I acknowledge the data processing terms.",
+                          type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert resolved.values["q_ack"] is True
+
+
+def test_talent_pool_checkbox_is_ticked_true(real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field(
+        "q_pool", "Add me to your talent pool for future opportunities",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert resolved.values["q_pool"] is True
+
+
+def test_marketing_checkbox_left_unticked(real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field("q_news", "Subscribe me to the monthly newsletter",
+                          type_="boolean", role="checkbox", required=False))
+    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert "q_news" not in resolved.values
+    assert (dict(resolved.skipped)["q_news"]
+            == "marketing/newsletter checkbox left unticked")
+
+
+def test_marketing_wording_beats_consent_wording(real_ssot_path):
+    # "I agree to receive marketing emails" carries a consent verb but is a
+    # marketing opt-in -> left unticked (never opted into).
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field("q_mkt", "I agree to receive marketing emails",
+                          type_="boolean", role="checkbox", required=False))
+    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert "q_mkt" not in resolved.values
+
+
+def test_fill_ticks_consent_via_check_leaves_marketing(tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(
+        _field("q_consent", "I agree to the Privacy Policy.",
+               type_="boolean", role="checkbox"),
+        _field("q_news", "Subscribe to our newsletter",
+               type_="boolean", role="checkbox", required=False),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    consent = _FakeLocator()
+    news = _FakeLocator()
+    page = _FakePage(url="https://x/1/apply",
+                     controls={"I agree to the Privacy Policy.": consent,
+                               "Subscribe to our newsletter": news})
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(page), fieldmap=fm,
+                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+    assert consent.checked is True          # ticked via the safe check() path
+    assert consent.clicks == 0              # no deny-listed click
+    assert news.checked is None             # marketing box never touched
+    assert news.clicks == 0
+    assert (dict(report.skipped)["q_news"]
+            == "marketing/newsletter checkbox left unticked")
+
+
+# --- (3) yes/no select normalization ------------------------------------------
+
+def test_yesno_authorization_resolves_yes(real_ssot_path):
+    # SSOT work_authorization is EU prose (no literal "Yes") -> normalized Yes.
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field(
+        "q_auth", "Are you legally authorized to work in the EU?",
+        type_="multi_value_single_select", options=["Yes", "No"],
+        role="combobox"))
+    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert resolved.values["q_auth"] == "Yes"
+    assert resolved.skipped == []
+
+
+def test_yesno_authorization_no_region_resolves_yes(real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field(
+        "q_auth", "Are you legally authorized to work?",
+        type_="multi_value_single_select", options=["Yes", "No"],
+        role="combobox"))
+    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert resolved.values["q_auth"] == "Yes"
+
+
+def test_yesno_sponsorship_resolves_no_via_phrase_options(real_ssot_path):
+    # Phrase options mean no exact match; the negative sponsorship answer maps
+    # to the "No, ..." option.
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field(
+        "q_visa", "Will you now or in the future require visa sponsorship?",
+        type_="multi_value_single_select",
+        options=["Yes, I require sponsorship", "No, I do not require sponsorship"],
+        role="combobox"))
+    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert resolved.values["q_visa"] == "No, I do not require sponsorship"
+    assert resolved.skipped == []
+
+
+def test_yesno_us_authorization_is_skipped_and_required_unfilled(
+        tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("q_auth_us",
+               "Are you legally authorized to work in the United States?",
+               type_="multi_value_single_select", options=["Yes", "No"],
+               role="combobox"),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert "q_auth_us" not in values.values
+    reason = dict(values.skipped)["q_auth_us"]
+    assert "region-ambiguous" in reason
+    assert "questionnaire" in reason
+
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, artifacts_dir=tmp_path, now=lambda: _PINNED)
+    assert [r["key"] for r in report.required_unfilled] == ["q_auth_us"]
+    assert report.complete is False
+
+
+def test_yesno_us_sponsorship_is_skipped_not_guessed(real_ssot_path):
+    # The dangerous case: SSOT visa_sponsorship_required == "no" would exact-match
+    # the "No" option, but for a US posting the EU candidate DOES need US
+    # sponsorship -> the region gate must skip rather than answer "No".
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field(
+        "q_visa_us", "Do you require visa sponsorship to work in the US?",
+        type_="multi_value_single_select", options=["Yes", "No"],
+        role="combobox"))
+    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert "q_visa_us" not in resolved.values
+    assert "region-ambiguous" in dict(resolved.skipped)["q_visa_us"]

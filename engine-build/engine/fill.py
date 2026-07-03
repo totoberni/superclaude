@@ -62,19 +62,76 @@ from engine.fieldmap import (
     FieldMap,
     Locator,
     _classify_field,
+    _missing_path_guess,
     capture_greenhouse,
 )
 from engine.ssot import MISSING, SSOT
 
-# The dotted path the coverage classifier assigns to any privacy/consent field
-# (its `_ANSWER_MATCHERS` consent tuple resolves here); a boolean field on this
-# path is the ONLY checkbox this dry run auto-ticks.
-_CONSENT_PATH = "canned_answers.optional_consents"
+# Canned-answer paths (checked in order) that ratify consent: the first that
+# resolves to a non-negative value gates every consent/confirmation checkbox to
+# True. The real SSOT keys this as `privacy_consent_default`; the synthetic v1.4
+# fixture keys it as `optional_consents`, so both are consulted.
+_CONSENT_SOURCE_PATHS = (
+    "canned_answers.privacy_consent_default",
+    "canned_answers.optional_consents",
+)
 
 # Field types that render as an option choice rather than free text.
 _SELECT_TYPES = frozenset({
     "multi_value_single_select", "multi_value_multi_select", "yes_no",
 })
+
+# -- checkbox intent classifiers (criterion: consent checkboxes) ---------------
+# A checkbox is ticked True only when its label reads as a legal
+# consent/confirmation ask, or as a talent-pool / future-opportunities opt-in
+# (YES per the owner split). A pure marketing/newsletter box is left unticked.
+# Order at the call site is talent-pool -> marketing -> consent, so a "marketing"
+# ask that also says "I agree" is never mistaken for legal consent.
+_CONSENT_RE = re.compile(
+    r"please confirm|privacy|consent|i agree|\bagree\b|\bterms\b|gdpr|"
+    r"data processing|i acknowledge|i certify|i confirm", re.I)
+_TALENT_POOL_RE = re.compile(
+    r"talent (pool|community|network)|future opportunit|future role|"
+    r"keep .*on file|consider me for|stay in touch|keep me in mind|"
+    r"other (roles|positions|opportunit)", re.I)
+_MARKETING_RE = re.compile(
+    r"marketing|newsletter|promotional|promotions|subscribe|mailing list|"
+    r"updates and offers|product updates|latest news", re.I)
+
+# -- yes/no select intent + region coverage (criterion: yes/no selects) --------
+# Right-to-work / sponsorship selects are answered by deriving an affirmative or
+# negative from the SSOT work-authorization facts, then picking the matching
+# Yes/No option. A posting whose label targets a region the SSOT does not cover
+# (e.g. the United States) is region-ambiguous and is left honestly unfilled.
+_SPONSOR_INTENT_RE = re.compile(r"sponsor|\bvisa\b", re.I)
+_WORK_AUTH_INTENT_RE = re.compile(
+    r"authori[sz]ed to work|authori[sz]ation to work|right to work|"
+    r"eligible to work|legally (authori[sz]ed|entitled|permitted|able)|"
+    r"work permit|work authori[sz]ation|permitted to work|able to work in|"
+    r"do you have the right to work", re.I)
+_COVERED_REGION_RE = re.compile(
+    r"\beu\b|\be\.u\.\b|european union|\beurope\b|\beea\b|ital", re.I)
+_UNCOVERED_REGION_RE = re.compile(
+    r"united states|\bu\.?s\.?a?\.?\b|\bamerica|\bcanad|"
+    r"united kingdom|\bu\.?k\.?\b|\bbritain\b|\bengland\b|\baustralia\b|"
+    r"\bindia\b|\bsingapore\b|\buae\b|\bdubai\b", re.I)
+_YESNO_NEG_RE = re.compile(r"^\s*(no\b|n\b|not\b|none\b|false\b|nope\b)", re.I)
+_YESNO_POS_RE = re.compile(r"^\s*(yes\b|y\b|true\b|yep\b|yeah\b)", re.I)
+
+# -- file-input location (criterion: CV upload on Greenhouse + Lever) ----------
+# The fieldmap locator for an upload field is a best-effort role=button hint from
+# the questions API, which does NOT reach the real <input type=file>. The file
+# input is located directly on the page instead: by a key stem in its id/name,
+# else by its `accept` MIME family (document for a CV, image for a photo).
+_KEY_STOPWORDS = frozenset({
+    "job", "application", "answers", "attributes", "field", "fields",
+    "input", "the", "your", "form", "value", "name", "file", "upload",
+    "attach", "document", "documents",
+})
+_DOC_ACCEPT_TOKENS = ("pdf", "doc", "rtf", "txt", "msword",
+                      "wordprocessing", "text/", "officedocument")
+_IMAGE_ACCEPT_TOKENS = ("image", "png", "jpg", "jpeg", "gif", "webp",
+                        "heic", "svg", "bmp", "tiff")
 
 # Click-name denylist: the SINGLE guard that makes a submit structurally
 # impossible. Any element whose accessible name matches is refused by
@@ -280,13 +337,16 @@ def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
     (the pre-override default) file fields keep the old "file-upload" skip, so
     the existing contract holds.
 
-    Every other field reuses `fieldmap._classify_field` (the SSOT coverage
-    classifier): manual-only (EEO-demographic / portal widget) and missing
-    (unanswerable) fields are SKIPPED with their classifier reason. An answerable
-    field is rendered by type: free text from the resolved SSOT string, an option
-    label for a select when an option matches the SSOT value case-insensitively
-    (else skipped), and bool True for a privacy-consent checkbox. Deterministic,
-    no LLM; never writes the SSOT.
+    A checkbox (boolean) is resolved by its label intent (`_resolve_boolean`): a
+    consent/confirmation box ticks True when the SSOT ratifies consent, a
+    talent-pool box ticks True, a marketing box is left unticked. Every other
+    field reuses `fieldmap._classify_field` (the SSOT coverage classifier):
+    manual-only (EEO-demographic / portal widget) and missing (unanswerable)
+    fields are SKIPPED with their classifier reason. An answerable field is
+    rendered by type: free text from the resolved SSOT string, and an option
+    label for a select (an exact case-insensitive option match, else a yes/no
+    normalization for right-to-work / sponsorship questions, else skipped).
+    Deterministic, no LLM; never writes the SSOT.
     """
     profile = profile or {}
     assets = assets.verified() if assets is not None else None
@@ -295,6 +355,9 @@ def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
     for fld in fieldmap.fields:
         if _is_upload_field(fld):
             _resolve_upload(fld, resolved, assets, posting_lang, has_photo_field)
+            continue
+        if (fld.type or "").lower() == "boolean":
+            _resolve_boolean(fld, resolved, ssot, profile)
             continue
         classified = _classify_field(fld, ssot, profile)
         if classified.status == MANUAL_ONLY:
@@ -372,27 +435,91 @@ def _is_italian(posting_lang: str) -> bool:
     return str(posting_lang or "").strip().lower() in _ITALIAN_LANGS
 
 
+# -- checkbox (boolean) resolution ---------------------------------------------
+
+def _resolve_boolean(fld, resolved: ResolvedValues, ssot: SSOT,
+                     profile: dict) -> None:
+    """Resolve a checkbox by its label intent (criterion: consent checkboxes).
+
+    An EEO/demographic or file boolean stays manual-only (never auto-answered).
+    A consent/confirmation box is ticked True when the SSOT ratifies consent; a
+    talent-pool / future-opportunities box is ticked True (YES per the owner
+    split); a marketing/newsletter box is left unticked; any other checkbox is
+    left for a human (unchanged pre-existing behaviour)."""
+    classified = _classify_field(fld, ssot, profile)
+    if classified.status == MANUAL_ONLY:
+        resolved.skipped.append((fld.key, classified.reason or MANUAL_ONLY))
+        return
+    kind = _classify_checkbox(fld.label)
+    if kind == "marketing":
+        resolved.skipped.append(
+            (fld.key, "marketing/newsletter checkbox left unticked"))
+        return
+    if kind == "talent_pool":
+        resolved.fields.append(_bool_field(fld, True))
+        return
+    if kind == "consent":
+        if _consent_ratified(ssot):
+            resolved.fields.append(_bool_field(fld, True))
+        else:
+            resolved.skipped.append(
+                (fld.key, "consent checkbox not auto-ticked: SSOT carries no "
+                 "ratified consent answer"))
+        return
+    resolved.skipped.append(
+        (fld.key, "non-consent checkbox not auto-checked in dry run"))
+
+
+def _bool_field(fld, value: bool) -> FieldValue:
+    return FieldValue(key=fld.key, label=fld.label, type=fld.type,
+                      locator=fld.locator, value=value)
+
+
+def _classify_checkbox(label: str) -> str | None:
+    """One of "talent_pool" | "marketing" | "consent" | None for a checkbox.
+
+    Talent-pool is checked first, then marketing, then consent: a marketing box
+    that also says "I agree" must never read as legal consent, and a
+    future-opportunities box (owner: YES) must not be dropped as marketing."""
+    low = (label or "").lower()
+    if _TALENT_POOL_RE.search(low):
+        return "talent_pool"
+    if _MARKETING_RE.search(low):
+        return "marketing"
+    if _CONSENT_RE.search(low):
+        return "consent"
+    return None
+
+
+def _consent_ratified(ssot: SSOT) -> bool:
+    """True iff the SSOT carries a non-negative consent answer (never fabricated:
+    an explicit "no" or an absent answer leaves the box unticked)."""
+    for path in _CONSENT_SOURCE_PATHS:
+        value = ssot.get(path)
+        if value is MISSING:
+            continue
+        if _yesno(value) is not False:   # True or non-yes/no prose -> ratified
+            return True
+    return False
+
+
 def _render_value(fld, path: str, ssot: SSOT):
     """Render one ANSWERABLE field to (value, None) or (None, skip_reason).
 
-    File fields are handled in the upload branch of `resolve_values` and never
-    reach here; the guard below is defence in depth so a file field can never be
-    rendered as free text even if the dispatch changes."""
+    File and boolean fields are handled by their own branches of `resolve_values`
+    and never reach here; the file guard below is defence in depth so a file
+    field can never be rendered as free text even if the dispatch changes."""
     if fld.type == "input_file":
         return None, "file-upload"
-    if fld.type == "boolean":
-        if path == _CONSENT_PATH:
-            return True, None
-        return None, "non-consent checkbox not auto-checked in dry run"
     raw = ssot.get(path)
     if raw is MISSING:
         return None, f"answerable via {path} but no literal SSOT value"
     if fld.type in _SELECT_TYPES:
-        return _render_select(fld, raw)
+        return _render_select(fld, raw, ssot)
     return _render_text(raw, path)
 
 
-def _render_select(fld, raw):
+def _render_select(fld, raw, ssot: SSOT):
     if fld.type == "multi_value_multi_select":
         candidates = raw if isinstance(raw, list) else [raw]
         matched = [m for m in (_match_option(fld.options, c) for c in candidates)
@@ -400,10 +527,135 @@ def _render_select(fld, raw):
         if not matched:
             return None, f"no option matches SSOT value {_short(raw)!r}"
         return matched, None
+    intent = _select_intent(fld.label)
+    if intent is not None:
+        return _resolve_yes_no_select(fld, ssot, intent, raw)
     match = _match_option(fld.options, raw)
-    if match is None:
-        return None, f"no option matches SSOT value {_short(raw)!r}"
-    return match, None
+    if match is not None:
+        return match, None
+    return None, f"no option matches SSOT value {_short(raw)!r}"
+
+
+# -- yes/no select normalization (criterion: right-to-work / sponsorship) ------
+
+def _select_intent(label: str) -> str | None:
+    low = (label or "").lower()
+    if _SPONSOR_INTENT_RE.search(low):
+        return "sponsorship"
+    if _WORK_AUTH_INTENT_RE.search(low):
+        return "work_auth"
+    return None
+
+
+def _resolve_yes_no_select(fld, ssot: SSOT, intent: str, raw):
+    """Answer a right-to-work / sponsorship select conservatively.
+
+    The region gate takes precedence over a naive exact option match: a posting
+    whose label targets a region the SSOT does not cover (e.g. the US) is left
+    honestly unfilled with a questionnaire pointer rather than answered from
+    EU-context facts. Otherwise an exact option match wins, then a yes/no derived
+    from the SSOT work-authorization facts (EU/Italy rights -> Yes to
+    authorization / No to sponsorship-required). Never fabricates a Yes for a
+    right the SSOT does not state."""
+    if _region_ambiguous(fld.label):
+        detail = ("region-ambiguous work authorization" if intent == "work_auth"
+                  else "region-ambiguous visa sponsorship")
+        return None, _questionnaire_skip(
+            fld, f"{detail} (posting region outside the SSOT's EU/Italy work "
+            "rights)")
+    match = _match_option(fld.options, raw)
+    if match is not None:
+        return match, None
+    if intent == "work_auth":
+        if not _has_eu_work_rights(_work_auth_text(ssot)):
+            return None, _questionnaire_skip(
+                fld, "work authorization not established in the SSOT")
+        want_yes = True
+    else:
+        needed = _sponsorship_needed(ssot)
+        if needed is None:
+            return None, _questionnaire_skip(
+                fld, "visa sponsorship requirement not established in the SSOT")
+        want_yes = needed                        # sponsorship needed -> Yes
+    option = _pick_option(fld.options, want_yes)
+    if option is None:
+        return None, f"no yes/no option to answer {_short(fld.label)!r}"
+    return option, None
+
+
+def _region_ambiguous(label: str) -> bool:
+    """True when the label names a region the SSOT does not cover and does NOT
+    also name a covered (EU/Italy) region."""
+    return bool(_UNCOVERED_REGION_RE.search(label or "")
+                and not _COVERED_REGION_RE.search(label or ""))
+
+
+def _work_auth_text(ssot: SSOT) -> str:
+    raw = ssot.get("work_authorization")
+    if raw is MISSING:
+        return ""
+    if isinstance(raw, dict):
+        return " ".join(str(v) for v in raw.values()).lower()
+    if isinstance(raw, (list, tuple)):
+        return " ".join(str(v) for v in raw).lower()
+    return str(raw).lower()
+
+
+def _has_eu_work_rights(text: str) -> bool:
+    if not text:
+        return False
+    region = re.search(r"\beu\b|european|\beea\b|ital|europe", text)
+    rights = re.search(
+        r"work right|authori|citizen|permit|entitled|no visa|no sponsor|"
+        r"freedom of movement", text)
+    return bool(region and rights)
+
+
+def _sponsorship_needed(ssot: SSOT):
+    """True/False/None: does the candidate require visa sponsorship? Prefers the
+    dedicated canned answer, then the work-authorization prose."""
+    raw = ssot.get("canned_answers.visa_sponsorship_required")
+    if raw is not MISSING:
+        verdict = _yesno(raw)
+        if verdict is not None:
+            return verdict
+    text = _work_auth_text(ssot)
+    if re.search(r"no (visa )?sponsor|sponsorship not (needed|required)|"
+                 r"without sponsor|no need for sponsor", text):
+        return False
+    return None
+
+
+def _pick_option(options, want_yes: bool):
+    """The option whose label reads affirmative (want_yes) or negative. A yes_no
+    field with no enumerated options falls back to the literal "Yes"/"No"."""
+    for option in options or []:
+        if _yesno(option) is want_yes:
+            return option
+    if not options:
+        return "Yes" if want_yes else "No"
+    return None
+
+
+def _yesno(value):
+    """True/False/None for a scalar: yes/no leading token, else undetermined."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if _YESNO_NEG_RE.match(text):
+        return False
+    if _YESNO_POS_RE.match(text):
+        return True
+    return None
+
+
+def _questionnaire_skip(fld, detail: str) -> str:
+    """A skip reason that both explains the ambiguity and carries a
+    questionnaire dotted-path pointer (same shape as fieldmap's missing guess),
+    so the required field stays honestly unfilled and feeds a questionnaire."""
+    return f"needs questionnaire ({detail}): {_missing_path_guess(fld.label)}"
 
 
 def _match_option(options, raw):
@@ -529,13 +781,22 @@ def _is_upload(fv: FieldValue) -> bool:
 def _fill_upload(page, fv: FieldValue, assets: FillAssets | None,
                  uploads: list[dict], extra_skips: list[tuple[str, str]],
                  filled_keys: set[str]) -> None:
-    """Upload one whitelisted asset; a FillSafetyError still aborts the whole run,
-    a per-field failure is fail-soft. A successful upload counts toward filled."""
+    """Upload one whitelisted asset to the real page file input; a FillSafetyError
+    still aborts the whole run, a per-field failure is fail-soft. A successful
+    upload counts toward filled.
+
+    The fieldmap locator (best-effort role=button from the questions API) does
+    NOT reach the actual <input type=file> on Greenhouse/Lever, so the input is
+    located directly (`_locate_file_input`) and driven via `set_input_files` with
+    no click. A required upload with no matching input stays required_unfilled."""
     if assets is None:
         extra_skips.append((fv.key, "upload skipped: no FillAssets provided"))
         return
+    control = _locate_file_input(page, fv)
+    if control is None:
+        extra_skips.append((fv.key, "no file input located"))
+        return
     try:
-        control = _locate(page, fv)
         _safe_upload(control, fv.value, assets, page=page,
                      button_name=fv.locator.name or fv.label)
         filled_keys.add(fv.key)
@@ -545,6 +806,65 @@ def _fill_upload(page, fv: FieldValue, assets: FillAssets | None,
         raise
     except Exception as exc:  # per-field upload error is fail-soft
         extra_skips.append((fv.key, f"upload-error: {exc}"))
+
+
+def _locate_file_input(page, fv: FieldValue):
+    """Find the real <input type=file> for an upload field.
+
+    Preference (per the live probe of Greenhouse/Lever/Ashby): an input whose
+    id or name contains a meaningful token of the field key (e.g. "resume");
+    else, by `accept` MIME family: an image input for a photo field, a document
+    input (or an input with no `accept`) for a CV field. None if none matches."""
+    inputs = _file_inputs(page)
+    if not inputs:
+        return None
+    tokens = _field_key_tokens(fv.key)
+    for inp in inputs:
+        idname = _input_idname(inp)
+        if idname and any(token in idname for token in tokens):
+            return inp
+    want_image = fv.asset == "photo"
+    for inp in inputs:
+        accept = _input_accept(inp)
+        if want_image:
+            if _accept_has_image(accept):
+                return inp
+        elif not accept or _accept_has_doc(accept):
+            return inp
+    return None
+
+
+def _file_inputs(page):
+    getter = getattr(page, "query_selector_all", None)
+    if getter is None:
+        return []
+    try:
+        return list(getter("input[type=file]") or [])
+    except Exception:
+        return []
+
+
+def _field_key_tokens(key: str) -> list[str]:
+    return [token for token in re.split(r"[^a-z0-9]+", (key or "").lower())
+            if len(token) >= 3 and token not in _KEY_STOPWORDS]
+
+
+def _input_idname(inp) -> str:
+    idv = _safe_get_attr(inp, "id") or ""
+    namev = _safe_get_attr(inp, "name") or ""
+    return f"{idv} {namev}".lower()
+
+
+def _input_accept(inp) -> str:
+    return (_safe_get_attr(inp, "accept") or "").lower()
+
+
+def _accept_has_doc(accept: str) -> bool:
+    return any(token in accept for token in _DOC_ACCEPT_TOKENS)
+
+
+def _accept_has_image(accept: str) -> bool:
+    return any(token in accept for token in _IMAGE_ACCEPT_TOKENS)
 
 
 def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
