@@ -107,7 +107,7 @@ def _posting(locations, *, remote_flag=False, title="Engineer", description=""):
 def test_location_us_only_remote_is_weak_not_full(jobhunt_config):
     # The live-run bug: a US-only "remote" role scored location_fit 1.0 as if
     # EU-eligible. It must now be 0.4 with an eligibility caveat.
-    scorer = Scorer(jobhunt_config, {"locations": ["milan", "italy", "eu"],
+    scorer = Scorer(jobhunt_config, {"locations": ["lisbon", "italy", "eu"],
                                      "remote_ok": True})
     breakdown = scorer.score(_posting(["Remote - United States"],
                                       remote_flag=True))
@@ -116,36 +116,36 @@ def test_location_us_only_remote_is_weak_not_full(jobhunt_config):
 
 
 def test_location_us_state_code_only_remote_is_weak(jobhunt_config):
-    scorer = Scorer(jobhunt_config, {"locations": ["milan"], "remote_ok": True})
+    scorer = Scorer(jobhunt_config, {"locations": ["lisbon"], "remote_ok": True})
     breakdown = scorer.score(_posting(["Remote (San Francisco, CA)"],
                                       remote_flag=True))
     assert breakdown.axis_scores["location_fit"] == 0.4
 
 
 def test_location_eu_marked_remote_is_full(jobhunt_config):
-    scorer = Scorer(jobhunt_config, {"locations": ["milan"], "remote_ok": True})
+    scorer = Scorer(jobhunt_config, {"locations": ["lisbon"], "remote_ok": True})
     breakdown = scorer.score(_posting(["Remote - EU"], remote_flag=True))
     assert breakdown.axis_scores["location_fit"] == 1.0
     assert any("EU-eligible" in m for m in breakdown.matched)
 
 
 def test_location_bare_remote_is_unverified(jobhunt_config):
-    scorer = Scorer(jobhunt_config, {"locations": ["milan"], "remote_ok": True})
+    scorer = Scorer(jobhunt_config, {"locations": ["lisbon"], "remote_ok": True})
     breakdown = scorer.score(_posting(["Remote"], remote_flag=True))
     assert breakdown.axis_scores["location_fit"] == 0.7
     assert any("eligibility unverified" in w for w in breakdown.weak)
 
 
 def test_location_italy_city_direct_match_is_full(jobhunt_config):
-    scorer = Scorer(jobhunt_config, {"locations": ["milan", "italy"],
+    scorer = Scorer(jobhunt_config, {"locations": ["lisbon", "italy"],
                                      "remote_ok": True})
-    breakdown = scorer.score(_posting(["Milan, Italy"], remote_flag=False))
+    breakdown = scorer.score(_posting(["Lisbon, Portugal"], remote_flag=False))
     assert breakdown.axis_scores["location_fit"] == 1.0
-    assert any("location: Milan, Italy" in m for m in breakdown.matched)
+    assert any("location: Lisbon, Portugal" in m for m in breakdown.matched)
 
 
 def test_location_non_remote_non_matching_stays_low(jobhunt_config):
-    scorer = Scorer(jobhunt_config, {"locations": ["milan"], "remote_ok": True})
+    scorer = Scorer(jobhunt_config, {"locations": ["lisbon"], "remote_ok": True})
     breakdown = scorer.score(_posting(["New York, NY"], remote_flag=False))
     assert breakdown.axis_scores["location_fit"] == 0.3
 

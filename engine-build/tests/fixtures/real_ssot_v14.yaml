@@ -4,7 +4,7 @@
 identity:
   name: Test Candidate
   email: test.candidate@example.invalid
-  current_location: "Milan, Italy"
+  current_location: "Lisbon, Portugal"
 work_authorization: "EU citizen; full EU work rights, no visa sponsorship needed"
 education:
   - degree: BSc Computer Science
@@ -22,11 +22,11 @@ preferences:
     - Machine Learning Engineer
     - Graduate Software Engineer
   target_locations:
-    - "Milan, Italy"
+    - "Lisbon, Portugal"
     - "Remote (EU)"
     - "London, UK"
   remote: "Open to fully remote roles within the EU"
-  comp_floor: "EUR 26,000 gross annual (RAL)"
+  comp_floor: "EUR 47,000 gross annual (RAL)"
   excludes:
     - unpaid
     - commission only

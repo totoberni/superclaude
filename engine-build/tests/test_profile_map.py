@@ -19,13 +19,13 @@ def test_roles_map_as_is(real_ssot_path):
 
 
 def test_comp_floor_parses_grouped_integer(real_ssot_path):
-    # "EUR 26,000 gross annual (RAL)" -> 26000
-    assert _profile(real_ssot_path)["comp_floor"] == 26000
+    # "EUR 47,000 gross annual (RAL)" -> 47000
+    assert _profile(real_ssot_path)["comp_floor"] == 47000
 
 
 def test_location_tokens_include_bare_city_and_country(real_ssot_path):
     locations = _profile(real_ssot_path)["locations"]
-    for token in ("Milan, Italy", "Milan", "Italy", "London", "UK", "Remote"):
+    for token in ("Lisbon, Portugal", "Lisbon", "Portugal", "London", "UK", "Remote"):
         assert token in locations
 
 
