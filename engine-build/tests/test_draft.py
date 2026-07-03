@@ -9,7 +9,12 @@ import json
 import subprocess
 from types import SimpleNamespace
 
-from engine.draft import GROUNDING_CONTRACT, ClaudeCliDrafter, build_user_prompt
+from engine.draft import (
+    GROUNDING_CONTRACT,
+    ClaudeCliDrafter,
+    build_user_prompt,
+    select_language,
+)
 from engine.ssot import SSOT
 
 # Real CLI schema shape (spec section 2): result + total_cost_usd + usage.* +
@@ -144,3 +149,64 @@ def test_description_is_capped(real_ssot_path):
     assert "x" * 4000 in prompt
     assert "x" * 5000 not in prompt
     assert "[...]" in prompt
+
+
+# W4 4c criterion 5: language/tone discriminant.
+_IT_DESCRIPTION = (
+    "Cerchiamo un ingegnere del backend per lo sviluppo dei nostri servizi in "
+    "Python. La nostra azienda offre un ruolo nel team di ricerca con esperienza "
+    "richiesta nel lavoro di sviluppo software."
+)
+_IT_POSTING = {
+    "title": "Ingegnere Backend",
+    "company_slug": "acme-it",
+    "locations": ["Milano, Italia"],
+    "description": _IT_DESCRIPTION,
+}
+
+
+def test_select_language_italian_all_italy_no_english_hard():
+    lang, rationale = select_language(_IT_POSTING)
+    assert lang == "it"
+    assert "Italy" in rationale
+
+
+def test_select_language_english_hard_forces_english():
+    posting = dict(_IT_POSTING,
+                   description=_IT_DESCRIPTION + " Fluent English is required.")
+    lang, rationale = select_language(posting)
+    assert lang == "en"
+    assert "English is a hard prerequisite" in rationale
+
+
+def test_select_language_non_italian_text_is_english():
+    lang, rationale = select_language(_POSTING)  # English description, UK location
+    assert lang == "en"
+    assert "not detected as Italian" in rationale
+
+
+def test_select_language_italian_text_but_location_outside_italy_is_english():
+    posting = dict(_IT_POSTING, locations=["Milano, Italia", "London, UK"])
+    lang, rationale = select_language(posting)
+    assert lang == "en"
+    assert "not all in Italy" in rationale
+
+
+def test_prompt_carries_voice_rules_and_no_field_data_instruction(real_ssot_path):
+    prompt = build_user_prompt(_POSTING, _BREAKDOWN, _ssot(real_ssot_path))
+    # the owner's voice rules are present
+    assert "HOOK" in prompt
+    assert "honest-gap" in prompt
+    assert "warm invitation" in prompt
+    # the drafter is told NOT to emit a FIELD DATA block (assembled deterministically)
+    assert "No FIELD DATA block" in prompt
+    # and a language directive rides the prompt
+    assert "LANGUAGE DIRECTIVE" in prompt
+    assert "ENGLISH" in prompt
+
+
+def test_prompt_italian_directive_when_posting_is_italian():
+    prompt = build_user_prompt(_IT_POSTING, _BREAKDOWN,
+                               SSOT({"identity": {"name": "Test Candidate"}}))
+    assert "LANGUAGE DIRECTIVE (it" in prompt
+    assert "ITALIAN" in prompt

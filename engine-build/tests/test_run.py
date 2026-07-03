@@ -18,7 +18,13 @@ from engine.match import Scorer
 from engine.notify import FakeTransport
 from engine.profile_map import profile_from_real_ssot
 from engine.queue_sm import QueueItem
-from engine.run import RunOptions, _fieldmap_targets, run_pipeline
+from engine.run import (
+    RunOptions,
+    _assemble_report_data,
+    _build_letter_header,
+    _fieldmap_targets,
+    run_pipeline,
+)
 from engine.ssot import SSOT
 from engine.store import Store
 
@@ -144,16 +150,26 @@ def test_run_end_to_end_one_push_and_telemetry(tmp_path, jobhunt_config,
     assert drafted == ready == len(drafter.calls)
     assert record["usage_totals"]["input_tokens"] == 10 * drafted
 
-    # per_item: one PDF rendered + one attachment published per drafted item
-    assert record["artifacts"] == {"rendered_pdf": drafted, "fallback_txt": 0,
-                                   "published": drafted, "publish_failed": 0}
-    assert len(transport.sent_files) == drafted
+    # per_item: TWO PDFs rendered (cover letter + report) and TWO attachments
+    # published per drafted item, as separate messages (W4 4c criterion 4)
+    assert record["artifacts"] == {"letter_pdf": drafted, "letter_txt": 0,
+                                   "report_pdf": drafted, "report_txt": 0,
+                                   "published": 2 * drafted, "publish_failed": 0}
+    assert len(transport.sent_files) == 2 * drafted
+    kinds = {"cover letter": 0, "report": 0}
     for sent_topic, _path, caption, filename in transport.sent_files:
         assert sent_topic == jobhunt_config.topic
         assert caption.startswith("[j-")
-        assert filename.endswith("-cover-letter.pdf")
-    # the PDF files really landed under artifacts/<item_id>/
+        assert (filename.endswith("-cover-letter.pdf")
+                or filename.endswith("-report.pdf"))
+        if "] cover letter - " in caption:
+            kinds["cover letter"] += 1
+        elif "] report - " in caption:
+            kinds["report"] += 1
+    assert kinds == {"cover letter": drafted, "report": drafted}
+    # both documents really landed under artifacts/<item_id>/
     assert list(artifacts_dir.glob("*/*-cover-letter.pdf"))
+    assert list(artifacts_dir.glob("*/*-report.pdf"))
     assert record["cost_usd_total"] == round(0.002 * drafted, 6)
 
     # runs.jsonl: exactly one parseable telemetry line carrying artifacts counts
@@ -161,7 +177,7 @@ def test_run_end_to_end_one_push_and_telemetry(tmp_path, jobhunt_config,
     assert len(lines) == 1
     parsed = json.loads(lines[0])
     assert parsed["counts"]["new"] == 4
-    assert parsed["artifacts"]["published"] == drafted
+    assert parsed["artifacts"]["published"] == 2 * drafted
 
 
 def test_dry_run_pushes_nothing(tmp_path, jobhunt_config, real_ssot_path,
@@ -183,7 +199,8 @@ def test_dry_run_pushes_nothing(tmp_path, jobhunt_config, real_ssot_path,
     assert transport.sent_files == []
     assert record["push_sent"] is False
     assert record["artifacts"]["published"] == 0
-    assert record["artifacts"]["rendered_pdf"] >= 1
+    assert record["artifacts"]["letter_pdf"] >= 1
+    assert record["artifacts"]["report_pdf"] >= 1
 
 
 def test_draft_cap_bounds_drafts(tmp_path, jobhunt_config, real_ssot_path,
@@ -204,9 +221,11 @@ def test_draft_cap_bounds_drafts(tmp_path, jobhunt_config, real_ssot_path,
     store.close()
     assert len(drafter.calls) == 1
     assert record["counts"]["drafted"] == 1
-    # the cap bounds artifacts + attachments too, not just drafts
-    assert record["artifacts"]["rendered_pdf"] == 1
-    assert len(transport.sent_files) == 1
+    # the cap bounds artifacts + attachments too, not just drafts: one drafted
+    # item yields one letter + one report and two attachment messages
+    assert record["artifacts"]["letter_pdf"] == 1
+    assert record["artifacts"]["report_pdf"] == 1
+    assert len(transport.sent_files) == 2
 
 
 def test_no_draft_skips_drafting(tmp_path, jobhunt_config, real_ssot_path,
@@ -225,7 +244,8 @@ def test_no_draft_skips_drafting(tmp_path, jobhunt_config, real_ssot_path,
     assert drafter.calls == []
     assert record["counts"]["drafted"] == 0
     # no drafts -> no artifacts rendered or published
-    assert record["artifacts"] == {"rendered_pdf": 0, "fallback_txt": 0,
+    assert record["artifacts"] == {"letter_pdf": 0, "letter_txt": 0,
+                                   "report_pdf": 0, "report_txt": 0,
                                    "published": 0, "publish_failed": 0}
     assert transport.sent_files == []
 
@@ -355,8 +375,9 @@ def test_attach_mode_bundle_publishes_single_zip(tmp_path, jobhunt_config,
         (greenhouse_raw, lever_raw, ashby_raw), fake_pdflatex(), "bundle")
     drafted = record["counts"]["drafted"]
     assert drafted >= 2  # a bundle is only meaningful with several PDFs
-    assert record["artifacts"]["rendered_pdf"] == drafted
-    assert record["artifacts"]["published"] == 1  # one zip, published once
+    assert record["artifacts"]["letter_pdf"] == drafted
+    assert record["artifacts"]["report_pdf"] == drafted
+    assert record["artifacts"]["published"] == 1  # one zip (both docs), once
     assert len(transport.sent) == 1               # digest still exactly once
     assert len(transport.sent_files) == 1
     _topic, _path, _caption, filename = transport.sent_files[0]
@@ -374,23 +395,29 @@ def test_attach_mode_none_publishes_no_files(tmp_path, jobhunt_config,
     assert len(transport.sent) == 1                 # digest only
     assert transport.sent_files == []               # zero attachments
     assert record["artifacts"]["published"] == 0
-    assert record["artifacts"]["rendered_pdf"] == drafted  # still rendered
+    assert record["artifacts"]["letter_pdf"] == drafted   # still rendered
+    assert record["artifacts"]["report_pdf"] == drafted
 
 
 def test_render_failure_falls_back_to_txt_attachments(tmp_path, jobhunt_config,
                                                      real_ssot_path,
                                                      greenhouse_raw, lever_raw,
                                                      ashby_raw, fake_pdflatex):
-    # pdflatex fails for every item -> each drafted item ships a .txt fallback
+    # pdflatex fails for every item -> each drafted item ships letter + report
+    # as .txt fallbacks, both published
     record, transport = _run_with_attach_mode(
         tmp_path, jobhunt_config, real_ssot_path,
         (greenhouse_raw, lever_raw, ashby_raw), fake_pdflatex(False), "per_item")
     drafted = record["counts"]["drafted"]
-    assert record["artifacts"] == {"rendered_pdf": 0, "fallback_txt": drafted,
-                                   "published": drafted, "publish_failed": 0}
-    assert len(transport.sent_files) == drafted
-    for _topic, _path, _caption, filename in transport.sent_files:
-        assert filename.endswith("-cover-letter.txt")
+    assert record["artifacts"] == {"letter_pdf": 0, "letter_txt": drafted,
+                                   "report_pdf": 0, "report_txt": drafted,
+                                   "published": 2 * drafted, "publish_failed": 0}
+    assert len(transport.sent_files) == 2 * drafted
+    letters = sum(f.endswith("-cover-letter.txt")
+                  for _t, _p, _c, f in transport.sent_files)
+    reports = sum(f.endswith("-report.txt")
+                  for _t, _p, _c, f in transport.sent_files)
+    assert letters == drafted and reports == drafted
 
 
 class _FlakyTransport(FakeTransport):
@@ -674,16 +701,19 @@ def test_attachment_publish_failure_is_fail_soft_and_recorded(
     store.close()
 
     drafted = record["counts"]["drafted"]
-    assert drafted >= 3  # a predecessor and a successor around item 2
+    assert drafted >= 3  # a predecessor and a successor around the failed call
 
     # the digest already went out; the mid-batch attachment failure never
-    # aborted it, nor the remaining attachments
+    # aborted it, nor the remaining attachments. Two attachments per item, so
+    # one failed call leaves (2 * drafted - 1) published.
+    attachments = 2 * drafted
     assert len(transport.sent) == 1
-    assert len(transport.sent_files) == drafted - 1
-    assert record["artifacts"]["published"] == drafted - 1
+    assert len(transport.sent_files) == attachments - 1
+    assert record["artifacts"]["published"] == attachments - 1
     assert record["artifacts"]["publish_failed"] == 1
     # rendering itself is untouched by a downstream publish failure
-    assert record["artifacts"]["rendered_pdf"] == drafted
+    assert record["artifacts"]["letter_pdf"] == drafted
+    assert record["artifacts"]["report_pdf"] == drafted
 
 
 class _StubQueue:
@@ -722,3 +752,84 @@ def test_fieldmap_targets_zero_cap_and_empty_pool():
     assert _fieldmap_targets(_StubQueue([]), {}, 6) == []
     assert _fieldmap_targets(_StubQueue([_target_item("g1", "greenhouse", 90)]),
                              {"k-g1": object()}, 0) == []
+
+
+# -- report-data assembly (W4 4c criterion 4) --------------------------------
+
+def _drafted_stub(job_id=None, updated_ts=None):
+    return {
+        "item_id": "j-1", "title": "Senior Backend Engineer", "company": "Acme",
+        "material": "body", "lang": "en", "lang_rationale": "english default",
+        "job_id": job_id, "updated_ts": updated_ts,
+        "posting": {"vendor": "greenhouse", "company_slug": "acme",
+                    "title": "Senior Backend Engineer",
+                    "url": "https://x.invalid/j/1", "locations": ["London, UK"]},
+        "breakdown": {"total": 72, "matched": ["role: Senior Backend Engineer"],
+                      "weak": ["comp unknown"],
+                      "ats_warnings": ["may fail ATS: missing work_authorization"]},
+    }
+
+
+def test_assemble_report_data_uses_canned_surface_without_fieldmap(
+        tmp_path, jobhunt_config, real_ssot_path):
+    store = Store(tmp_path / "store.db")
+    ssot = SSOT.load(real_ssot_path)
+    profile = profile_from_real_ssot(ssot)
+
+    report = _assemble_report_data(jobhunt_config, _drafted_stub(), store, ssot,
+                                   profile)
+    store.close()
+
+    assert report["posting"]["company"] == "Acme"
+    assert report["posting"]["score"] == 72
+    assert report["coverage"]["summary"] == "no field map captured for this posting"
+    # the canned-answers surface carries identity + canned_answers fields
+    fields = {row["field"]: row["value"] for row in report["field_data"]}
+    assert fields["Email"] == "test.candidate@example.invalid"
+    assert fields["canned: notice_period"] == "1 month"
+    # one score row per configured axis, weights from the config
+    assert {r["axis"] for r in report["score_rows"]} == set(jobhunt_config.axes)
+
+
+def test_assemble_report_data_reuses_captured_fieldmap_coverage(
+        tmp_path, jobhunt_config, real_ssot_path):
+    from engine.fieldmap import Field, FieldMap, Locator
+
+    store = Store(tmp_path / "store.db")
+    ssot = SSOT.load(real_ssot_path)
+    profile = profile_from_real_ssot(ssot)
+    fieldmap = FieldMap(
+        vendor="greenhouse", posting_id="555",
+        captured_at="2026-07-03T00:00:00+00:00",
+        fields=[
+            Field(key="email", label="Email", type="input_text", required=True,
+                  options=[], source="questions",
+                  locator=Locator("textbox", "Email"), step_index=0,
+                  conditional_on=None),
+            Field(key="resume", label="Resume", type="input_file", required=True,
+                  options=[], source="questions",
+                  locator=Locator("button", "Resume"), step_index=0,
+                  conditional_on=None),
+        ])
+    store.put_fieldmap("greenhouse", "555", "2026-06-20T14:30:00-04:00",
+                       fieldmap.to_dict(), fieldmap.captured_at)
+
+    drafted = _drafted_stub(job_id="555", updated_ts="2026-06-20T14:30:00-04:00")
+    report = _assemble_report_data(jobhunt_config, drafted, store, ssot, profile)
+    store.close()
+
+    fields = {row["field"]: row["value"] for row in report["field_data"]}
+    assert fields["Email"] == "test.candidate@example.invalid"   # answerable
+    assert fields["Resume"] == "(manual-only: file-upload)"      # never auto-filled
+    assert report["coverage"]["summary"].endswith("of 2 required")
+
+
+def test_build_letter_header_marks_absent_fields_missing(real_ssot_path):
+    header = _build_letter_header(SSOT.load(real_ssot_path))
+    assert header["full_name"] == "Test Candidate"      # identity.name fallback
+    assert header["subtitle"] == "Computational Scientist"
+    assert header["email"] == "test.candidate@example.invalid"
+    assert header["website"] == "https://example.invalid"  # links.site fallback
+    # the synthetic SSOT lacks phone + linkedin -> grounding marker, not invented
+    assert header["phone"] == "[MISSING: identity.phone]"
+    assert header["linkedin"] == "[MISSING: links.linkedin]"

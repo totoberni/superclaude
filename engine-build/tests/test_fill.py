@@ -8,15 +8,22 @@ against the synthetic v1.4 SSOT; every verdict is asserted explicitly.
 """
 
 import contextlib
+from pathlib import Path
 
 import pytest
 
 from engine.fill import (
+    FillAssets,
     FillReport,
     FillSafetyError,
     ResolvedValues,
+    _is_photo_field,
+    _resolve_photo,
     _safe_click,
+    _safe_upload,
+    default_assets,
     fill_form,
+    publish_evidence,
     resolve_values,
 )
 from engine.fieldmap import Field, FieldMap, Locator
@@ -63,6 +70,7 @@ class _FakeLocator:
         self.checked = None
         self.blurred = False
         self.set_input_files_calls = 0
+        self.uploaded = None
         self.clicks = 0
 
     # -- actions --
@@ -81,9 +89,9 @@ class _FakeLocator:
     def click(self):
         self.clicks += 1
 
-    def set_input_files(self, *args, **kwargs):  # must NEVER be called
+    def set_input_files(self, files):  # allowed now, but only for upload fields
         self.set_input_files_calls += 1
-        raise AssertionError("set_input_files must never be called in the dry run")
+        self.uploaded = files
 
     def blur(self):
         self.blurred = True
@@ -461,3 +469,368 @@ def _fv(key, label, type_, value, *, role="textbox"):
     from engine.fill import FieldValue
     return FieldValue(key=key, label=label, type=type_,
                       locator=Locator(role=role, name=label), value=value)
+
+
+# =============================================================================
+# W4 4c owner refinements: CV upload (2) + profile picture (3)
+# =============================================================================
+
+def _make_assets(tmp_path, *, ats=True, atsi=True, photo=True):
+    """Build a FillAssets over real temp files; absent legs point at a
+    non-existent path so `verified()` collapses them to None."""
+    def make(name, present):
+        p = tmp_path / name
+        if present:
+            p.write_bytes(b"stub")
+        return p
+    return FillAssets(cv_ats=make("cv-ats.pdf", ats),
+                      cv_atsi=make("cv-atsi.pdf", atsi),
+                      photo=make("Me.png", photo))
+
+
+def test_cv_default_is_ats(tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field("resume", "Resume", type_="input_file", role="button"))
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot),
+                            assets=_make_assets(tmp_path))
+    assert len(values.fields) == 1
+    fv = values.fields[0]
+    assert fv.asset == "cv-ats"
+    assert Path(fv.value).name == "cv-ats.pdf"
+    assert "default" in fv.upload_reason
+
+
+def test_cv_atsi_when_italian_and_no_photo_field(tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field("resume", "Resume", type_="input_file", role="button"))
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot),
+                            assets=_make_assets(tmp_path), posting_lang="it")
+    fv = values.fields[0]
+    assert fv.asset == "cv-atsi"
+    assert Path(fv.value).name == "cv-atsi.pdf"
+    assert "italian" in fv.upload_reason
+
+
+def test_cv_stays_ats_when_photo_field_present_even_if_italian(
+        tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(
+        _field("resume", "Resume", type_="input_file", role="button"),
+        _field("photo", "Profile picture", type_="input_file", role="button"),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot),
+                            assets=_make_assets(tmp_path), posting_lang="it")
+    by_key = {fv.key: fv for fv in values.fields}
+    assert by_key["resume"].asset == "cv-ats"       # a photo field blocks cv-atsi
+    assert by_key["photo"].asset == "photo"
+
+
+def test_no_assets_keeps_pre_override_file_skip(tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field("resume", "Resume / CV", type_="input_file",
+                          role="button"))
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
+    assert values.fields == []
+    assert dict(values.skipped)["resume"] == "file-upload"
+
+
+def test_missing_asset_is_skipped(tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path, ats=False, atsi=False, photo=False)
+    fm = _fieldmap(_field("resume", "Resume", type_="input_file", role="button"))
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    assert values.fields == []
+    assert dict(values.skipped)["resume"] == "asset missing: cv-ats"
+
+
+@pytest.mark.parametrize("label", [
+    "Profile picture", "Headshot", "Upload your photo", "Profile image",
+    "Foto", "Immagine del profilo", "La tua foto",
+])
+def test_photo_field_detection_incl_italian(label):
+    assert _is_photo_field(_field("x", label, type_="input_file", role="button"))
+
+
+def test_photo_field_detection_via_image_accept():
+    fld = _field("x", "Attach something", type_="input_file", role="button")
+    fld.accept = "image/png"
+    assert _is_photo_field(fld)
+
+
+def test_resume_is_not_a_photo_field():
+    assert not _is_photo_field(_field("r", "Resume / CV", type_="input_file"))
+
+
+def test_photo_field_uploads_photo_asset(tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field("headshot", "Headshot", type_="input_file",
+                          role="button"))
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot),
+                            assets=_make_assets(tmp_path))
+    fv = values.fields[0]
+    assert fv.asset == "photo"
+    assert Path(fv.value).name == "Me.png"
+
+
+# =============================================================================
+# _safe_upload whitelist + file-chooser safety
+# =============================================================================
+
+class _FakeChooser:
+    def __init__(self):
+        self.files = None
+
+    def set_files(self, files):
+        self.files = files
+
+
+class _ChooserInfo:
+    def __init__(self, chooser):
+        self.value = chooser
+
+
+class _FakeUploadButton:
+    """An upload trigger with NO set_input_files, forcing the file-chooser path."""
+
+    def __init__(self):
+        self.clicks = 0
+
+    def click(self):
+        self.clicks += 1
+
+
+class _FakeChooserPage:
+    def __init__(self):
+        self.chooser = _FakeChooser()
+
+    @contextlib.contextmanager
+    def expect_file_chooser(self):
+        yield _ChooserInfo(self.chooser)
+
+
+def test_safe_upload_whitelist_violation_raises(tmp_path):
+    good = tmp_path / "cv-ats.pdf"
+    good.write_bytes(b"stub")
+    assets = FillAssets(cv_ats=good)
+    control = _FakeLocator()
+    with pytest.raises(FillSafetyError, match="whitelist"):
+        _safe_upload(control, tmp_path / "evil.pdf", assets)
+    assert control.set_input_files_calls == 0
+
+
+def test_safe_upload_direct_set_input_files(tmp_path):
+    good = tmp_path / "cv-ats.pdf"
+    good.write_bytes(b"stub")
+    assets = FillAssets(cv_ats=good)
+    control = _FakeLocator()
+    _safe_upload(control, good, assets)
+    assert control.set_input_files_calls == 1
+    assert control.uploaded == str(good)
+    assert control.clicks == 0
+
+
+def test_file_chooser_never_clicks_denylisted_trigger(tmp_path):
+    good = tmp_path / "cv-ats.pdf"
+    good.write_bytes(b"stub")
+    assets = FillAssets(cv_ats=good)
+    button = _FakeUploadButton()
+    page = _FakeChooserPage()
+    # "upload" clears the allowlist gate, but "continue" is on the submit denylist.
+    with pytest.raises(FillSafetyError, match="submit denylist"):
+        _safe_upload(button, good, assets, page=page,
+                     button_name="Continue upload")
+    assert button.clicks == 0
+    assert page.chooser.files is None
+
+
+def test_file_chooser_refuses_unrecognised_trigger(tmp_path):
+    good = tmp_path / "cv-ats.pdf"
+    good.write_bytes(b"stub")
+    assets = FillAssets(cv_ats=good)
+    button = _FakeUploadButton()
+    page = _FakeChooserPage()
+    with pytest.raises(FillSafetyError, match="attach/upload/browse"):
+        _safe_upload(button, good, assets, page=page, button_name="Resume / CV")
+    assert button.clicks == 0
+
+
+def test_file_chooser_uploads_via_allowed_trigger(tmp_path):
+    good = tmp_path / "cv-ats.pdf"
+    good.write_bytes(b"stub")
+    assets = FillAssets(cv_ats=good)
+    button = _FakeUploadButton()
+    page = _FakeChooserPage()
+    _safe_upload(button, good, assets, page=page, button_name="Attach a file")
+    assert button.clicks == 1
+    assert page.chooser.files == str(good)
+
+
+# =============================================================================
+# COMPLETENESS DENOMINATOR (criterion 1) + caption exactness
+# =============================================================================
+
+def test_caption_exact_complete():
+    report = _report(vendor="lever", company="globex", fillable_total=5,
+                     filled=5, required_unfilled=[], justified_skips=0)
+    assert report.complete is True
+    assert (report.caption()
+            == "Lever (globex): 5/5 fields filled, 0 required unfilled - COMPLETE")
+
+
+def test_caption_exact_not_complete():
+    report = _report(
+        vendor="greenhouse", company="acme", fillable_total=10, filled=3,
+        required_unfilled=[{"key": "a", "label": "A", "reason": "missing"},
+                           {"key": "b", "label": "B", "reason": "missing"}],
+        justified_skips=0)
+    assert report.complete is False
+    assert (report.caption()
+            == "Greenhouse (acme): 3/10 fields filled, "
+               "2 required unfilled - NOT COMPLETE")
+
+
+def test_completeness_complete_with_justified_demographic(
+        tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("email", "Email"),
+        _field("gender", "Gender", type_="multi_value_single_select",
+               options=["Man", "Woman"], source="demographic", role="combobox"),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+    assert report.fillable_total == 3
+    assert report.filled == 2
+    assert report.required_unfilled == []
+    assert report.justified_skips == 1        # the demographic field
+    assert report.complete is True
+    assert (report.caption()
+            == "Greenhouse (acme): 2/3 fields filled, "
+               "0 required unfilled - COMPLETE")
+
+
+def test_completeness_required_unfilled_forces_not_complete(
+        tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("q_colour", "What is your favourite colour?"),  # required, missing
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+    assert report.fillable_total == 2
+    assert report.filled == 1
+    assert len(report.required_unfilled) == 1
+    assert report.required_unfilled[0]["key"] == "q_colour"
+    assert report.required_unfilled[0]["label"] == "What is your favourite colour?"
+    assert report.complete is False
+    assert (report.caption()
+            == "Greenhouse (acme): 1/2 fields filled, "
+               "1 required unfilled - NOT COMPLETE")
+
+
+def test_completeness_upload_counts_and_stays_complete(tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("resume", "Resume / CV", type_="input_file", role="button"),
+        _field("gender", "Gender", type_="multi_value_single_select",
+               options=["Man", "Woman"], source="demographic", role="combobox"),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+    assert report.filled == 2                 # first_name + the uploaded CV
+    assert report.uploads == [{"key": "resume", "asset": "cv-ats",
+                               "path": str(assets.cv_ats),
+                               "reason": "default (cv-ats always preferred)"}]
+    assert report.complete is True
+    assert report.fillable_total == 3
+    assert report.justified_skips == 1        # the demographic field
+
+
+def test_hidden_portal_widgets_excluded_from_denominator(
+        tmp_path, real_ssot_path):
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("longitude", "Location", role="textbox"),   # pure portal telemetry
+        _field("latitude", "Location", role="textbox"),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+    assert report.fillable_total == 1         # longitude/latitude are hidden
+    assert report.filled == 1
+    assert report.complete is True
+
+
+# =============================================================================
+# Evidence publisher (criterion 4) + toto asset defaults (criterion 5)
+# =============================================================================
+
+def test_publish_evidence_sends_screenshot_captioned():
+    from engine.notify import FakeTransport
+    report = _report(vendor="ashby", company="initech", fillable_total=4,
+                     filled=4, required_unfilled=[], justified_skips=0,
+                     screenshot="/artifacts/fill-ashby-9.png")
+    transport = FakeTransport()
+    publish_evidence(report, "abe-jobsearch", transport)
+    assert transport.sent_files == [(
+        "abe-jobsearch", "/artifacts/fill-ashby-9.png",
+        "Ashby (initech): 4/4 fields filled, 0 required unfilled - COMPLETE",
+        "fill-ashby-9.png")]
+
+
+def test_resolve_photo_globs_case_insensitively(tmp_path):
+    root = tmp_path / "career-archive"
+    pics = root / "weird" / "PROFILE PICS"
+    pics.mkdir(parents=True)
+    (pics / "ME.JPG").write_bytes(b"stub")
+    (pics / "ME.PNG").write_bytes(b"stub")
+    got = _resolve_photo(archive_root=root)
+    assert got is not None
+    assert got.name == "ME.PNG"               # png preferred over jpg
+
+
+def test_resolve_photo_override_wins(tmp_path):
+    override = tmp_path / "custom.png"
+    override.write_bytes(b"stub")
+    assert _resolve_photo(override=str(override)) == override
+
+
+def test_resolve_photo_missing_root_is_none(tmp_path):
+    assert _resolve_photo(archive_root=tmp_path / "nope") is None
+
+
+def test_default_assets_fail_soft_when_absent(tmp_path):
+    assets = default_assets(documents_dir=tmp_path / "docs",
+                            archive_root=tmp_path / "arch")
+    assert assets.cv_ats is None
+    assert assets.cv_atsi is None
+    assert assets.photo is None
+
+
+def _report(*, vendor, company, fillable_total, filled, required_unfilled,
+            justified_skips, screenshot="/x.png"):
+    return FillReport(
+        vendor=vendor, company=company, posting_id="1",
+        fillable_total=fillable_total, filled=filled,
+        required_unfilled=required_unfilled, justified_skips=justified_skips,
+        uploads=[], skipped=[], readback_mismatches=[], validation_errors=[],
+        url_unchanged=True, screenshot=screenshot, ts=_PINNED)

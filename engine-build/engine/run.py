@@ -29,12 +29,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from engine.artifacts import render_pdf, write_txt_fallback
+from engine.artifacts import (
+    render_letter_pdf,
+    render_report_pdf,
+    write_txt_fallback,
+)
 from engine.config import Config, load_config
 from engine.discover import run_discovery
-from engine.draft import ClaudeCliDrafter, Drafter
+from engine.draft import ClaudeCliDrafter, Drafter, select_language
 from engine.fetch import HttpFetcher, Source, adapter_for, fetch_all, load_sources
-from engine.fieldmap import MISSING_STATUS, FieldMap, capture_greenhouse
+from engine.fieldmap import (
+    ANSWERABLE,
+    MANUAL_ONLY,
+    MISSING_STATUS,
+    FieldMap,
+    capture_greenhouse,
+)
 from engine.match import Scorer
 from engine.notify import (
     FakeTransport,
@@ -45,7 +55,9 @@ from engine.notify import (
 )
 from engine.profile_map import profile_from_real_ssot
 from engine.queue_sm import QueueStateMachine
-from engine.ssot import SSOT
+from engine.ssot import MISSING, SSOT
+
+_HEADER_SUBTITLE = "Computational Scientist"
 
 _DEFAULT_RUNS_PATH = Path.home() / "automations" / "jobhunt" / "runs.jsonl"
 _DEFAULT_ARTIFACTS_DIR = Path.home() / "automations" / "jobhunt" / "artifacts"
@@ -117,7 +129,7 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
     push_sent = _publish_one_digest(config, queue, rerank, live)
     artifacts = _render_and_publish_artifacts(
         config, drafted_items, live, artifacts_dir or _DEFAULT_ARTIFACTS_DIR,
-        runner)
+        runner, store, ssot, profile)
 
     record = {
         "ts": _utc_now(),
@@ -344,18 +356,26 @@ def _draft_top_items(config, queue, ssot, discovered_index, store, options,
         discovered = discovered_index.get(item.identity_key)
         if discovered is not None:
             posting["description"] = discovered.description
-        result = drafter.draft(posting, item.payload["breakdown"], ssot)
+        breakdown = item.payload["breakdown"]
+        result = drafter.draft(posting, breakdown, ssot)
         if not result.ok:
             continue  # fail-soft: item stays pending_review, material unavailable
         _attach_material(store, item, result.material)
         cost_total += result.cost_usd
         for key in _USAGE_KEYS:
             usage_totals[key] += result.usage.get(key, 0)
+        lang, lang_rationale = select_language(posting)
         drafted_items.append({
             "item_id": item.item_id,
-            "title": item.payload["posting"].get("title", ""),
-            "company": item.payload["posting"].get("company_slug", ""),
+            "title": posting.get("title", ""),
+            "company": posting.get("company_slug", ""),
             "material": result.material,
+            "posting": posting,
+            "breakdown": breakdown,
+            "lang": lang,
+            "lang_rationale": lang_rationale,
+            "job_id": discovered.job_id if discovered is not None else None,
+            "updated_ts": discovered.updated_ts if discovered is not None else None,
         })
     return usage_totals, cost_total, drafted_items
 
@@ -388,24 +408,31 @@ def _publish_one_digest(config, queue, rerank, live) -> bool:
 
 
 def _render_and_publish_artifacts(config, drafted_items, live, artifacts_dir,
-                                  runner) -> dict:
-    """Render one PDF (or .txt fallback) per drafted item, then publish per
-    attach_mode. Rendering always runs; publishing honours suppression + mode."""
-    artifacts = {"rendered_pdf": 0, "fallback_txt": 0, "published": 0,
-                "publish_failed": 0}
-    rendered: list[tuple[dict, Path]] = []
+                                  runner, store, ssot, profile) -> dict:
+    """Render TWO documents per drafted item (cover letter + report) and publish
+    them as SEPARATE ntfy attachment messages (W4 4c criterion 4).
+
+    Rendering always runs; publishing honours suppression + attach_mode. The
+    counts split letter/report and pdf/txt so a fallback on either document is
+    visible in telemetry. The header/recipient dicts and the report field data
+    are assembled deterministically from the SSOT and posting, never by the LLM.
+    """
+    artifacts = {"letter_pdf": 0, "letter_txt": 0, "report_pdf": 0,
+                 "report_txt": 0, "published": 0, "publish_failed": 0}
+    header = _build_letter_header(ssot)
+    rendered: list[tuple[dict, str, Path]] = []
     for drafted in drafted_items:
         out_dir = Path(artifacts_dir) / drafted["item_id"]
-        pdf = render_pdf(drafted["item_id"], drafted["material"], out_dir,
-                         company_slug=drafted["company"], runner=runner)
-        if pdf is not None:
-            artifacts["rendered_pdf"] += 1
-            rendered.append((drafted, pdf))
-        else:
-            txt = write_txt_fallback(drafted["item_id"], drafted["material"],
-                                     out_dir, company_slug=drafted["company"])
-            artifacts["fallback_txt"] += 1
-            rendered.append((drafted, txt))
+        letter_path, letter_is_pdf = _render_letter(drafted, header, out_dir,
+                                                     runner)
+        artifacts["letter_pdf" if letter_is_pdf else "letter_txt"] += 1
+        rendered.append((drafted, "cover letter", letter_path))
+
+        report_data = _assemble_report_data(config, drafted, store, ssot, profile)
+        report_path, report_is_pdf = _render_report(drafted, report_data,
+                                                     out_dir, runner)
+        artifacts["report_pdf" if report_is_pdf else "report_txt"] += 1
+        rendered.append((drafted, "report", report_path))
 
     if live is None or config.attach_mode == "none" or not rendered:
         return artifacts
@@ -419,8 +446,234 @@ def _render_and_publish_artifacts(config, drafted_items, live, artifacts_dir,
     return artifacts
 
 
+def _render_letter(drafted, header, out_dir, runner) -> tuple[Path, bool]:
+    """Render one cover-letter PDF, or the verbatim .txt fallback (W4 4c 5)."""
+    recipient = _build_recipient(drafted["posting"])
+    subject = drafted["posting"].get("title", "") or ""
+    pdf = render_letter_pdf(drafted["item_id"], drafted["material"], header,
+                            recipient, subject, drafted.get("lang", "en"),
+                            out_dir, runner=runner)
+    if pdf is not None:
+        return pdf, True
+    txt = write_txt_fallback(drafted["item_id"], drafted["material"], out_dir,
+                             kind="cover-letter")
+    return txt, False
+
+
+def _render_report(drafted, report_data, out_dir, runner) -> tuple[Path, bool]:
+    """Render one report PDF, or a plain-text summary .txt fallback."""
+    pdf = render_report_pdf(drafted["item_id"], report_data, out_dir,
+                            runner=runner)
+    if pdf is not None:
+        return pdf, True
+    txt = write_txt_fallback(drafted["item_id"], _report_txt(report_data),
+                             out_dir, kind="report")
+    return txt, False
+
+
+def _build_letter_header(ssot: SSOT) -> dict:
+    """Header fields from the SSOT identity/links; absent fields become
+    [MISSING: <path>] so the owner sees what to fill (grounding contract)."""
+    return {
+        "full_name": _first_present(ssot, ["identity.full_name", "identity.name"]),
+        "subtitle": _HEADER_SUBTITLE,
+        "email": _first_present(ssot, ["identity.email"]),
+        "phone": _first_present(ssot, ["identity.phone", "canned_answers.phone"]),
+        "website": _first_present(ssot, ["links.website", "links.site"]),
+        "linkedin": _first_present(
+            ssot, ["links.linkedin", "canned_answers.linkedin"]),
+    }
+
+
+def _build_recipient(posting: dict) -> dict:
+    """Recipient block from the posting: team line, company, city, country."""
+    city, country = _split_city_country((posting.get("locations") or [""])[0])
+    return {"team": "Hiring Team",
+            "company": _title_company(posting.get("company_slug", "") or ""),
+            "city": city, "country": country}
+
+
+def _assemble_report_data(config, drafted, store, ssot, profile) -> dict:
+    """Assemble the report tables deterministically from the item payload +
+    field-data resolution (fieldmap coverage where one was captured, else the
+    canned-answers surface). Never invents facts."""
+    posting = drafted["posting"]
+    breakdown = drafted.get("breakdown") or {}
+    field_data, coverage = _resolve_field_data(drafted, store, ssot, profile,
+                                               breakdown)
+    return {
+        "posting": {
+            "vendor": posting.get("vendor", ""),
+            "company": _title_company(posting.get("company_slug", "") or ""),
+            "title": posting.get("title", ""),
+            "locations": posting.get("locations") or [],
+            "url": posting.get("url", ""),
+            "score": breakdown.get("total"),
+        },
+        "score_rows": _score_rows(config, breakdown),
+        "field_data": field_data,
+        "coverage": coverage,
+        "language": {"lang": drafted.get("lang", ""),
+                     "rationale": drafted.get("lang_rationale", "")},
+    }
+
+
+_AXIS_STEMS = {
+    "role_fit": ("role",),
+    "skills_overlap": ("skill",),
+    "seniority_fit": ("seniority",),
+    "location_fit": ("location", "remote"),
+    "comp_fit": ("comp",),
+    "exclusions": ("exclud",),
+}
+
+
+def _score_rows(config, breakdown: dict) -> list[dict]:
+    matched = breakdown.get("matched") or []
+    weak = breakdown.get("weak") or []
+    axis_scores = breakdown.get("axis_scores") or {}
+    rows = []
+    for axis, weight in config.axes.items():
+        subscore = axis_scores.get(axis)
+        rows.append({
+            "axis": axis,
+            "weight": f"{float(weight):.2f}",
+            "subscore": "-" if subscore is None else f"{float(subscore):.2f}",
+            "notes": _notes_for_axis(axis, matched, weak) or "-",
+        })
+    return rows
+
+
+def _notes_for_axis(axis: str, matched: list, weak: list) -> str:
+    stems = _AXIS_STEMS.get(axis, ())
+    notes = [str(n) for n in matched if _stem_hit(stems, n)]
+    notes += [f"weak: {n}" for n in weak if _stem_hit(stems, n)]
+    return "; ".join(notes)
+
+
+def _stem_hit(stems, note) -> bool:
+    low = str(note).lower()
+    return any(stem in low for stem in stems)
+
+
+def _resolve_field_data(drafted, store, ssot, profile, breakdown):
+    """Deterministic ATS field -> value resolution + coverage summary.
+
+    Reuse the captured field map's coverage paths when one exists in the store
+    for this posting; otherwise surface the canned-answers/identity fields.
+    """
+    fieldmap = _lookup_fieldmap(store, drafted)
+    if fieldmap is not None:
+        report = fieldmap.coverage(ssot, profile)
+        return _field_data_from_coverage(report, ssot), {
+            "summary": report.summary_line(),
+            "warnings": breakdown.get("ats_warnings") or [],
+            "missing": report.missing_paths(),
+        }
+    return _field_data_from_canned(ssot), {
+        "summary": "no field map captured for this posting",
+        "warnings": breakdown.get("ats_warnings") or [],
+        "missing": [],
+    }
+
+
+def _lookup_fieldmap(store, drafted) -> FieldMap | None:
+    vendor = drafted["posting"].get("vendor")
+    job_id = drafted.get("job_id")
+    if not vendor or not job_id:
+        return None
+    cached = store.get_fieldmap(vendor, str(job_id), drafted.get("updated_ts"))
+    return FieldMap.from_dict(cached["body"]) if cached is not None else None
+
+
+def _field_data_from_coverage(report, ssot: SSOT) -> list[dict]:
+    rows = []
+    for fc in report.fields:
+        if fc.status == ANSWERABLE:
+            value = _fmt_value(ssot.get(fc.path))
+        elif fc.status == MANUAL_ONLY:
+            value = f"(manual-only: {fc.reason})"
+        else:
+            value = f"[MISSING: {fc.path}]"
+        rows.append({"field": fc.label, "value": value})
+    return rows
+
+
+_CANNED_SURFACE = (
+    ("Full name", "identity.name"),
+    ("Email", "identity.email"),
+    ("Current location", "identity.current_location"),
+    ("Website", "links.site"),
+    ("GitHub", "links.github"),
+    ("Work authorization", "work_authorization"),
+)
+
+
+def _field_data_from_canned(ssot: SSOT) -> list[dict]:
+    rows = []
+    for label, path in _CANNED_SURFACE:
+        value = ssot.get(path)
+        if value is not MISSING:
+            rows.append({"field": label, "value": _fmt_value(value)})
+    canned = ssot.get("canned_answers")
+    if isinstance(canned, dict):
+        for key, value in canned.items():
+            rows.append({"field": f"canned: {key}", "value": _fmt_value(value)})
+    return rows
+
+
+def _report_txt(report_data: dict) -> str:
+    """A plain-text rendering of the report for the .txt fallback (no LaTeX)."""
+    posting = report_data.get("posting") or {}
+    coverage = report_data.get("coverage") or {}
+    lines = [
+        f"vendor: {posting.get('vendor', '')}",
+        f"company: {posting.get('company', '')}",
+        f"title: {posting.get('title', '')}",
+        f"score: {posting.get('score', '')}",
+        f"coverage: {coverage.get('summary', '')}",
+        "",
+        "field data:",
+    ]
+    for row in report_data.get("field_data") or []:
+        lines.append(f"  {row.get('field', '')}: {row.get('value', '')}")
+    return "\n".join(lines)
+
+
+def _first_present(ssot: SSOT, paths: list[str]) -> str:
+    for path in paths:
+        value = ssot.get(path)
+        if value is not MISSING:
+            return _fmt_value(value)
+    return f"[MISSING: {paths[0]}]"
+
+
+def _fmt_value(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value)
+    if isinstance(value, dict):
+        return "; ".join(f"{k}={v}" for k, v in value.items())
+    return str(value)
+
+
+def _title_company(company_slug: str) -> str:
+    return company_slug.replace("_", " ").replace("-", " ").title()
+
+
+def _split_city_country(location: str) -> tuple[str, str]:
+    parts = [p.strip() for p in str(location or "").split(",") if p.strip()]
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], parts[-1]
+
+
 def _publish_per_item(config, live, rendered) -> tuple[int, int]:
-    """Publish one attachment per drafted item, fail-soft (W4 3.9 fix wave).
+    """Publish one attachment per rendered document (letter + report each),
+    fail-soft (W4 3.9 + 4c 4).
 
     A single bad attachment (unrenderable caption, transient transport error)
     must not abort the digest already sent nor the remaining attachments in
@@ -428,8 +681,8 @@ def _publish_per_item(config, live, rendered) -> tuple[int, int]:
     """
     published = 0
     failed = 0
-    for drafted, path in rendered:
-        caption = (f"[{drafted['item_id']}] {drafted['title']} "
+    for drafted, kind, path in rendered:
+        caption = (f"[{drafted['item_id']}] {kind} - {drafted['title']} "
                    f"@ {drafted['company']}")
         try:
             live.publish_file(config.topic, path, caption, path.name)
@@ -443,7 +696,7 @@ def _publish_bundle(config, live, rendered, artifacts_dir) -> tuple[int, int]:
     zip_path = Path(artifacts_dir) / f"jobhunt-drafts-{_stamp()}.zip"
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for drafted, path in rendered:
+        for drafted, _kind, path in rendered:
             archive.write(path, arcname=f"{drafted['item_id']}/{path.name}")
     caption = f"{len(rendered)} drafted application artifacts"
     try:
