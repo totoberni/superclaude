@@ -37,18 +37,30 @@ CAVEAT (load-bearing): the Ashby graphql envelope was confirmed LIVE against
 jobs.ashbyhq.com during the round-2 SSOT playtest loop (2026-07-03): the real
 schema lives at `data.jobPosting.applicationForm`, not the fixture-derived
 `applicationFormDefinition` guessed in round 1 (kept as a one-release
-fallback probe). The Lever DOM selectors encoded here remain FIXTURE-DERIVED
-and plausible, not yet confirmed against live pages, pending the same live
-pass. Every parser MUST still fail LOUDLY and descriptively: a shape mismatch
-raises `CaptureShapeError` naming the exact selector/key that missed, NEVER a
-silently empty FieldMap. Callers stay fail-soft (run.py counts a failed
-capture and moves on) so a loud parser and a resilient runner coexist.
+fallback probe). Every parser MUST still fail LOUDLY and descriptively: a
+shape mismatch raises `CaptureShapeError` naming the exact selector/key that
+missed, NEVER a silently empty FieldMap. Callers stay fail-soft (run.py counts
+a failed capture and moves on) so a loud parser and a resilient runner
+coexist.
+
+ROUND-3 LIVE FINDING (jobs.lever.co, 2026-07-03): the Lever DOM selectors
+above were confirmed against a real apply page, with two shape corrections.
+First, each base field renders TWICE: an invisible mirror carrying the true
+submission `name` with no label, plus a labeled visible twin (`Full name`,
+`Email`, ...). `_dedup_lever_base_fields` collapses each pair back into one
+logical Field (human label, OR'd `required`, richer-source `type`) keyed by
+`_LEVER_BASE_LABELS`, so callers never see a duplicated field. Second, a
+custom question card can render its text inline (e.g. a consent checkbox
+whose wording sits beside the input rather than in a `.application-label`
+div); `_resolve_field_label` tries `aria-label`, `placeholder`, and the
+enclosing element's own text before ever emitting an empty label.
 """
 
 from __future__ import annotations
 
 import contextlib
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Callable
@@ -82,6 +94,25 @@ _ASHBY_TYPE_MAP = {
     "MultiValueSelect": "multi_value_multi_select",
     "File": "input_file",
     "Date": "input_text",
+}
+
+# Lever base-field `name` -> canonical human label (round-3 finding): the live
+# apply page renders every base field TWICE, an invisible mirror carrying the
+# true submission `name` with no label at all, plus a labeled visible twin.
+# `_dedup_lever_base_fields` collapses each pair into one logical Field and
+# uses this table to recover the human label when neither duplicate happens
+# to carry one.
+_LEVER_BASE_LABELS = {
+    "name": "Full name",
+    "email": "Email",
+    "phone": "Phone",
+    "org": "Current company",
+    "urls[LinkedIn]": "LinkedIn URL",
+    "urls[Twitter]": "Twitter URL",
+    "urls[GitHub]": "GitHub URL",
+    "urls[Portfolio]": "Portfolio URL",
+    "urls[Other]": "Other URL",
+    "resume": "Resume / CV",
 }
 
 # HTML elements with no end tag; the tree builder must not expect to pop them.
@@ -379,9 +410,28 @@ def _parse_lever(html_source: str, slug: str, job_id: str, *,
                     captured_at=_now(now), fields=fields)
 
 
+@dataclass
+class _RawBaseField:
+    """One `.application-field` container's parse, pre-dedup."""
+    key: str
+    label: str
+    type: str
+    required: bool
+    options: list[str]
+    container: "_Node"
+    control: "_Node"
+
+
 def _lever_base_fields(tree: "_Node") -> list[Field]:
-    """The fixed base fields: every input inside an `.application-field` block."""
-    fields: list[Field] = []
+    """The fixed base fields: every input inside an `.application-field` block.
+
+    The live apply page renders each base field TWICE (round-3 finding): an
+    invisible mirror carrying the true submission `name` with no label, and a
+    labeled visible twin. Both parse to the SAME `key` here, so
+    `_dedup_lever_base_fields` collapses each duplicate pair back into ONE
+    logical Field before returning.
+    """
+    raw: list[_RawBaseField] = []
     for container in _find_all(tree, lambda n: _has_class(n, "application-field")):
         control = _first(container, _is_form_control)
         if control is None:
@@ -389,20 +439,108 @@ def _lever_base_fields(tree: "_Node") -> list[Field]:
         name = control.attrs.get("name", "")
         if not name:
             continue
-        label = _control_label(container) or name
-        field_type = _control_type(control)
-        fields.append(Field(
+        raw.append(_RawBaseField(
             key=name,
-            label=label,
-            type=field_type,
+            label=_control_label(container),
+            type=_control_type(control),
             required=_is_required(container, control),
             options=_select_options(control),
-            source=LEVER_SOURCE,
-            locator=Locator(role=_role_for_type(field_type), name=label),
-            step_index=0,
-            conditional_on=None,
+            container=container,
+            control=control,
         ))
+    return _dedup_lever_base_fields(raw)
+
+
+def _dedup_lever_base_fields(raw: list[_RawBaseField]) -> list[Field]:
+    groups: dict[str, list[_RawBaseField]] = {}
+    order: list[str] = []
+    for item in raw:
+        if item.key not in groups:
+            order.append(item.key)
+        groups.setdefault(item.key, []).append(item)
+    _merge_lever_groups_by_normalized_label(groups, order)
+    fields: list[Field] = []
+    for key in order:
+        items = groups.get(key)
+        if items is None:
+            continue  # merged away into another key's group
+        fields.append(_merge_lever_base_group(key, items))
     return fields
+
+
+def _merge_lever_groups_by_normalized_label(groups: dict, order: list[str]) -> None:
+    """Fallback normalized-label match: collapse two DIFFERENT keys into one
+    group when both are label-bearing singletons whose labels normalize to
+    the same slug. Covers a base/labeled pair whose visible twin renders
+    under a different `name` than its hidden mirror -- not observed live yet
+    for Lever, kept defensive since the same duplication shape recurred once
+    already (round-2 Ashby shape drift) and could recur here too."""
+    seen: dict[str, str] = {}
+    for key in list(order):
+        items = groups.get(key)
+        if items is None or len(items) != 1 or not items[0].label:
+            continue
+        slug = _slug(items[0].label)
+        primary = seen.get(slug)
+        if primary is None:
+            seen[slug] = key
+        elif primary != key:
+            groups[primary].extend(items)
+            del groups[key]
+
+
+def _merge_lever_base_group(key: str, items: list[_RawBaseField]) -> Field:
+    label = _pick_lever_label(key, items)
+    required = any(item.required for item in items)
+    field_type, options = _richer_lever_type(items)
+    return Field(
+        key=key,
+        label=label,
+        type=field_type,
+        required=required,
+        options=options,
+        source=LEVER_SOURCE,
+        locator=Locator(role=_role_for_type(field_type), name=label),
+        step_index=0,
+        conditional_on=None,
+    )
+
+
+def _pick_lever_label(key: str, items: list[_RawBaseField]) -> str:
+    """Keep the human label: the first duplicate that actually carries one,
+    else the deterministic base/label table, else the harder-extraction
+    fallback chain (never an empty string, per round-3 item 2)."""
+    for item in items:
+        if item.label:
+            return item.label
+    if key in _LEVER_BASE_LABELS:
+        return _LEVER_BASE_LABELS[key]
+    return _resolve_field_label("", items[0].container, items[0].control, key)
+
+
+def _richer_lever_type(items: list[_RawBaseField]) -> tuple[str, list[str]]:
+    """Type from the richer source: an option-carrying or more specific
+    control (e.g. a `type=file` upload widget) outranks the plain-text
+    default that a hidden mirror typically parses as."""
+    best = items[0]
+    best_rank = _lever_type_rank(best)
+    for item in items[1:]:
+        rank = _lever_type_rank(item)
+        if rank > best_rank:
+            best, best_rank = item, rank
+    return best.type, best.options
+
+
+def _lever_type_rank(item: _RawBaseField) -> int:
+    if item.options:
+        return 4
+    if item.type == "input_file":
+        return 3
+    if item.type == "boolean":
+        return 2
+    if item.type == "textarea":
+        return 1
+    return 0
 
 
 def _lever_custom_fields(tree: "_Node", slug: str, job_id: str) -> list[Field]:
@@ -412,24 +550,26 @@ def _lever_custom_fields(tree: "_Node", slug: str, job_id: str) -> list[Field]:
 
 
 def _lever_custom_field(card: "_Node", slug: str, job_id: str) -> Field:
-    label = _control_label(card)
+    raw_label = _control_label(card)
     controls = [n for n in _find_all(card, _is_form_control)
                 if (n.attrs.get("type") or "").lower() != "hidden"]
     if not controls:
         raise CaptureShapeError(
-            f"lever: custom question card {label!r} on {slug}/{job_id} has no "
+            f"lever: custom question card {raw_label!r} on {slug}/{job_id} has no "
             "input/select/textarea control")
     checkboxes = [n for n in controls
                   if (n.attrs.get("type") or "").lower() == "checkbox"]
     if len(checkboxes) > 1:
         field_type = "multi_value_multi_select"
         options = [_checkbox_label(cb) for cb in checkboxes]
-        key = checkboxes[0].attrs.get("name", "") or _slug(label)
+        primary = checkboxes[0]
+        key = primary.attrs.get("name", "") or _slug(raw_label)
     else:
         primary = controls[0]
         field_type = _control_type(primary)
         options = _select_options(primary)
-        key = primary.attrs.get("name", "") or _slug(label)
+        key = primary.attrs.get("name", "") or _slug(raw_label)
+    label = _resolve_field_label(raw_label, card, primary, key)
     return Field(
         key=key,
         label=label,
@@ -441,6 +581,28 @@ def _lever_custom_field(card: "_Node", slug: str, job_id: str) -> Field:
         step_index=0,
         conditional_on=None,
     )
+
+
+def _resolve_field_label(label: str, container: "_Node", control: "_Node",
+                         key: str) -> str:
+    """Harder label-extraction fallback chain (round-3 item 2): a captured
+    field must never carry an empty label. Tried in order: the caller's own
+    `.application-label` read (`label`, already attempted before this is
+    called), `aria-label`, `placeholder`, the enclosing element's own trimmed
+    text (e.g. a consent checkbox whose wording sits inline rather than in a
+    dedicated label element), and finally the field's key as a last resort."""
+    if label:
+        return label
+    aria = (control.attrs.get("aria-label") or "").strip()
+    if aria:
+        return aria
+    placeholder = (control.attrs.get("placeholder") or "").strip()
+    if placeholder:
+        return placeholder
+    enclosing = _node_text(container, exclude_cls="required")
+    if enclosing:
+        return enclosing
+    return f"(unlabeled: {key})" if key else "(unlabeled)"
 
 
 def _is_form_control(node: "_Node") -> bool:

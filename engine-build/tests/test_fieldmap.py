@@ -228,6 +228,11 @@ def test_coverage_identity_location_patterns_are_answerable(real_ssot_path):
                       _field("q2", "Are you currently located in the EU?"),
                       _field("q3", "Where are you currently located?"),
                       _field("q4", "Where are you located?"),
+                      # round-3 live finding: a bare "Current location" /
+                      # "Location" label (not the keyed Greenhouse widget)
+                      # must classify via the same identity dotted path
+                      _field("q5", "Current location"),
+                      _field("q6", "Location"),
                   ])
     ssot = SSOT.load(real_ssot_path)
     report = coverage(fm, ssot, {})

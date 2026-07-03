@@ -235,6 +235,79 @@ def test_lever_capture_parses_apply_dom(lever_apply_html):
     assert textarea.options == []
 
 
+def test_lever_capture_dedups_hidden_base_field_mirrors(lever_apply_html):
+    """Round-3 live finding: the apply page renders every base field TWICE,
+    an invisible mirror carrying the true submission `name` with no label,
+    plus a labeled visible twin. The parser must collapse each duplicate
+    pair back into ONE logical Field, keeping the human label, OR-ing
+    `required` across the pair, and preferring the richer-source `type`."""
+    page = _FakePage(html=lever_apply_html)
+    fm = capture_lever("globex", "req-77", _factory_for(page), now=lambda: _PINNED)
+
+    # exactly one Field per logical base key: 7 base + 2 custom cards + 1
+    # inline-text consent checkbox = 10, never 17 raw duplicated entries
+    keys = [f.key for f in fm.fields]
+    assert len(keys) == len(set(keys)) == 10
+
+    by_key = {f.key: f for f in fm.fields}
+    assert by_key["name"].label == "Full name"
+    assert by_key["email"].label == "Email"
+    assert by_key["phone"].label == "Phone"
+    assert by_key["org"].label == "Current company"
+    assert by_key["urls[LinkedIn]"].label == "LinkedIn URL"
+    assert by_key["urls[GitHub]"].label == "GitHub URL"
+    assert by_key["resume"].label == "Resume / CV"
+
+    # `required` is the OR of the hidden mirror and its visible twin: the
+    # hidden `org` mirror is required even though the visible one is not
+    assert by_key["org"].required is True
+    # the hidden `resume` mirror is NOT required, but its visible twin is
+    assert by_key["resume"].required is True
+    # type comes from the richer source: the file-upload widget outranks
+    # the hidden mirror's default input_text
+    assert by_key["resume"].type == "input_file"
+
+
+def test_lever_capture_empty_label_falls_back_to_enclosing_text(lever_apply_html):
+    """Round-3 live finding: a consent checkbox's wording sits inline inside
+    its own <label>, not in a `.application-label` div. The captured field
+    must never carry an empty label (item 2)."""
+    page = _FakePage(html=lever_apply_html)
+    fm = capture_lever("globex", "req-77", _factory_for(page), now=lambda: _PINNED)
+
+    by_key = {f.key: f for f in fm.fields}
+    consent = by_key["consent[marketing]"]
+    assert consent.label == (
+        "I would like to receive occasional updates about new roles.")
+    assert consent.type == "boolean"
+    assert consent.required is False
+    for fld in fm.fields:
+        assert fld.label != ""
+
+
+def test_lever_custom_checkbox_with_no_extractable_text_falls_back_to_key():
+    """When NEITHER a label element, aria-label, placeholder, nor any
+    enclosing text can be found, the field falls back to a descriptive
+    `(unlabeled: <key>)` label rather than an empty string."""
+    html = (
+        "<html><body><form>"
+        "<ul class=\"application-fields\">"
+        "<li class=\"application-field\">"
+        "<label class=\"application-label\">Full name</label>"
+        "<input type=\"text\" name=\"name\" required>"
+        "</li>"
+        "</ul>"
+        "<div class=\"application-question\">"
+        "<input type=\"checkbox\" name=\"consent[opt_in]\">"
+        "</div>"
+        "</form></body></html>")
+    page = _FakePage(html=html)
+    fm = capture_lever("globex", "req-99", _factory_for(page))
+
+    by_key = {f.key: f for f in fm.fields}
+    assert by_key["consent[opt_in]"].label == "(unlabeled: consent[opt_in])"
+
+
 def test_lever_capture_schema_compliant_and_coverage_interop(
         lever_apply_html, real_ssot_path):
     page = _FakePage(html=lever_apply_html)
@@ -247,8 +320,10 @@ def test_lever_capture_schema_compliant_and_coverage_interop(
 
     ssot = SSOT.load(real_ssot_path)
     report = fm.coverage(ssot, profile_from_real_ssot(ssot))
-    # required: name, email, resume (base) + select + textarea (custom) = 5
-    assert report.required_total == 5
+    # required: name, email, org, resume (base) + select + textarea (custom)
+    # = 6 (org is required post-dedup: its hidden mirror carries `required`
+    # even though the visible twin does not)
+    assert report.required_total == 6
     by_key = {f.key: f for f in report.fields}
     assert by_key["resume"].status == MANUAL_ONLY
     assert isinstance(report.summary_line(), str)

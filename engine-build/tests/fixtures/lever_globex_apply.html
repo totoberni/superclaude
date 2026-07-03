@@ -4,6 +4,20 @@
 <body>
   <div class="content">
     <form class="application-form" method="POST" enctype="multipart/form-data">
+      <!-- Invisible base-field mirror (round-3 live finding): carries the true
+           submission `name` for each base field, no label. Duplicated by the
+           labeled visible twin below; the parser must dedup these back to
+           one logical field each. -->
+      <ul class="application-fields" style="display:none" aria-hidden="true">
+        <li class="application-field"><input type="hidden" name="name" required></li>
+        <li class="application-field"><input type="hidden" name="email" required></li>
+        <li class="application-field"><input type="hidden" name="phone"></li>
+        <li class="application-field"><input type="hidden" name="org" required></li>
+        <li class="application-field"><input type="hidden" name="urls[LinkedIn]"></li>
+        <li class="application-field"><input type="hidden" name="urls[GitHub]"></li>
+        <li class="application-field"><input type="hidden" name="resume"></li>
+      </ul>
+
       <ul class="application-fields">
         <li class="application-field">
           <label class="application-label">Full name<span class="required">*</span></label>
@@ -53,6 +67,17 @@
             <div class="text">Why do you want to work at Globex?<span class="required">&#10033;</span></div>
           </div>
           <textarea name="cards[7f3a][field1]" required></textarea>
+        </div>
+
+        <!-- Consent card with no `.application-label` wrapper (round-3 live
+             finding): its wording sits inline inside the checkbox's own
+             <label>, so the parser must fall back to the enclosing text
+             rather than emit an empty label. -->
+        <div class="application-question checkbox-question">
+          <label class="application-checkbox-label">
+            <input type="checkbox" name="consent[marketing]">
+            I would like to receive occasional updates about new roles.
+          </label>
         </div>
       </div>
 
