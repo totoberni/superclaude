@@ -84,6 +84,16 @@ def test_invocation_disables_tools_and_sets_grounding(real_ssot_path):
     assert "[MISSING:" in GROUNDING_CONTRACT
 
 
+def test_invocation_excludes_dynamic_system_prompt_sections(real_ssot_path):
+    # Stabilises the cached system-prompt prefix across calls (verified on toto:
+    # cache_creation ~37k -> ~24k, enabling cross-call cache reads).
+    runner = FakeRunner(_SUCCESS_JSON)
+    ClaudeCliDrafter(runner=runner).draft(_POSTING, _BREAKDOWN,
+                                          _ssot(real_ssot_path))
+    cmd = runner.calls[0][0]
+    assert "--exclude-dynamic-system-prompt-sections" in cmd
+
+
 def test_prompt_is_grounded_only_in_ssot_and_posting(real_ssot_path):
     prompt = build_user_prompt(_POSTING, _BREAKDOWN, _ssot(real_ssot_path))
     # facts that ARE in the SSOT / posting appear

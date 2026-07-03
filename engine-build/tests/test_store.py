@@ -96,6 +96,60 @@ def test_close_absent_spares_parked_blacklisted_submitted(store):
         assert not store.get_queue_row(f"j-{state}")["payload"].get("closed")
 
 
+def test_bulk_update_scores_updates_queue_and_ledger(store):
+    store.record_ledger("acme|A|u1", "j-1", "greenhouse", "acme", "A",
+                        "https://x", "seen", 50)
+    store.upsert_queue("j-1", "acme|A|u1", "pending_review", None, 50, 1,
+                       "automatable", {"breakdown": {"total": 50}})
+    store.record_ledger("acme|B|u2", "j-2", "greenhouse", "acme", "B",
+                        "https://y", "seen", 60)
+    store.upsert_queue("j-2", "acme|B|u2", "demoted", None, 60, 0,
+                       "automatable", {"breakdown": {"total": 60}})
+
+    count = store.bulk_update_scores([
+        ("j-1", "acme|A|u1", 88, {"breakdown": {"total": 88}}),
+        ("j-2", "acme|B|u2", 91, {"breakdown": {"total": 91}}),
+    ])
+    assert count == 2
+
+    q1 = store.get_queue_row("j-1")
+    assert q1["score"] == 88
+    assert q1["payload"]["breakdown"]["total"] == 88
+    ledger1 = store._conn.execute(
+        "SELECT score FROM ledger WHERE identity_key='acme|A|u1'").fetchone()
+    assert ledger1["score"] == 88
+    ledger2 = store._conn.execute(
+        "SELECT score FROM ledger WHERE identity_key='acme|B|u2'").fetchone()
+    assert ledger2["score"] == 91
+
+
+def test_bulk_update_scores_is_a_single_transaction(store):
+    # The naive per-row commit path took 67 minutes on ~7900 rows; the batch must
+    # open exactly ONE transaction. sqlite3 reports the implicit BEGIN/COMMIT to a
+    # trace callback, so one BEGIN proves the whole batch shares a transaction.
+    store.record_ledger("acme|A|u1", "j-1", "greenhouse", "acme", "A",
+                        "https://x", "seen", 50)
+    store.upsert_queue("j-1", "acme|A|u1", "pending_review", None, 50, 1,
+                       "automatable", {})
+    store.record_ledger("acme|B|u2", "j-2", "greenhouse", "acme", "B",
+                        "https://y", "seen", 60)
+    store.upsert_queue("j-2", "acme|B|u2", "demoted", None, 60, 0,
+                       "automatable", {})
+
+    statements = []
+    store._conn.set_trace_callback(statements.append)
+    try:
+        store.bulk_update_scores([
+            ("j-1", "acme|A|u1", 88, {}),
+            ("j-2", "acme|B|u2", 91, {}),
+        ])
+    finally:
+        store._conn.set_trace_callback(None)
+
+    begins = [s for s in statements if s.strip().upper().startswith("BEGIN")]
+    assert len(begins) == 1  # one transaction for the whole batch, not per-row
+
+
 def test_held_count_excludes_closed_demoted_rows(store):
     # A demoted row closed by close_absent (board-absent) is gone for good,
     # not a held backlog awaiting promotion (w-reviewer HIGH, W4 6b finding 1).

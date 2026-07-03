@@ -74,6 +74,10 @@ class ClaudeCliDrafter:
             "--output-format", "json",
             "--model", self.model,
             "--system-prompt", GROUNDING_CONTRACT,
+            # Drop the CLI's dynamic system-prompt sections so the cached prefix
+            # is byte-stable across calls; verified on toto to cut cache_creation
+            # from ~37k to ~24k and let subsequent drafts hit the read cache.
+            "--exclude-dynamic-system-prompt-sections",
             "--no-session-persistence",
             "--tools", "",           # disable ALL built-in tools (verified flag)
             "--effort", self.effort,

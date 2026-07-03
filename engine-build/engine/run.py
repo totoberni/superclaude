@@ -56,6 +56,7 @@ class RunOptions:
     dry_run: bool = False
     no_draft: bool = False
     push: bool = True
+    rescore: bool = False
 
 
 def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
@@ -91,6 +92,9 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
             queue.enqueue(posting, breakdown)
             enqueued += 1
 
+    rescored = (_rescore_carryover(scorer, store, discovered_index)
+                if options.rescore else 0)
+
     rerank = queue.rerank()
 
     usage_totals, cost_total, drafted_items = _draft_top_items(
@@ -111,6 +115,7 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
             "blocked": status_counts.get("blocked", 0),
             "new": len(new_postings),
             "enqueued": enqueued,
+            "rescored": rescored,
             "drafted": len(drafted_items),
             "closed": len(closed),
             "demoted": len(rerank.demoted_today),
@@ -132,6 +137,36 @@ def _close_board_absent(store, discovery) -> list[str]:
         present = {p.identity_key() for p in adapter.parse(raw, slug) if p.listed}
         closed.extend(store.close_absent(adapter.vendor, slug, present))
     return closed
+
+
+def _rescore_carryover(scorer: Scorer, store, discovered_index: dict) -> int:
+    """Recompute breakdowns for still-live queued items against the LIVE board.
+
+    Carryover items were scored on the run that discovered them; an axis-function
+    change (e.g. this calibration wave) leaves their persisted scores stale. For
+    every pending_review/demoted row whose identity_key is on the board today,
+    re-score from the fresh posting and stage a (score, payload.breakdown) update;
+    all updates are flushed in ONE store transaction (67-min per-row regression
+    guard). The ledger score is updated in the same batch. Returns the count.
+    """
+    updates = []
+    for row in store.all_queue_rows():
+        if row["state"] not in ("pending_review", "demoted"):
+            continue
+        posting = discovered_index.get(row["identity_key"])
+        if posting is None:
+            continue
+        breakdown = scorer.score(posting)
+        payload = dict(row["payload"])
+        payload["breakdown"] = {
+            "total": breakdown.total,
+            "matched": breakdown.matched,
+            "weak": breakdown.weak,
+            "ats_warnings": breakdown.ats_warnings,
+        }
+        updates.append((row["item_id"], row["identity_key"], breakdown.total,
+                        payload))
+    return store.bulk_update_scores(updates)
 
 
 def _draft_top_items(config, queue, ssot, discovered_index, store, options,
@@ -291,6 +326,9 @@ def _parse_args(argv):
     parser.add_argument("--store", required=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-draft", action="store_true")
+    parser.add_argument("--rescore", action="store_true",
+                        help="re-score carryover queue items from the live board "
+                             "before rerank (default off)")
     parser.add_argument("--push", action=argparse.BooleanOptionalAction,
                         default=True)
     return parser.parse_args(argv)
@@ -311,7 +349,7 @@ def main(argv=None) -> int:
     ssot = SSOT.load(args.ssot)
     store = _open_store(args.store)
     options = RunOptions(dry_run=args.dry_run, no_draft=args.no_draft,
-                        push=args.push)
+                        push=args.push, rescore=args.rescore)
     transport = FakeTransport() if args.dry_run else None
     try:
         run_pipeline(config, sources, ssot, store, options=options,

@@ -119,20 +119,32 @@ class Scorer:
         return sub, [], ["no skill overlap"]
 
     def _seniority_fit(self, posting: Posting):
+        # Word-boundary match, not substring: a level token like 'intern' must
+        # not fire inside 'internal'/'international' (live-run false positive).
+        # A title hit is authoritative (1.0); a description-only hit is weaker.
         levels = self.profile.get("seniority", [])
-        text = f"{posting.title} {posting.description}".lower()
-        hit = next((lv for lv in levels if lv.lower() in text), None)
-        if hit:
-            return 1.0, [f"seniority: {hit}"], []
+        title_hit = next((lv for lv in levels if _word_present(lv, posting.title)),
+                         None)
+        if title_hit:
+            return 1.0, [f"seniority: {title_hit}"], []
+        desc_hit = next(
+            (lv for lv in levels if _word_present(lv, posting.description)), None)
+        if desc_hit:
+            return 0.6, [], ["seniority only in description"]
         return 0.5, [], ["seniority unclear"]
 
     def _location_fit(self, posting: Posting):
+        # Eligibility-aware, deterministic, pure function of posting + profile.
+        # A concrete profile-location match is best (1.0). Failing that, a remote
+        # posting is graded by where its remote actually lets you work: EU/EMEA/
+        # global-friendly -> 1.0, US/CA/AU-only -> 0.4, unmarked -> 0.7. This
+        # stops US-only "remote" roles from scoring as if EU-eligible.
         prefs = [p.lower() for p in self.profile.get("locations", [])]
-        if posting.remote_flag and self.profile.get("remote_ok"):
-            return 1.0, ["location: remote"], []
         for loc in posting.locations:
-            if any(pref in loc.lower() for pref in prefs):
+            if _profile_location_hit(loc, prefs):
                 return 1.0, [f"location: {loc}"], []
+        if posting.remote_flag and self.profile.get("remote_ok"):
+            return _remote_eligibility(posting.locations, prefs)
         return 0.3, [], ["location mismatch"]
 
     def _comp_fit(self, posting: Posting):
@@ -185,6 +197,105 @@ def _tokens(text: str) -> set[str]:
 def _has_all_tokens(text: str, phrase: str) -> bool:
     phrase_tokens = _tokens(phrase)
     return bool(phrase_tokens) and phrase_tokens <= _tokens(text)
+
+
+def _word_present(needle: str, haystack: str) -> bool:
+    """Case-insensitive whole-word match of `needle` in `haystack`."""
+    if not needle:
+        return False
+    return re.search(rf"\b{re.escape(needle.lower())}\b",
+                     (haystack or "").lower()) is not None
+
+
+# -- location eligibility classification (deterministic, no network) ----------
+# Work-arrangement words that are NOT a place: excluded from the profile-location
+# match so a bare "Remote" posting does not read as a concrete location hit.
+_GENERIC_LOCATION_TOKENS = frozenset({
+    "remote", "hybrid", "anywhere", "onsite", "on-site", "in-office", "office",
+    "flexible", "worldwide", "global",
+})
+# EU/EEA/CH/UK country names (whole-word, case-insensitive). Italy is first-class
+# per the profile; the profile's own location tokens are unioned in at runtime.
+_EU_COUNTRIES = frozenset({
+    "italy", "france", "germany", "spain", "portugal", "netherlands", "belgium",
+    "luxembourg", "ireland", "austria", "greece", "poland", "czechia", "czech",
+    "slovakia", "slovenia", "hungary", "romania", "bulgaria", "croatia",
+    "estonia", "latvia", "lithuania", "finland", "sweden", "denmark", "malta",
+    "cyprus", "norway", "iceland", "liechtenstein", "switzerland",
+    "united kingdom", "britain", "scotland", "wales",
+})
+# Major EU/UK/CH cities (whole-word, case-insensitive).
+_EU_CITIES = frozenset({
+    "milan", "rome", "turin", "naples", "florence", "bologna", "london",
+    "manchester", "edinburgh", "dublin", "berlin", "munich", "hamburg",
+    "frankfurt", "cologne", "paris", "lyon", "madrid", "barcelona", "lisbon",
+    "porto", "amsterdam", "rotterdam", "brussels", "vienna", "zurich", "geneva",
+    "stockholm", "copenhagen", "oslo", "helsinki", "warsaw", "prague", "athens",
+})
+# Region markers that make a remote posting EU/EMEA/global-friendly.
+_EU_REGION_MARKERS = frozenset({
+    "eu", "eea", "europe", "european", "emea", "global", "anywhere", "worldwide",
+})
+# Non-EU country/city names (whole-word, case-insensitive).
+_NON_EU_WORDS = frozenset({
+    "united states", "canada", "australia", "singapore", "india", "japan",
+    "brazil", "mexico", "toronto", "vancouver", "montreal", "ottawa", "sydney",
+    "melbourne", "brisbane", "perth", "bangalore", "bengaluru", "tokyo",
+    "new york", "san francisco", "seattle", "boston", "chicago", "austin",
+    "denver", "atlanta", "los angeles", "washington", "mountain view",
+    "palo alto", "menlo park", "san jose", "dallas", "houston", "miami",
+})
+# Case-SENSITIVE standalone country abbreviations (avoid "US" matching "USte"
+# / "plus" and "USA" matching itself via a word marker instead).
+_US_COUNTRY_ABBREVS = frozenset({"US", "USA"})
+# US state postal codes, matched case-sensitively AND only in "City, XX" form so
+# ambiguous English words ("OR", "IN", "OK", "ME", "HI", "DE") do not misfire.
+_US_STATE_CODES = frozenset({
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
+    "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+    "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC",
+})
+
+
+def _profile_location_hit(loc: str, prefs: list[str]) -> bool:
+    """Whole-word match of a concrete (non-generic) profile token in `loc`."""
+    low = loc.lower()
+    return any(_word_present(pref, low)
+               for pref in prefs if pref not in _GENERIC_LOCATION_TOKENS)
+
+
+def _remote_eligibility(locations: list[str], prefs: list[str]):
+    """Grade a remote posting by the eligibility its location strings imply."""
+    eu_extra = {p for p in prefs if p not in _GENERIC_LOCATION_TOKENS}
+    if any(_marks_eu(loc, eu_extra) for loc in locations):
+        return 1.0, ["location: remote (EU-eligible)"], []
+    if locations and all(_marks_non_eu(loc) for loc in locations):
+        return 0.4, [], [
+            f"remote but non-EU eligibility likely ({', '.join(locations)})"]
+    return 0.7, [], ["remote, eligibility unverified"]
+
+
+def _marks_eu(loc: str, eu_extra: set[str]) -> bool:
+    low = loc.lower()
+    return (_word_hit(low, _EU_REGION_MARKERS)
+            or _word_hit(low, _EU_COUNTRIES)
+            or _word_hit(low, _EU_CITIES)
+            or _word_hit(low, eu_extra))
+
+
+def _marks_non_eu(loc: str) -> bool:
+    if _word_hit(loc.lower(), _NON_EU_WORDS):
+        return True
+    if any(re.search(rf"(?<![A-Za-z]){abbr}(?![A-Za-z])", loc)
+           for abbr in _US_COUNTRY_ABBREVS):
+        return True
+    return any(re.search(rf",\s*{code}\b", loc) for code in _US_STATE_CODES)
+
+
+def _word_hit(text_lower: str, words) -> bool:
+    return any(re.search(rf"\b{re.escape(w)}\b", text_lower) for w in words)
 
 
 def _max_amount(comp) -> int | None:

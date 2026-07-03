@@ -200,6 +200,35 @@ class Store:
         )
         self._conn.commit()
 
+    def bulk_update_scores(self, updates) -> int:
+        """Rescore many queue rows (score + payload) and their ledger score in
+        ONE transaction with a single commit.
+
+        `updates` is an iterable of (item_id, identity_key, score, payload_dict).
+        The naive per-row commit path took 67 minutes on ~7900 rows; batching the
+        whole rescore into one transaction is the load-bearing performance fix.
+        On any error the whole batch rolls back (all-or-nothing).
+        """
+        now = _now()
+        count = 0
+        try:
+            for item_id, identity_key, score, payload in updates:
+                self._conn.execute(
+                    "UPDATE queue SET score=?, payload=?, updated_at=? "
+                    "WHERE item_id=?",
+                    (score, json.dumps(payload), now, item_id),
+                )
+                self._conn.execute(
+                    "UPDATE ledger SET score=?, last_seen=? WHERE identity_key=?",
+                    (score, now, identity_key),
+                )
+                count += 1
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return count
+
     def get_queue_row(self, item_id: str) -> dict | None:
         cur = self._conn.execute("SELECT * FROM queue WHERE item_id=?", (item_id,))
         row = cur.fetchone()

@@ -11,9 +11,12 @@ import re
 
 import urllib.error
 
+from engine.discover import GreenhouseAdapter
 from engine.draft import DraftResult
 from engine.fetch import HttpFetcher, Source
+from engine.match import Scorer
 from engine.notify import FakeTransport
+from engine.profile_map import profile_from_real_ssot
 from engine.run import RunOptions, run_pipeline
 from engine.ssot import SSOT
 from engine.store import Store
@@ -241,6 +244,72 @@ def test_failed_fetch_source_never_closes(tmp_path, jobhunt_config,
         assert current["visible"] == 1
         assert not current["payload"].get("closed")
     store.close()
+
+
+def test_rescore_refreshes_carryover_score_breakdown_and_ledger(
+        tmp_path, jobhunt_config, real_ssot_path, greenhouse_raw):
+    # A carryover item (scored on an earlier run, stored score deliberately
+    # stale) still live on today's board must be re-scored in place with the
+    # CURRENT scorer, updating queue score + payload.breakdown + ledger score.
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    board = {"jobs": [greenhouse_raw["jobs"][0]]}  # Senior Backend Engineer only
+    posting = GreenhouseAdapter().parse(board, "acme")[0]
+    ikey = posting.identity_key()
+
+    # seed the item as prior-run carryover with a stale score of 1
+    store.record_ledger(ikey, "j-99", "greenhouse", "acme", posting.title,
+                        posting.url, "seen", 1)
+    store.upsert_queue(
+        "j-99", ikey, "pending_review", None, 1, 1, "automatable",
+        {"posting": {"title": posting.title, "company_slug": "acme",
+                     "url": posting.url, "vendor": "greenhouse",
+                     "locations": posting.locations, "remote_flag": False,
+                     "comp": None, "unverified": False},
+         "breakdown": {"total": 1, "matched": [], "weak": ["stale"],
+                       "ats_warnings": []}})
+
+    record = run_pipeline(
+        jobhunt_config, [Source("greenhouse", "acme", "Acme")],
+        SSOT.load(real_ssot_path), store,
+        options=RunOptions(no_draft=True, rescore=True), transport=FakeTransport(),
+        fetcher=_fetcher(store, board), runs_path=runs,
+        artifacts_dir=tmp_path / "artifacts")
+
+    fresh = Scorer(jobhunt_config,
+                   profile_from_real_ssot(SSOT.load(real_ssot_path))).score(posting)
+    assert fresh.total != 1  # the fresh score genuinely differs from the seed
+
+    row = store.get_queue_row("j-99")
+    assert row["score"] == fresh.total
+    assert row["payload"]["breakdown"]["total"] == fresh.total
+    assert row["payload"]["breakdown"]["matched"]      # real criteria, not "stale"
+    assert "stale" not in row["payload"]["breakdown"]["weak"]
+
+    ledger = store._conn.execute(
+        "SELECT score FROM ledger WHERE identity_key=?", (ikey,)).fetchone()
+    assert ledger["score"] == fresh.total
+
+    assert record["counts"]["rescored"] == 1
+    parsed = json.loads(runs.read_text().splitlines()[0])
+    assert parsed["counts"]["rescored"] == 1
+    store.close()
+
+
+def test_rescore_off_by_default_records_zero(tmp_path, jobhunt_config,
+                                             real_ssot_path, greenhouse_raw,
+                                             lever_raw, ashby_raw):
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    record = run_pipeline(
+        jobhunt_config, _sources(), SSOT.load(real_ssot_path), store,
+        options=RunOptions(no_draft=True), transport=FakeTransport(),
+        fetcher=_fetcher(store, greenhouse_raw, lever_raw, ashby_raw),
+        runs_path=runs, artifacts_dir=tmp_path / "artifacts")
+    store.close()
+    assert record["counts"]["rescored"] == 0
+    parsed = json.loads(runs.read_text().splitlines()[0])
+    assert parsed["counts"]["rescored"] == 0
 
 
 def _run_with_attach_mode(tmp_path, config, real_ssot_path, raws, runner,
