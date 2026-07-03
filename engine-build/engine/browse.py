@@ -405,7 +405,8 @@ def _ashby_options(field_def: dict) -> list[str]:
 def _parse_lever(html_source: str, slug: str, job_id: str, *,
                  now: Callable[[], str] | None = None) -> FieldMap:
     tree = _build_tree(html_source)
-    fields = _lever_base_fields(tree) + _lever_custom_fields(tree, slug, job_id)
+    fields = _dedup_by_key(
+        _lever_base_fields(tree) + _lever_custom_fields(tree, slug, job_id))
     if not fields:
         raise CaptureShapeError(
             f"lever: the apply page for {slug}/{job_id} rendered no recognizable "
@@ -413,6 +414,24 @@ def _parse_lever(html_source: str, slug: str, job_id: str, *,
             "found); the DOM shape has drifted or the page did not load")
     return FieldMap(vendor="lever", posting_id=str(job_id),
                     captured_at=_now(now), fields=fields)
+
+
+def _dedup_by_key(fields: list) -> list:
+    """Final whole-map same-key collapse (round-4 live finding): the base and
+    custom parse paths can BOTH emit a field for the same submission key on
+    live pages (the fixture-level dedup only collapses within the base pass).
+    Keep the first occurrence, upgrading required to the OR across duplicates
+    and preferring a non-empty label."""
+    by_key: dict[str, object] = {}
+    for fld in fields:
+        kept = by_key.get(fld.key)
+        if kept is None:
+            by_key[fld.key] = fld
+            continue
+        kept.required = kept.required or fld.required
+        if not kept.label and fld.label:
+            kept.label = fld.label
+    return list(by_key.values())
 
 
 @dataclass
