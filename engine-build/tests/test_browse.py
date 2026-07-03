@@ -1,8 +1,9 @@
 """Browser field-map capture: ashby graphql interception + lever DOM parse.
 
 No playwright, no network: both capture paths are driven through fake browser
-factories over fixture data (an invented-but-plausible ashby non-user-graphql
-form response and a server-rendered lever apply-page DOM). The autouse
+factories over fixture data (a live-confirmed ashby non-user-graphql form
+response, plus a legacy-shaped one exercising the one-release fallback probe,
+and a server-rendered lever apply-page DOM). The autouse
 no-network guard is satisfied throughout. Schema compliance, source tags, and
 coverage() interop are asserted on the produced FieldMaps; shape drift is proven
 to raise CaptureShapeError rather than yield an empty map.
@@ -161,6 +162,37 @@ def test_ashby_raises_when_no_form_response():
     page = _FakePage(responses=responses)
     with pytest.raises(CaptureShapeError, match="applicationFormDefinition"):
         capture_ashby("initech", "req1", _factory_for(page))
+
+
+def test_ashby_capture_falls_back_to_legacy_form_definition(
+        ashby_form_definition_raw):
+    """A posting still served the pre-migration `applicationFormDefinition`
+    shape (no `applicationForm` key at all) must still parse via the
+    one-release fallback probe, not raise CaptureShapeError."""
+    page = _FakePage(responses=_ashby_responses(ashby_form_definition_raw))
+    fm = capture_ashby("initech", "8f2a1c40", _factory_for(page),
+                       now=lambda: _PINNED)
+
+    assert fm.vendor == "ashby"
+    assert fm.posting_id == "8f2a1c40-1111-2222-3333-abcabcabcabc"
+
+    by_key = {f.key: f for f in fm.fields}
+    # the hidden field is dropped; every visible field is captured, same as
+    # the live-shape fixture
+    assert "_systemfield_hidden_source" not in by_key
+    assert set(by_key) == {
+        "_systemfield_name", "_systemfield_email", "_systemfield_phone",
+        "_systemfield_resume", "_systemfield_linkedin", "custom_github",
+        "custom_work_auth", "custom_visa", "custom_pronouns", "custom_notice"}
+
+    name = by_key["_systemfield_name"]
+    assert name.required is True
+    assert name.source == ASHBY_SOURCE
+    assert name.step_index == 0     # the legacy shape carries no step concept
+
+    visa = by_key["custom_visa"]
+    assert visa.type == "multi_value_single_select"
+    assert visa.options == ["Yes", "No"]
 
 
 # --- Lever server-rendered DOM parse -----------------------------------------

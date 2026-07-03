@@ -120,8 +120,17 @@ def greenhouse_questions_raw():
 
 @pytest.fixture
 def ashby_form_raw():
-    """An Ashby non-user-graphql ApiJobPosting form response body (W4 3.2)."""
+    """An Ashby non-user-graphql ApiJobPosting form response body: the live
+    `applicationForm` (FormRender) shape confirmed 2026-07-03 (round-2)."""
     return load_fixture_json("ashby_initech_form.json")
+
+
+@pytest.fixture
+def ashby_form_definition_raw():
+    """A legacy Ashby non-user-graphql response still carrying the
+    pre-migration `applicationFormDefinition` shape, kept only to exercise
+    the one-release fallback probe (round-2 shape-drift fix)."""
+    return load_fixture_json("ashby_initech_form_legacy.json")
 
 
 @pytest.fixture

@@ -3,32 +3,137 @@
     "jobPosting": {
       "id": "8f2a1c40-1111-2222-3333-abcabcabcabc",
       "title": "Staff Platform Engineer",
-      "applicationFormDefinition": {
+      "applicationForm": {
+        "__typename": "FormRender",
+        "id": "form-8f2a1c40",
+        "errorMessages": [],
+        "formErrors": [],
+        "sourceFormDefinitionId": "formdef-8f2a1c40",
+        "formControls": [
+          { "__typename": "FormControl", "identifier": "submit", "title": "Submit" }
+        ],
         "sections": [
           {
+            "__typename": "FormSectionRender",
             "title": "Personal Information",
-            "fields": [
-              { "field": { "path": "_systemfield_name", "title": "Full name", "type": "String", "isRequired": true, "isHidden": false } },
-              { "field": { "path": "_systemfield_email", "title": "Email", "type": "Email", "isRequired": true, "isHidden": false } },
-              { "field": { "path": "_systemfield_phone", "title": "Phone", "type": "Phone", "isRequired": false, "isHidden": false } },
-              { "field": { "path": "_systemfield_resume", "title": "Resume", "type": "File", "isRequired": true, "isHidden": false } }
+            "descriptionHtml": null,
+            "isHidden": null,
+            "fieldEntries": [
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_name",
+                "field": { "id": "field__systemfield_name", "path": "_systemfield_name", "humanReadablePath": "Name", "title": "Full name", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "String", "__autoSerializationID": "StringField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_email",
+                "field": { "id": "field__systemfield_email", "path": "_systemfield_email", "humanReadablePath": "Email", "title": "Email", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "Email", "__autoSerializationID": "EmailField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_phone",
+                "field": { "id": "field__systemfield_phone", "path": "_systemfield_phone", "humanReadablePath": "Phone", "title": "Phone", "isNullable": true, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "Phone", "__autoSerializationID": "PhoneField" },
+                "fieldValue": null,
+                "isRequired": false,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_resume",
+                "field": { "id": "field__systemfield_resume", "path": "_systemfield_resume", "humanReadablePath": "Resume", "title": "Resume", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "File", "__autoSerializationID": "FileField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              }
             ]
           },
           {
+            "__typename": "FormSectionRender",
             "title": "Links",
-            "fields": [
-              { "field": { "path": "_systemfield_linkedin", "title": "LinkedIn Profile", "type": "String", "isRequired": false, "isHidden": false } },
-              { "field": { "path": "custom_github", "title": "GitHub", "type": "String", "isRequired": false, "isHidden": false } }
+            "descriptionHtml": null,
+            "isHidden": null,
+            "fieldEntries": [
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_linkedin",
+                "field": { "id": "field__systemfield_linkedin", "path": "_systemfield_linkedin", "humanReadablePath": "LinkedIn Profile", "title": "LinkedIn Profile", "isNullable": true, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "String", "__autoSerializationID": "StringField" },
+                "fieldValue": null,
+                "isRequired": false,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry_custom_github",
+                "field": { "id": "field_custom_github", "path": "custom_github", "humanReadablePath": "GitHub", "title": "GitHub", "isNullable": true, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "String", "__autoSerializationID": "StringField" },
+                "fieldValue": null,
+                "isRequired": false,
+                "descriptionHtml": null,
+                "isHidden": null
+              }
             ]
           },
           {
+            "__typename": "FormSectionRender",
             "title": "Additional Information",
-            "fields": [
-              { "field": { "path": "custom_work_auth", "title": "Are you legally authorized to work in the United States?", "type": "Boolean", "isRequired": true, "isHidden": false } },
-              { "field": { "path": "custom_visa", "title": "Will you now or in the future require visa sponsorship?", "type": "ValueSelect", "isRequired": true, "isHidden": false, "selectableValues": [ { "label": "Yes", "value": "yes" }, { "label": "No", "value": "no" } ] } },
-              { "field": { "path": "custom_pronouns", "title": "Preferred pronouns", "type": "MultiValueSelect", "isRequired": false, "isHidden": false, "selectableValues": [ { "label": "she/her", "value": "1" }, { "label": "he/him", "value": "2" }, { "label": "they/them", "value": "3" } ] } },
-              { "field": { "path": "custom_notice", "title": "What is your notice period?", "type": "String", "isRequired": true, "isHidden": false } },
-              { "field": { "path": "_systemfield_hidden_source", "title": "How did you hear about us?", "type": "String", "isRequired": false, "isHidden": true } }
+            "descriptionHtml": null,
+            "isHidden": null,
+            "fieldEntries": [
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry_custom_work_auth",
+                "field": { "id": "field_custom_work_auth", "path": "custom_work_auth", "humanReadablePath": "Are you legally authorized to work in the United States?", "title": "Are you legally authorized to work in the United States?", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "Boolean", "__autoSerializationID": "BooleanField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry_custom_visa",
+                "field": { "id": "field_custom_visa", "path": "custom_visa", "humanReadablePath": "Will you now or in the future require visa sponsorship?", "title": "Will you now or in the future require visa sponsorship?", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "ValueSelect", "selectableValues": [ { "label": "Yes", "value": "yes" }, { "label": "No", "value": "no" } ], "__autoSerializationID": "ValueSelectField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry_custom_pronouns",
+                "field": { "id": "field_custom_pronouns", "path": "custom_pronouns", "humanReadablePath": "Preferred pronouns", "title": "Preferred pronouns", "isNullable": true, "isPrivate": false, "isDeactivated": false, "isMany": true, "metadata": { "selectableValues": [ { "label": "she/her", "value": "1" }, { "label": "he/him", "value": "2" }, { "label": "they/them", "value": "3" } ] }, "type": "MultiValueSelect", "__autoSerializationID": "MultiValueSelectField" },
+                "fieldValue": null,
+                "isRequired": false,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry_custom_notice",
+                "field": { "id": "field_custom_notice", "path": "custom_notice", "humanReadablePath": "What is your notice period?", "title": "What is your notice period?", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "String", "__autoSerializationID": "StringField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_hidden_source",
+                "field": { "id": "field__systemfield_hidden_source", "path": "_systemfield_hidden_source", "humanReadablePath": "How did you hear about us?", "title": "How did you hear about us?", "isNullable": true, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "String", "__autoSerializationID": "StringField" },
+                "fieldValue": null,
+                "isRequired": false,
+                "descriptionHtml": null,
+                "isHidden": true
+              }
             ]
           }
         ]

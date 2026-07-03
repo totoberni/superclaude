@@ -5,8 +5,12 @@ Reaches the two vendors that a browserless HTTP probe cannot enumerate:
 - Ashby: the posting page is a SPA that fetches its typed application schema
   through its own `non-user-graphql` (ApiJobPosting) call. We load the page,
   intercept that response, and map its field definitions onto the canonical
-  FieldMap. Ashby forms carry NO conditional visibility (R-WT-8 8), so the map
-  is static and every field is `step_index=0`.
+  FieldMap. The typed schema lives at `data.jobPosting.applicationForm` (a
+  `FormRender`, confirmed live 2026-07-03); the older
+  `data.jobPosting.applicationFormDefinition` shape is probed second as a
+  one-release fallback. Ashby forms carry NO conditional visibility (R-WT-8 8):
+  each section is a plain linear step, so `step_index` increments once per
+  visible section (hidden sections are dropped whole) and never branches.
 - Lever: the apply page is server-rendered, so the full form DOM is present at
   load. We read the rendered DOM (`page.content()`) and parse the fixed base
   fields plus the custom `.application-question` cards.
@@ -29,13 +33,16 @@ without playwright raises a clear "pip install playwright==1.56.*" error. Tests
 drive both paths with fake browser/page objects and never touch playwright or the
 network.
 
-CAVEAT (load-bearing): the graphql envelope keys and the Lever DOM selectors
-encoded here are FIXTURE-DERIVED and plausible, not yet confirmed against live
-pages. They will be validated LIVE on toto during the second SSOT playtest loop
-(meta-driven). Until then, every parser MUST fail LOUDLY and descriptively:
-a shape mismatch raises `CaptureShapeError` naming the exact selector/key that
-missed, NEVER a silently empty FieldMap. Callers stay fail-soft (run.py counts a
-failed capture and moves on) so a loud parser and a resilient runner coexist.
+CAVEAT (load-bearing): the Ashby graphql envelope was confirmed LIVE against
+jobs.ashbyhq.com during the round-2 SSOT playtest loop (2026-07-03): the real
+schema lives at `data.jobPosting.applicationForm`, not the fixture-derived
+`applicationFormDefinition` guessed in round 1 (kept as a one-release
+fallback probe). The Lever DOM selectors encoded here remain FIXTURE-DERIVED
+and plausible, not yet confirmed against live pages, pending the same live
+pass. Every parser MUST still fail LOUDLY and descriptively: a shape mismatch
+raises `CaptureShapeError` naming the exact selector/key that missed, NEVER a
+silently empty FieldMap. Callers stay fail-soft (run.py counts a failed
+capture and moves on) so a loud parser and a resilient runner coexist.
 """
 
 from __future__ import annotations
@@ -183,25 +190,101 @@ def _maybe_capture(captured: list, response) -> None:
 
 
 def _select_ashby_schema(responses: list, slug: str, job_id: str) -> dict:
-    """Pick the intercepted graphql response carrying the ApiJobPosting form."""
+    """Pick the intercepted graphql response carrying the ApiJobPosting form.
+
+    The typed schema lives at `data.jobPosting.applicationForm` (live-confirmed
+    2026-07-03); `data.jobPosting.applicationFormDefinition` is probed second
+    as a one-release fallback for postings still served the pre-migration
+    shape. Whichever key is present and truthy on a response's `jobPosting`
+    wins. If none of the matching-URL responses carry either key, the key set
+    actually seen on each is recorded so the raise below names both paths
+    tried alongside exactly what shape came back.
+    """
+    seen_keys: list[list[str]] = []
     for response in responses:
         try:
             body = response.json()
         except Exception:
             continue
         posting = _dig(body, "data", "jobPosting")
-        if isinstance(posting, dict) and posting.get("applicationFormDefinition"):
+        if not isinstance(posting, dict):
+            continue
+        seen_keys.append(sorted(posting.keys()))
+        if posting.get("applicationForm") or posting.get("applicationFormDefinition"):
             return posting
     raise CaptureShapeError(
         f"ashby: no {_ASHBY_GRAPHQL_MARKER!r} response for {slug}/{job_id} "
-        "carried data.jobPosting.applicationFormDefinition "
-        f"(saw {len(responses)} matching-URL response(s)); the graphql shape has "
-        "drifted or the form never loaded")
+        "carried data.jobPosting.applicationForm or the fallback "
+        "data.jobPosting.applicationFormDefinition "
+        f"(saw {len(responses)} matching-URL response(s); jobPosting keys "
+        f"seen: {seen_keys}); the graphql shape has drifted or the form "
+        "never loaded")
 
 
 def _parse_ashby(posting: dict, slug: str, job_id: str, *,
                  now: Callable[[], str] | None = None) -> FieldMap:
-    definition = posting.get("applicationFormDefinition") or {}
+    form = posting.get("applicationForm")
+    if isinstance(form, dict) and form:
+        fields = _parse_ashby_form_render(form, slug, job_id)
+    else:
+        definition = posting.get("applicationFormDefinition")
+        definition = definition if isinstance(definition, dict) else {}
+        fields = _parse_ashby_form_definition(definition, slug, job_id)
+    if not fields:
+        raise CaptureShapeError(
+            f"ashby: the form for {slug}/{job_id} yielded zero visible fields")
+    posting_id = str(posting.get("id") or job_id)
+    return FieldMap(vendor="ashby", posting_id=posting_id,
+                    captured_at=_now(now), fields=fields)
+
+
+def _parse_ashby_form_render(form: dict, slug: str, job_id: str) -> list[Field]:
+    """Parse the live `FormRender` shape: `sections[].fieldEntries[]`.
+
+    `isRequired`/`isHidden` live on the entry, not the nested `field`; a
+    deactivated field is dropped alongside an explicitly hidden entry. A
+    hidden section is skipped whole and does not consume a `step_index` slot
+    (only visible sections count as steps).
+    """
+    sections = form.get("sections")
+    if not isinstance(sections, list):
+        raise CaptureShapeError(
+            f"ashby: applicationForm.sections missing or not a list "
+            f"for {slug}/{job_id}")
+    fields: list[Field] = []
+    step_index = 0
+    for section in sections:
+        if section.get("isHidden"):
+            continue
+        for entry in section.get("fieldEntries") or []:
+            field_def = entry.get("field")
+            if not isinstance(field_def, dict):
+                raise CaptureShapeError(
+                    f"ashby: a form entry in section "
+                    f"{section.get('title')!r} for {slug}/{job_id} has no "
+                    "nested 'field' object")
+            if entry.get("isHidden") or field_def.get("isDeactivated"):
+                continue
+            title = (field_def.get("title") or field_def.get("humanReadablePath")
+                     or "")
+            fields.append(_build_ashby_field(
+                key=field_def.get("path", ""),
+                title=title,
+                raw_type=field_def.get("type"),
+                required=bool(entry.get("isRequired", False)),
+                options=_ashby_options(field_def),
+                step_index=step_index,
+            ))
+        step_index += 1
+    return fields
+
+
+def _parse_ashby_form_definition(definition: dict, slug: str, job_id: str) -> list[Field]:
+    """Fallback for postings still served the pre-migration
+    `applicationFormDefinition` shape (one-release grace period; drop this
+    once no live posting exercises it). `isRequired`/`isHidden` live on the
+    nested `field` itself here, and the shape carries no step concept, so
+    every field stays `step_index=0` as before."""
     sections = definition.get("sections")
     if not isinstance(sections, list):
         raise CaptureShapeError(
@@ -218,32 +301,58 @@ def _parse_ashby(posting: dict, slug: str, job_id: str, *,
                     "nested 'field' object")
             if field_def.get("isHidden"):
                 continue
-            fields.append(_ashby_field(field_def))
-    if not fields:
-        raise CaptureShapeError(
-            f"ashby: the form for {slug}/{job_id} yielded zero visible fields")
-    posting_id = str(posting.get("id") or job_id)
-    return FieldMap(vendor="ashby", posting_id=posting_id,
-                    captured_at=_now(now), fields=fields)
+            fields.append(_build_ashby_field(
+                key=field_def.get("path", ""),
+                title=field_def.get("title", ""),
+                raw_type=field_def.get("type"),
+                required=bool(field_def.get("isRequired", False)),
+                options=_ashby_options(field_def),
+                step_index=0,
+            ))
+    return fields
 
 
-def _ashby_field(field_def: dict) -> Field:
-    field_type = _ASHBY_TYPE_MAP.get(field_def.get("type"), "input_text")
-    title = field_def.get("title", "")
+def _build_ashby_field(*, key: str, title: str, raw_type, required: bool,
+                       options: list[str], step_index: int) -> Field:
+    field_type, role = _ashby_field_type(raw_type)
     return Field(
-        key=field_def.get("path", ""),
+        key=key,
         label=title,
         type=field_type,
-        required=bool(field_def.get("isRequired", False)),
-        options=_ashby_options(field_def.get("selectableValues")),
+        required=required,
+        options=options,
         source=ASHBY_SOURCE,
-        locator=Locator(role=_role_for_type(field_type), name=title),
-        step_index=0,
+        locator=Locator(role=role, name=title),
+        step_index=step_index,
         conditional_on=None,
     )
 
 
-def _ashby_options(values) -> list[str]:
+def _ashby_field_type(raw_type) -> tuple[str, str]:
+    """Canonical (type, role) for a raw Ashby field `type` string.
+
+    Known types route through the pinned map and fieldmap's shared
+    `_role_for_type`, so browser and HTTP captures never drift on role naming.
+    An unrecognised type is not fatal (Ashby adds field types over time): it
+    is passed through lowercased with role "textbox" rather than raising.
+    """
+    canonical = _ASHBY_TYPE_MAP.get(raw_type)
+    if canonical is not None:
+        return canonical, _role_for_type(canonical)
+    return str(raw_type or "").lower(), "textbox"
+
+
+def _ashby_options(field_def: dict) -> list[str]:
+    """Enumerated option labels for a select-type field.
+
+    `selectableValues` is usually a direct sibling of `type` on the field, but
+    some field shapes carry it nested under `metadata` instead; both
+    locations are checked defensively.
+    """
+    values = field_def.get("selectableValues")
+    if not isinstance(values, list):
+        metadata = field_def.get("metadata")
+        values = metadata.get("selectableValues") if isinstance(metadata, dict) else None
     if not isinstance(values, list):
         return []
     labels: list[str] = []
