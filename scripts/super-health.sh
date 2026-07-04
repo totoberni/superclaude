@@ -1,17 +1,21 @@
 #!/bin/bash
 # super-health.sh — deterministic aggregator behind skills/super-health/SKILL.md.
-# Combines 7 component health scores into a single weighted /100 + letter grade.
+# Combines 8 component health scores into a single weighted /100 + letter grade.
 #
 # Usage:
-#   bash super-health.sh [--quick|--standard|--deep|--complete]
+#   bash super-health.sh [--complete]
 #
-# Tiers:
-#   --quick     (default) hook-health --quick + skill + mem + settings + sessions
-#               + comms + infra-test.sh (default, not --full)
-#   --standard  hook-health --standard + all quick checks
-#   --deep      hook-health --deep + infra-test.sh --full + all standard checks
-#   --complete  deep score PLUS a printed note that the model must run the Step-4
-#               5-agent post-hoc audit (per SKILL.md). This script NEVER spawns agents.
+# Depth is INVARIANT: this script ALWAYS runs the deepest check configuration —
+# hook-health --deep, infra-test.sh --full, automations-health.sh (the toto probe
+# + 513-test WSL engine suite), every structural / bash -n / ss_* sub-check, and
+# every component scorer. There is NO depth flag: --quick, --standard and --deep no
+# longer exist, and any legacy or unknown flag is ignored gracefully so old callers
+# keep working unchanged.
+#
+#   --complete  Orthogonal to depth (does NOT change what the /100 measures).
+#               Additionally runs the heavy script-hygiene scan and prints a note
+#               that the model must run the Step-4 5-agent post-hoc audit (per
+#               SKILL.md). This script NEVER spawns agents.
 #
 # Contract: parses each component's "SCORE:" line, multiplies by weight, sums,
 # rounds to nearest int, prints the component table + grade, and as its FINAL
@@ -35,35 +39,43 @@ SCRIPTS="$CLAUDE/scripts"
 # Prefer the superclaude venv (runs with no shell activation); fall back to system python3.
 PYTHON="$CLAUDE/.venv/bin/python"; [ -x "$PYTHON" ] || PYTHON="$(command -v python3 2>/dev/null || true)"
 
-# ── Args / tier ──
-TIER="quick"
+# ── Args ──
+# Depth is INVARIANT: super-health ALWAYS runs the deepest check configuration, so
+# there is no depth selector. The ONE surviving flag is --complete, which is
+# ORTHOGONAL to depth: it does not change what checks feed the /100 score, it only
+# toggles the extra script-hygiene scan + the printed model-driven post-hoc audit
+# note. Every other argument (including the retired --quick/--standard/--deep) is
+# ignored gracefully so legacy callers never error.
+COMPLETE=0
 for arg in "$@"; do
   case "$arg" in
-    --quick)    TIER="quick" ;;
-    --standard) TIER="standard" ;;
-    --deep)     TIER="deep" ;;
-    --complete) TIER="complete" ;;
+    --complete) COMPLETE=1 ;;
+    *)          : ;;   # ignore unknown/legacy flags (never error)
   esac
 done
-# --complete reuses the --deep scoring path; the only difference is a printed note.
-EFFECTIVE_TIER="$TIER"
-[ "$TIER" = "complete" ] && EFFECTIVE_TIER="deep"
 
 # ════════════════════════════════════════════════════════════════════════════
 #  WEIGHTS — single source of truth. Must sum to 1.00. (DRY: rebalance here only.)
 # ════════════════════════════════════════════════════════════════════════════
 declare -A WEIGHTS=(
-  [hook]=0.18
-  [skill]=0.13
-  [mem]=0.18
+  [hook]=0.15
+  [skill]=0.12
+  [mem]=0.15
   [settings]=0.12
   [session]=0.05
-  [comms]=0.10
-  [regression]=0.12
-  [subsystems]=0.12
+  [comms]=0.09
+  [regression]=0.11
+  [subsystems]=0.11
+  [automations]=0.10
 )
+# automations (0.10) was carved in by trimming the two heaviest components (hook and
+# mem, 0.18 -> 0.15 each = -0.06) plus 0.01 each off skill/comms/regression/subsystems
+# (= -0.04), keeping the sum at exactly 1.00 (asserted below). 0.10 is comparable to
+# the other infra components (comms 0.09, regression 0.11, subsystems 0.11): the
+# automations-health run covers BOTH the 513-test engine pytest suite on this WSL box
+# AND toto's automation-runtime health, so it warrants an infra-tier share.
 # Row order for the report table.
-COMPONENT_ORDER=(hook skill mem settings session comms regression subsystems)
+COMPONENT_ORDER=(hook skill mem settings session comms regression subsystems automations)
 declare -A COMPONENT_LABEL=(
   [hook]="Hook health"
   [skill]="Skill health"
@@ -73,6 +85,7 @@ declare -A COMPONENT_LABEL=(
   [comms]="Comms (HCOM broker)"
   [regression]="Regression tests"
   [subsystems]="Subsystems (v3)"
+  [automations]="Automations engine (513 tests + toto runtime)"
 )
 
 # ── Shared helper: extract the final "SCORE: N/100" integer from a blob ──
@@ -96,11 +109,8 @@ extract_score() {
 score_hook() {
   local s="$SCRIPTS/hook-health.sh"
   if [ ! -f "$s" ]; then echo "hook-health.sh missing"; echo "SCORE: 0/100"; return; fi
-  case "$EFFECTIVE_TIER" in
-    quick)            bash "$s" --quick ;;
-    standard)         bash "$s" --standard ;;
-    deep)             bash "$s" --deep ;;
-  esac
+  # Depth invariant: always run hook-health at its deepest.
+  bash "$s" --deep
 }
 
 score_skill() {
@@ -112,6 +122,10 @@ score_skill() {
 score_mem() {
   local s="$SCRIPTS/mem-health.sh"
   if [ ! -f "$s" ]; then echo "mem-health.sh missing"; echo "SCORE: 0/100"; return; fi
+  # Depth invariant (see arg-parse header): the two python-spawning facets below
+  # (search latency + query-time capabilities) ALWAYS run. `deep=1` is retained as a
+  # sentinel documenting which facets were formerly gated to the --deep tier.
+  local deep=1
   local mh_out mh_score
   mh_out=$(bash "$s")
   mh_score=$(printf '%s\n' "$mh_out" | extract_score)
@@ -200,7 +214,7 @@ score_mem() {
   # shell) so a literal '!' cannot be mangled by shell history expansion.
   local EXEMPT_SQL="(text LIKE '<!-- budget-exempt%' OR text LIKE '%' || char(10) || '<!-- budget-exempt%')"
 
-  local corpus_penalty=0 corpus_detail lat_str="not measured (fast mode)"
+  local corpus_penalty=0 corpus_detail lat_str="not measured"
   if ! command -v sqlite3 >/dev/null 2>&1; then
     corpus_detail="sqlite3 absent — corpus facet skipped (no penalty)"
   elif [ ! -f "$MDB" ] || ! sqlite3 "$MDB" "SELECT 1;" >/dev/null 2>&1; then
@@ -230,10 +244,10 @@ score_mem() {
     # (c) row_count prong — flat +3 when the corpus has more rows than the ref.
     [ "$row_count" -gt "$ROW_REF" ] && corpus_penalty=$((corpus_penalty + 3))
 
-    # (d) latency prong — DEEP MODE ONLY (one real timed search). Fast mode never
-    #     spawns python, so the default stays <100ms. memory_db.py is python-free to
-    #     locate but the search itself loads the model; gate it behind deep.
-    if [ "$EFFECTIVE_TIER" = "deep" ]; then
+    # (d) latency prong — one real timed search. ALWAYS runs (depth invariant); it is
+    #     the memory facet's one python-spawning probe (memory_db.py is cheap to locate
+    #     but the search loads the embedding model). `deep=1` sentinel retained.
+    if [ "$deep" -eq 1 ]; then
       local lat_ms t0 t1 pybin="$CLAUDE/.venv/bin/python" memdb="$SCRIPTS/memory/memory_db.py"
       if [ -x "$pybin" ] && [ -f "$memdb" ]; then
         t0=$(date +%s%N)
@@ -253,8 +267,9 @@ score_mem() {
   fi
 
   # --- Memory capabilities facet (v3 Tier-0/1 query-time improvements) ---
-  # DEEP MODE ONLY (loads python; the fast default stays python-free, like the
-  # latency prong). Exercises the NEW query-time capabilities END-TO-END so a
+  # ALWAYS runs (depth invariant); loads python like the latency prong (the `deep=1`
+  # sentinel marks it a formerly --deep-only facet). Exercises the NEW query-time
+  # capabilities END-TO-END so a
   # regression dents the score instead of passing silently:
   #   CAP1 get-ladder resolves a filename SLUG when the stored name is a human
   #        title (the canonical resolver fix)              -> CLI exit 0
@@ -268,8 +283,8 @@ score_mem() {
   # search against the live DB (never writes it). Graceful-skip (python/memory_db.py
   # absent, or fixture setup fails) costs NOTHING; only a capability that RUNS and
   # answers WRONG deducts (bounded caps_penalty, cap 6).
-  local caps_penalty=0 caps_detail="not exercised (fast mode)"
-  if [ "$EFFECTIVE_TIER" = "deep" ]; then
+  local caps_penalty=0 caps_detail="not exercised"
+  if [ "$deep" -eq 1 ]; then
     local capdb pybin3="$CLAUDE/.venv/bin/python" memdb3="$SCRIPTS/memory/memory_db.py"
     if [ ! -x "$pybin3" ] || [ ! -f "$memdb3" ]; then
       caps_detail="not exercised (memory_db.py or venv absent)"
@@ -633,14 +648,8 @@ score_comms() {
 score_regression() {
   local s="$SCRIPTS/infra-test.sh"
   if [ ! -f "$s" ]; then echo "infra-test.sh missing"; echo "SCORE: 0/100"; return; fi
-  # quick -> lighter --quick suite (SKILL.md §1f allows it); standard -> default full
-  # suite; deep -> explicit --full. Always colorless for stable parsing.
-  local args="--no-color"
-  case "$EFFECTIVE_TIER" in
-    quick) args="$args --quick" ;;
-    deep)  args="$args --full" ;;
-    *)     ;;   # standard: default suite
-  esac
+  # Depth invariant: always run the full suite (--full), always colorless for parsing.
+  local args="--no-color --full"
   local out summary total pass
   out=$(bash "$s" $args 2>&1)
   summary=$(echo "$out" | grep -E 'Tests:.*Pass:.*Fail:' | tail -1)
@@ -655,9 +664,10 @@ score_regression() {
 }
 
 # ── Subsystems (v3) — one sub-check per v3 feature, summed to /100 ───────────────
-# Scales by $EFFECTIVE_TIER: quick = structural (files exist + fail-safe smokes);
-# deep/complete = adds py_compile / value-sanity / dead-url probes; the heavy
-# script-hygiene de-bake scan runs at the COMPLETE tier only.
+# Depth is invariant: the deepest sub-checks (files exist + fail-safe smokes PLUS
+# py_compile / value-sanity / dead-url probes) ALWAYS run. The heavy script-hygiene
+# de-bake scan is the one exception; it stays gated behind the orthogonal (non-depth)
+# --complete flag.
 #
 # Scoring model (denominator-honest): two accumulators, AW (awarded) and PO
 # (possible). A sub-check adds its weight to PO ONLY when it is in scope, and adds
@@ -671,10 +681,10 @@ score_regression() {
 # every smoke probe.
 score_subsystems() {
   local AW=0 PO=0 detail=""
-  local deep=0
-  [ "$EFFECTIVE_TIER" = "deep" ] && deep=1
-  local complete=0
-  [ "$TIER" = "complete" ] && complete=1
+  # Depth invariant: deepest sub-checks always run (`deep=1` sentinel). `complete`
+  # stays an orthogonal (non-depth) toggle for the heavy script-hygiene scan.
+  local deep=1
+  local complete=$COMPLETE
 
   # award <weight> <0|1 pass> <short-label>  → accrue into AW/PO + detail trail.
   ss_award() {
@@ -892,33 +902,51 @@ PY
     detail="$detail script-hygiene:${sh_bad}-baked/${sh_total}"
   fi
 
-  # 11. automations-health (toto automation-layer probe). Registered
-  #     STRUCTURALLY only — super-health stays local + fast; the remote
-  #     probe itself (scp+ssh to toto) is NEVER run from inside super-health.
-  #     See `automations-health.sh --help` for the standalone probe, which is
-  #     the basis for the future W7 watchdog (pages abe-alerts on toto
-  #     401/dark — not implemented here).
-  ss_exists 5 automations-health "$SC/automations-health.sh"
-  ss_bashcheck 2 automations-health-syntax "$SC/automations-health.sh"
+  # 11. automations-health is NO LONGER a structural sub-check here. It is now a
+  #     first-class weighted component (score_automations) that RUNS the full probe —
+  #     scp+ssh to toto + the 513-test WSL engine suite — and folds its /100 in
+  #     directly (WIRE-DON'T-DUPLICATE). Scoring existence/syntax here too would
+  #     double-count it (the run already covers a missing/broken script → 0), so it is
+  #     deliberately absent from the subsystems denominator.
 
   # ── Roll up. Guard PO>0 (always true: structural checks are tier-independent). ──
   local sc=0
   [ "$PO" -gt 0 ] && sc=$(( AW * 100 / PO ))
   [ "$sc" -gt 100 ] && sc=100
-  echo "Subsystems detail (tier=$EFFECTIVE_TIER, awarded=$AW/$PO): super-mem=$sm_detail;$detail"
+  echo "Subsystems detail (awarded=$AW/$PO): super-mem=$sm_detail;$detail"
   echo "SCORE: $sc/100"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-#  Tier banner + budget warnings
+#  Automations engine (513-test suite on WSL + toto runtime)
+# ════════════════════════════════════════════════════════════════════════════
+# WIRE-DON'T-DUPLICATE: automations-health.sh is the SINGLE SOURCE for both the
+# 513-case engine pytest suite (its `engine_testsuite` check on this WSL box) and
+# toto's automation-runtime health (ntfy / WireGuard / coding plane, probed over
+# ssh). We RUN it and fold its /100 in, rather than re-implementing any of those
+# probes here. It emits no color, ALWAYS exits 0, and self-scores WSL-only when
+# toto is unreachable (graceful-skip) — so whatever score it returns is folded
+# fail-soft, consistent with this script's contract.
+score_automations() {
+  local s="$SCRIPTS/automations-health.sh"
+  if [ ! -f "$s" ]; then echo "automations-health.sh missing"; echo "SCORE: 0/100"; return; fi
+  local out sc
+  out=$(bash "$s" 2>&1)
+  sc=$(printf '%s\n' "$out" | extract_score)
+  printf '%s\n' "$out" | grep -v '^SCORE:'
+  echo "SCORE: $sc/100"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Banner + budget warning
 # ════════════════════════════════════════════════════════════════════════════
 echo "## Superclaude Health Report"
 echo ""
-echo "**Tier**: $TIER"
-case "$TIER" in
-  deep)     echo "_Warning: --deep runs infra-test.sh --full + deep hook checks (~20 min of model time if narrated). Mind the session budget._" ;;
-  complete) echo "_Warning: --complete = --deep scoring PLUS a model-driven 5-agent post-hoc audit. Mind session budget AND helper usage._" ;;
-esac
+echo "_This run ALWAYS executes the deepest check set (hook-health --deep,"
+echo "infra-test.sh --full, automations-health.sh incl. the toto probe + 513-test"
+echo "engine suite, and every ss_* sub-check). Mind the session budget (~20 min of"
+echo "model time if narrated)._"
+[ "$COMPLETE" -eq 1 ] && echo "_--complete: also runs the script-hygiene scan and prints the 5-agent post-hoc audit note. Mind helper usage._"
 echo ""
 
 # ── Assert weights sum to 1.00 (defensive; informational if not) ──
@@ -979,8 +1007,8 @@ printf "| **Total** | **100%%** | | **%s** |\n" "$TOTAL_WEIGHTED"
 #  lines (the rich metrics the table discards): memory's full 6-criterion
 #  mem-health table + the two facet lines (.memory.db + corpus footprint/penalty),
 #  Settings+Agents detail, Sessions detail, Comms detail, Regression/Subsystems
-#  detail, etc. Rendered by default on every tier (standard/deep/complete AND the
-#  default quick run, so the metrics are always visible). Touches no
+#  detail, etc. Rendered on every run (the metrics are always visible, since the
+#  script always runs the deepest check set). Touches no
 #  score/weight/aggregate/grade — the final "SCORE: N/100" contract is unchanged.
 # ════════════════════════════════════════════════════════════════════════════
 echo ""
@@ -1011,7 +1039,8 @@ echo ""
 echo "**Aggregate: $FINAL/100 — Grade: $(grade "$FINAL")**"
 
 # ── --complete: print the post-hoc audit instruction (script does NOT spawn) ──
-if [ "$TIER" = "complete" ]; then
+# --complete is ORTHOGONAL to depth (depth is always deepest); it only adds this note.
+if [ "$COMPLETE" -eq 1 ]; then
   echo ""
   echo "### Post-Hoc Audit (--complete)"
   echo "NOTE: the model must now run the Step-4 5-agent post-hoc audit per"

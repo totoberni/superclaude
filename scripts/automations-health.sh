@@ -2,7 +2,14 @@
 # automations-health.sh — standalone READ-ONLY health probe for the toto
 # automation runtime (ntfy, discovery/WireGuard egress, Remote-Control coding
 # plane, W3 automation engine, W4 JobHunt pipeline). Runs on WSL, probes toto
-# over the tsh channel.
+# over the tsh channel. Also folds in one WSL-side check (the W5 engine dev
+# test-suite, which is built + tested on this box but not yet deployed on toto)
+# and carries a gated, deferred block of W5-runtime checks that stay dormant
+# (skip) until the W5 stack deploys on toto (see §W5 in the collector).
+#
+# SINGLE-SOURCE: toto-side check logic lives ONCE, in the collector heredoc that
+# is shipped to and executed on toto; the WSL side never reimplements a toto
+# check. WSL-only checks (the engine dev test-suite) run locally on this box.
 #
 # This probe is deliberately NOT wired to page anyone. It is the basis for
 # the future W7 watchdog (proactively pages abe-alerts when toto 401s or
@@ -21,9 +28,9 @@
 #
 # GRACEFUL-SKIP: if the ssh channel to toto is unreachable or times out, this
 # script cannot tell "toto is down" apart from "this WSL box has no network
-# right now", so it does NOT penalize the score. It prints
-# "automations-health: N/A (toto unreachable, no penalty)" and
-# "SCORE: 100/100".
+# right now", so it does NOT penalize the toto checks. The unreachable path
+# still runs and scores the WSL-side checks (engine dev test-suite) honestly;
+# when those are skipped/absent too, it prints "SCORE: 100/100".
 #
 # SECRETS: this script and its remote collector NEVER print ntfy
 # credentials, the WireGuard private key, or any other secret. Only
@@ -71,11 +78,111 @@ REMOTE_COLLECTOR="/tmp/automations-collect.sh"
 
 export TSH_TIMEOUT="${TSH_TIMEOUT:-25}"
 
+# ── Check registry (single source of truth for labels + report order) ───────
+# Toto-side keys are emitted by the collector shipped to toto and run THERE
+# (single-source: the check logic lives once, in the heredoc below, and is not
+# reimplemented on the WSL side). WSL-side keys (WSL_KEYS) are computed locally
+# on this dev box. w5_* keys are DEFERRED W5-runtime checks: they emit `skip`
+# (excluded from the score) until the W5 stack is deployed on toto (see the
+# §W5 block in the collector), so they never penalize today's score.
+declare -A LABELS=(
+  [ntfy_health]="ntfy /v1/health"
+  [ntfy_service]="ntfy.service (system)"
+  [ntfy_listener]="ntfy-listener.service (user)"
+  [discovery_gluetun]="discovery-gluetun healthy"
+  [discovery_browser]="discovery-browser running"
+  [rc_sessions]="RC tmux sessions alive"
+  [rc_login_health]="RC login-health proxy"
+  [engine_build_dir]="engine-build deployed"
+  [jobhunt_dir]="jobhunt runtime dir + store.db"
+  [jobhunt_timer]="jobhunt-daily.timer state"
+  [jobhunt_freshness]="jobhunt runs.jsonl freshness"
+  [engine_testsuite]="engine dev test-suite (WSL)"
+  [w5_bw_serve]="W5 vault bw serve daemon"
+  [w5_inbox_imap]="W5 dedicated-inbox IMAP reachable"
+  [w5_patchright_chrome]="W5 patchright chrome installed"
+  [w5_provider_contract]="W5 provider-contract test"
+)
+
+# WSL-side check keys: computed on THIS box, independent of toto reachability.
+WSL_KEYS=(engine_testsuite)
+
+# Toto-side check keys, in report order. The w5_* keys trail the stable set and
+# stay gated (skip) until the W5 deploy marker appears (see §W5).
+CHECK_ORDER=(ntfy_health ntfy_service ntfy_listener discovery_gluetun discovery_browser rc_sessions rc_login_health engine_build_dir jobhunt_dir jobhunt_timer jobhunt_freshness w5_bw_serve w5_inbox_imap w5_patchright_chrome w5_provider_contract)
+
+WSL_RESULTS=""          # "key=pass|fail|skip" lines from WSL-side checks
+declare -A EXTRA=()     # optional per-key detail suffix, appended by the scorer
+
+# score_checks <merged key=val output> <key…>
+# Shared scorer for BOTH the normal path (WSL + toto keys) and the toto-
+# unreachable path (WSL keys only). Denominator-honest: pass / pass_gated count
+# toward PASS+TOTAL; skip counts toward neither; any other value (including a
+# key absent from the output) is a FAIL toward TOTAL. TOTAL==0 (nothing
+# measurable) yields 100/100, matching the "nothing to penalize" convention.
+# Prints one line per check and, as the final line, exactly "SCORE: <int>/100".
+score_checks() {
+  local merged="$1"; shift
+  local total=0 pass=0 key val extra
+  for key in "$@"; do
+    val=$(printf '%s\n' "$merged" | grep -oE "^${key}=[a-z_]+$" | tail -1 | cut -d= -f2)
+    extra="${EXTRA[$key]:-}"; [ -n "$extra" ] && extra=" ($extra)"
+    case "$val" in
+      pass)
+        total=$((total + 1)); pass=$((pass + 1))
+        echo "automations-health: ${LABELS[$key]}: ok${extra}" ;;
+      pass_gated)
+        total=$((total + 1)); pass=$((pass + 1))
+        echo "automations-health: ${LABELS[$key]}: ok (gated, pre-enable)${extra}" ;;
+      skip)
+        echo "automations-health: ${LABELS[$key]}: SKIP (deferred/gated, excluded from score)${extra}" ;;
+      *)
+        total=$((total + 1))
+        echo "automations-health: ${LABELS[$key]}: FAIL${extra}" ;;
+    esac
+  done
+  local score=100
+  [ "$total" -gt 0 ] && score=$((pass * 100 / total))
+  echo "SCORE: $score/100"
+}
+
 na_exit() {
-  echo "automations-health: N/A (toto unreachable, no penalty)"
-  echo "SCORE: 100/100"
+  echo "automations-health: toto N/A (unreachable, no penalty on toto checks)"
+  # WSL-side checks do not need toto; score them honestly even when toto is dark.
+  score_checks "$WSL_RESULTS" "${WSL_KEYS[@]}"
   exit 0
 }
+
+# ── WSL-side check: engine dev test-suite green ─────────────────────────────
+# The W5 engine is BUILT + unit-tested on this WSL dev box but NOT YET deployed
+# on toto (a later live-acceptance phase). This runs the FULL dev suite locally
+# (every package, incl. tests/test_providers_*, test_ingest_*, test_validate_*,
+# via pytest.ini `testpaths = tests`) and folds the verdict into the score,
+# independent of toto reachability. Detect-if-present: an absent engine-build
+# gracefully skips (no penalty). `-p no:cacheprovider` avoids a .pytest_cache
+# write when invoked from a write-restricted (sandboxed) context.
+run_wsl_engine_testsuite() {
+  local root="$HOME/automations/engine-build"
+  local py="$root/.venv-dev/bin/python"
+  if [ ! -x "$py" ] || [ ! -f "$root/pytest.ini" ]; then
+    WSL_RESULTS="${WSL_RESULTS}engine_testsuite=skip"$'\n'
+    EXTRA[engine_testsuite]="engine-build absent on this box"
+    return 0
+  fi
+  local out rc clean passed fails
+  out="$(cd "$root" && "$py" -m pytest -q -p no:cacheprovider 2>&1)"; rc=$?
+  clean="$(printf '%s' "$out" | sed -r 's/\x1b\[[0-9;]*m//g')"
+  passed="$(printf '%s\n' "$clean" | grep -oE '[0-9]+ passed' | tail -1)"
+  fails="$(printf '%s\n' "$clean" | grep -oE '[0-9]+ (failed|errors?)' | tail -1)"
+  if [ "$rc" -eq 0 ] && [ -n "$passed" ] && [ -z "$fails" ]; then
+    WSL_RESULTS="${WSL_RESULTS}engine_testsuite=pass"$'\n'
+    EXTRA[engine_testsuite]="${passed}, exit 0"
+  else
+    WSL_RESULTS="${WSL_RESULTS}engine_testsuite=fail"$'\n'
+    EXTRA[engine_testsuite]="exit ${rc}; ${passed:-0 passed}${fails:+; $fails}"
+  fi
+}
+run_wsl_engine_testsuite
 
 # Machine-specific toto connection params (Tailscale IP + ntfy port) live in a
 # gitignored config, never hardcoded here (public repo). Absent config => cannot
@@ -234,6 +341,70 @@ else
     bad jobhunt_freshness
   fi
 fi
+
+# ── §W5: DEFERRED W5-runtime checks (gated; skip until deploy) ───────────────
+# The W5 stack (engine/providers Patchright browser layer, engine/ingest
+# dedicated inbox, engine/validate anti-injection, the Vaultwarden vault +
+# `bw serve` daemon) is BUILT + unit-tested on the WSL dev box but NOT YET
+# DEPLOYED here on toto. Live probes against undeployed services would FAIL, so
+# this whole block is GATED behind a single deploy signal and emits `skip` (no
+# score penalty) until then.
+#
+# ACTIVATION: the W5 live-acceptance deploy phase creates the marker
+#   ~/automations/engine-build/.w5-deployed        (or export W5_DEPLOYED=1)
+# after which the four real probes below run. Deploy-time checklist:
+#   * w5_bw_serve          : Vaultwarden `bw serve` daemon up (127.0.0.1:8087)
+#   * w5_inbox_imap        : dedicated-inbox IMAP host:port reachable
+#   * w5_patchright_chrome : patchright + chrome present in the runtime venv
+#   * w5_provider_contract : parametrized provider-contract pytest passes
+# Constants tagged `deploy-confirm:` must be reconciled with the actual W5
+# deploy layout before the marker is flipped on.
+W5_MARKER="$HOME/automations/engine-build/.w5-deployed"
+if [ -n "${W5_DEPLOYED:-}" ] || [ -f "$W5_MARKER" ]; then
+  # Runtime host/port/paths are read from a gitignored env file the deploy
+  # phase writes; never hardcode machine-specific values here.
+  W5_ENV="$HOME/automations/engine-build/.w5-deployed.env"
+  [ -f "$W5_ENV" ] && . "$W5_ENV" 2>/dev/null || true
+  RT_PY="$HOME/automations/engine-build/.venv/bin/python"   # deploy-confirm: runtime venv path
+  RT_ROOT="$HOME/automations/engine-build"
+
+  # bw serve daemon reachable. deploy-confirm: port/endpoint of `bw serve`.
+  if curl -s --max-time 4 "${W5_BW_SERVE_URL:-http://127.0.0.1:8087/status}" 2>/dev/null | grep -q '"'; then
+    ok w5_bw_serve
+  else
+    bad w5_bw_serve
+  fi
+
+  # dedicated-inbox IMAP reachable (plain TCP connect, no auth, no secrets).
+  # deploy-confirm: W5_IMAP_HOST/PORT come from the W5 env file above.
+  if [ -n "${W5_IMAP_HOST:-}" ] \
+      && timeout 5 bash -c "exec 3<>/dev/tcp/${W5_IMAP_HOST}/${W5_IMAP_PORT:-993}" 2>/dev/null; then
+    ok w5_inbox_imap
+  else
+    bad w5_inbox_imap
+  fi
+
+  # patchright + chrome installed in the runtime venv.
+  if [ -x "$RT_PY" ] && "$RT_PY" -c 'import patchright' 2>/dev/null; then
+    ok w5_patchright_chrome
+  else
+    bad w5_patchright_chrome
+  fi
+
+  # provider-contract pytest against the deployed engine.
+  # deploy-confirm: the contract test module/marker for the provider layer.
+  if [ -x "$RT_PY" ] && ( cd "$RT_ROOT" \
+        && "$RT_PY" -m pytest -q -p no:cacheprovider tests/test_providers_registry.py >/dev/null 2>&1 ); then
+    ok w5_provider_contract
+  else
+    bad w5_provider_contract
+  fi
+else
+  skip w5_bw_serve
+  skip w5_inbox_imap
+  skip w5_patchright_chrome
+  skip w5_provider_contract
+fi
 COLLECTOR
 } > "$LOCAL_COLLECTOR"
 chmod +x "$LOCAL_COLLECTOR"
@@ -255,53 +426,11 @@ if [ "$TSH_RC" -ne 0 ] || [ -z "$COLLECT_OUT" ]; then
 fi
 
 # ── Parse + score ───────────────────────────────────────────────────────────
-# Denominator-honest: each check is an equal slice of 100, EXCEPT a
-# graceful-skip check (jobhunt_freshness while the timer gate is closed),
-# which counts toward neither PASS nor TOTAL: same convention as the
-# top-level toto-unreachable N/A path (na_exit) and the subsystems
-# AW/PO model in super-health.sh. 11 checks in the common case; 10 while
-# the jobhunt-daily timer is gated-disabled.
-declare -A LABELS=(
-  [ntfy_health]="ntfy /v1/health"
-  [ntfy_service]="ntfy.service (system)"
-  [ntfy_listener]="ntfy-listener.service (user)"
-  [discovery_gluetun]="discovery-gluetun healthy"
-  [discovery_browser]="discovery-browser running"
-  [rc_sessions]="RC tmux sessions alive"
-  [rc_login_health]="RC login-health proxy"
-  [engine_build_dir]="engine-build deployed"
-  [jobhunt_dir]="jobhunt runtime dir + store.db"
-  [jobhunt_timer]="jobhunt-daily.timer state"
-  [jobhunt_freshness]="jobhunt runs.jsonl freshness"
-)
-CHECK_ORDER=(ntfy_health ntfy_service ntfy_listener discovery_gluetun discovery_browser rc_sessions rc_login_health engine_build_dir jobhunt_dir jobhunt_timer jobhunt_freshness)
-
-TOTAL=0
-PASS=0
-for key in "${CHECK_ORDER[@]}"; do
-  val=$(printf '%s\n' "$COLLECT_OUT" | grep -oE "^${key}=[a-z_]+$" | tail -1 | cut -d= -f2)
-  case "$val" in
-    pass)
-      TOTAL=$((TOTAL + 1))
-      PASS=$((PASS + 1))
-      echo "automations-health: ${LABELS[$key]}: ok"
-      ;;
-    pass_gated)
-      TOTAL=$((TOTAL + 1))
-      PASS=$((PASS + 1))
-      echo "automations-health: ${LABELS[$key]}: ok (gated, pre-enable)"
-      ;;
-    skip)
-      echo "automations-health: ${LABELS[$key]}: SKIP (timer disabled, gate not yet open)"
-      ;;
-    *)
-      TOTAL=$((TOTAL + 1))
-      echo "automations-health: ${LABELS[$key]}: FAIL"
-      ;;
-  esac
-done
-
-[ "$TOTAL" -gt 0 ] || TOTAL=1  # defence-in-depth; unreachable while any hard check exists
-SCORE=$((PASS * 100 / TOTAL))
-echo "SCORE: $SCORE/100"
+# Merge the WSL-side results (computed locally, above) with the toto collector
+# output and score both together via the shared scorer (single definition, used
+# here and in na_exit). Denominator-honest: skip'd checks (jobhunt_freshness
+# while its timer gate is closed; all w5_* while pre-deploy) count toward
+# neither PASS nor TOTAL. score_checks emits the final "SCORE: <int>/100" line.
+MERGED="$(printf '%s\n%s\n' "$WSL_RESULTS" "$COLLECT_OUT")"
+score_checks "$MERGED" "${WSL_KEYS[@]}" "${CHECK_ORDER[@]}"
 exit 0

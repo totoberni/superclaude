@@ -1,10 +1,10 @@
 ---
 name: super-health
-description: "Superclaude health /100 across 8 subsystems; --complete adds 5-agent audit."
+description: "Superclaude health /100 across 9 subsystems (always deepest); --complete adds 5-agent audit."
 category: health
 user-invocable: true
 disable-model-invocation: true
-argument-hint: "[--quick | --standard | --deep | --complete]"
+argument-hint: "[--complete]"
 allowed-tools: Read, Bash, Glob, Grep, Agent
 ---
 
@@ -12,31 +12,37 @@ allowed-tools: Read, Bash, Glob, Grep, Agent
 
 Aggregate health score across all superclaude subsystems. Weighted combination of component scores.
 
-**Tier**: $ARGUMENTS (default: `--quick`)
+**Depth**: invariant. Every run executes the deepest check set (no depth flag).
 
 ## Component Weights
 
 | Component | Weight | Source Skill/Script |
 |-----------|--------|---------------------|
-| Hook health | 18% | `/hook-health` |
-| Skill health | 13% | `/skill-health` |
-| Memory health | 18% | `/mem-health` |
+| Hook health | 15% | `/hook-health` |
+| Skill health | 12% | `/skill-health` |
+| Memory health | 15% | `/mem-health` |
 | Settings + agents | 12% | Inline checks (below) |
 | Sessions | 5% | Inline checks (below) |
-| Comms (HCOM broker) | 10% | Inline checks (below) — Phase D-full SQLite-only |
-| Regression tests | 12% | `infra-test.sh` |
-| Subsystems (v3) | 12% | Inline checks (below) |
+| Comms (HCOM broker) | 9% | Inline checks (below) — Phase D-full SQLite-only |
+| Regression tests | 11% | `infra-test.sh` |
+| Subsystems (v3) | 11% | Inline checks (below) |
+| Automations engine | 10% | `automations-health.sh` (513-test WSL suite + toto runtime probe) |
 
-**Final score** = sum of `component_score * weight` across all 8 components (= 100%).
+**Final score** = sum of `component_score * weight` across all 9 components (= 100%).
 
-## Tiers
+## Depth (invariant) + `--complete`
 
-| Tier | Components | Time |
-|------|-----------|------|
-| `--quick` | hook-health `--quick` + skill-health + mem-health + settings/agents + sessions + infra-test.sh | ~2 min |
-| `--standard` | hook-health `--standard` + all quick checks | ~10 min |
-| `--deep` | hook-health `--deep` + infra-test.sh `--full` + all standard checks. **Warn about session budget** | ~20 min |
-| `--complete` | All `--deep` checks + Step 4 post-hoc audit (5 parallel general-purpose audit agents across {rules, agents, skills, hooks, comms+memory}) producing prioritized optimization queue. **Warn about session budget AND helper usage** | ~30 min + helper time |
+There is NO depth flag. Every run always executes the deepest check configuration:
+hook-health `--deep`, `infra-test.sh --full`, `automations-health.sh` (the toto probe
+plus the 513-test WSL engine suite), and every structural / `bash -n` / `ss_*` sub-check.
+Legacy `--quick` / `--standard` / `--deep` (and any unknown flag) are ignored gracefully
+so old callers never break. Budget: ~20 min of model time if narrated; **warn about
+session budget**.
+
+`--complete` is ORTHOGONAL to depth (it does not change what the /100 measures). It
+additionally runs the heavy script-hygiene scan and prints the Step-4 5-agent post-hoc
+audit instruction (5 parallel general-purpose audit agents across {rules, agents, skills,
+hooks, comms+memory}). **Warn about session budget AND helper usage.**
 
 ## Procedure
 
@@ -45,11 +51,12 @@ Aggregate health score across all superclaude subsystems. Weighted combination o
 `bash ~/.claude/scripts/super-health.sh $ARGUMENTS` is the authoritative deterministic
 implementation of everything below. It calls `hook-health.sh`, `skill-health.sh`, and
 `mem-health.sh` for those components, ports the inline settings/sessions/comms scoring,
-runs `infra-test.sh` for the regression component, applies the weights table, and prints
-the component table + grade + a final `SCORE: <int>/100` line. Run it and present its
-output. The criteria/weights tables below document what the script implements; the
-`--complete` tier additionally requires the model to run the Step-4 5-agent post-hoc audit
-(the script prints the instruction but never spawns agents).
+runs `infra-test.sh` for the regression component, runs `automations-health.sh` for the
+automations component, applies the weights table, and prints the component table + grade +
+a final `SCORE: <int>/100` line. Run it and present its output. The criteria/weights tables
+below document what the script implements; the `--complete` flag additionally requires the
+model to run the Step-4 5-agent post-hoc audit (the script prints the instruction but never
+spawns agents).
 
 ### Step 1: Run Component Health Checks
 
@@ -77,7 +84,7 @@ The `score_mem` function in `super-health.sh` also runs a read-only `.memory.db`
 
 **Corpus-health facet (two-pronged).** After the integrity facet, `score_mem` measures whether the corpus is an operationally healthy *size and shape* (distinct from the integrity cap, which answers whether the store is structurally sound). Both prongs are always surfaced; together they fold into ONE bounded `corpus_penalty` (cap **12**) — a single penalty avoids double-jeopardy with mem-health criterion 1.
 
-- **(a) Searchability** — `row_count` (`COUNT(*)`, always) plus a measured search latency. The latency runs ONE real `memory_db.py search … -k 5`, timed, **only under `--deep`/`--complete`** so the fast default stays python-free (`<100ms`); fast mode prints `latency: not measured (fast mode)`.
+- **(a) Searchability** — `row_count` (`COUNT(*)`, always) plus a measured search latency. The latency runs ONE real `memory_db.py search … -k 5`, timed (always, since depth is invariant); it is the memory facet's one python-spawning probe.
 - **(b) Footprint** — `MIN`/`AVG`/`MAX(LENGTH(text))` over **non-exempt** rows (always; reuses the same line-anchored `<!-- budget-exempt` predicate as `/mem-health` criterion 1, so a legitimately-exempt giant does not distort the max).
 
 Reference caps — *normal-operation reference points calibrated to the live corpus*, all env-overridable:
@@ -87,7 +94,7 @@ Reference caps — *normal-operation reference points calibrated to the live cor
 | Non-exempt MAX bytes | 50000 | `MEM_MAX_BYTES_REF` | `+= min(8, round((max/REF − 1) * 20))` (graduated, capped at 8) |
 | Non-exempt AVG bytes | 8000 | `MEM_AVG_BYTES_REF` | `+= 3` (flat) |
 | Row count | 600 | `MEM_ROW_COUNT_REF` | `+= 3` (flat) |
-| Search latency (ms) | 5000 | `MEM_SEARCH_LATENCY_REF_MS` | `+= 3` (flat, `--deep` only) |
+| Search latency (ms) | 5000 | `MEM_SEARCH_LATENCY_REF_MS` | `+= 3` (flat) |
 
 Final: `final_mem = max(0, min(mh_score, mdb_cap) − corpus_penalty)` — the integrity result is a hard ceiling (min), corpus bloat is a graduated deduction below it. Surfaced line: `Memory corpus facet: rows=N (ref 600), footprint min/avg/max=…/…/…B (max-ref 50000, exempt-aware), latency=<…>; penalty=−P`. `MEMORY_DB_PATH` overrides the DB path (the failing-path tests drive each prong over its ref against a throwaway copy or via a low env-ref).
 
@@ -288,15 +295,15 @@ bash "$HOME/.claude/scripts/infra-test.sh" --full 2>&1 | tail -1
 # Score = P / N * 100
 ```
 
-For `--quick` tier, use `infra-test.sh` without `--full` if available, or just count pass rate.
+The regression component always runs `infra-test.sh --full` (depth is invariant).
 
-#### 1h. Subsystems (v3, 12%)
+#### 1h. Subsystems (v3, 11%)
 
 Denomination-honest AW/PO model: only in-scope sub-checks count toward the denominator. Each sub-check has a real failing path (missing artifact / malformed JSON / broken smoke → 0 of its slice). All checks are read-only.
 
-**Features scored** (structural checks at all tiers; `--deep` adds py_compile / value-sanity / dead-url probes; `--complete` adds the script-hygiene scan):
+**Features scored** (all run every time — depth is invariant): the structural checks PLUS the py_compile / value-sanity / dead-url probes. The script-hygiene scan is the one exception, gated behind the orthogonal (non-depth) `--complete` flag.
 
-| Feature | Structural | `--deep` extras |
+| Feature | Structural | Deep extras (always run) |
 |---------|-----------|----------------|
 | Memory render/viewer pipeline | `render.py`, `viewer.py`, `comms_viewer.py` exist (8 pts) | `py_compile` each file (2 pts each) |
 | Telemetry reader | `statusline_telemetry.py` + `.sh` exist (7 pts); `printf '{}'` smoke rc 0 + non-blank stdout (4 pts) | garbage-stdin smoke must also be rc 0 / fail-safe (3 pts) |
@@ -312,7 +319,7 @@ Denomination-honest AW/PO model: only in-scope sub-checks count toward the denom
 - `/super-mem` (`skills/super-mem/SKILL.md`) — GRACEFUL-ABSENT, deferred to Phase 8. Until the skill file lands it touches neither AW nor PO, so it neither penalizes nor inflates the score. Once the file exists, it becomes a real `ss_exists` sub-check.
 - The deleted swarm/subagent monitor — EXCLUDED with no health score.
 
-**`--complete` script-hygiene scan** (heavy, runs at `--complete` tier only): scans all `~/.claude/**/*.sh` for >2 consecutive lines of baked foreign-language (heredoc piped to python/node, multi-line `python3 -c`/`node -e` block). Each violating file deducts. `super-health.sh` itself is excluded from the scan. A clean fleet earns 6 pts.
+**`--complete` script-hygiene scan** (heavy, runs only when the orthogonal `--complete` flag is passed; NOT a depth selector): scans all `~/.claude/**/*.sh` for >2 consecutive lines of baked foreign-language (heredoc piped to python/node, multi-line `python3 -c`/`node -e` block). Each violating file deducts. `super-health.sh` itself is excluded from the scan. A clean fleet earns 6 pts.
 
 **Score** = `AW * 100 / PO` (integer division, clamped 0..100). The denominator `PO` excludes any N/A/graceful-absent sub-check.
 

@@ -169,7 +169,7 @@ Shared scanner: `~/.claude/scripts/scan-mem-matrix.sh`.
 
 | Skill | Purpose |
 |-------|---------|
-| `/super-health` | Aggregate /100 (hooks + skills + mem + settings + sessions). `--complete` adds 5-agent post-hoc audit |
+| `/super-health` | Aggregate /100 (hooks + skills + mem + settings + sessions + comms + regression + subsystems + automations). Always runs the deepest check set (no depth flag); `--complete` adds the 5-agent post-hoc audit |
 | `/hook-health` | Score hook subsystem /100 (syntax, perf, naming, coverage) |
 | `/skill-health` | Score skill subsystem /100 (frontmatter, refs, descriptions) |
 | `/health` | Generic infra health check; `/health [component]` for targeted |
@@ -192,7 +192,7 @@ Shared scanner: `~/.claude/scripts/scan-mem-matrix.sh`.
 
 \* = agent-only (not in `/` menu)
 
-**Health quickstart**: `/super-health --quick` for /100 aggregate score.
+**Health quickstart**: `/super-health` for the /100 aggregate score (always the deepest check set).
 
 ---
 
