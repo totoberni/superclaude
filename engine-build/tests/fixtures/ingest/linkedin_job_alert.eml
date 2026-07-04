@@ -1,0 +1,30 @@
+From: LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>
+To: Automation Inbox <automation.inbox@example.com>
+Subject: Job alert: 12 new jobs match "Software Engineer, Remote (Europe)"
+Date: Fri, 03 Jul 2026 08:15:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="LI-BOUNDARY-0001"
+
+--LI-BOUNDARY-0001
+Content-Type: text/plain; charset="utf-8"
+
+Your job alert for "Software Engineer, Remote (Europe)" has 12 new results.
+
+Senior Backend Engineer - Acme Corp - Remote
+https://www.linkedin.com/comm/jobs/view/3987654321/?trackingId=abc123
+
+Platform Engineer - Globex Inc - Remote
+https://www.linkedin.com/comm/jobs/view/4012345678/?trackingId=def456
+
+See all 12 jobs on LinkedIn.
+
+--LI-BOUNDARY-0001
+Content-Type: text/html; charset="utf-8"
+
+<html><body>
+<p>Your job alert for &quot;Software Engineer, Remote (Europe)&quot; has 12 new results.</p>
+<p><a href="https://www.linkedin.com/comm/jobs/view/3987654321/?trackingId=abc123">Senior Backend Engineer</a> at Acme Corp (Remote)</p>
+<p><a href="https://www.linkedin.com/comm/jobs/view/4012345678/?trackingId=def456">Platform Engineer</a> at Globex Inc (Remote)</p>
+</body></html>
+
+--LI-BOUNDARY-0001--

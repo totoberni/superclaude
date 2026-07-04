@@ -1,0 +1,13 @@
+From: Acme Careers <no-reply@greenhouse.io>
+To: Automation Inbox <automation.inbox@example.com>
+Subject: Please verify your email address
+Date: Fri, 03 Jul 2026 11:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+
+Thanks for applying to Acme Corp via Greenhouse.
+
+Please verify your email address by clicking the link below:
+https://boards.greenhouse.io/verify?token=abc123def456ghi789
+
+This link expires in 24 hours.

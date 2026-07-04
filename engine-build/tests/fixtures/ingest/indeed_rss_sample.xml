@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>python developer jobs in London, UK</title>
+<link>https://rss.indeed.com/rss?q=python+developer&amp;l=London%2C+UK&amp;sort=date</link>
+<description>Indeed job search results</description>
+<item>
+<title>Python Developer - Example Corp - London, UK</title>
+<link>https://www.indeed.com/rc/clk?jk=abcdef1234567890&amp;from=rss</link>
+<pubDate>Fri, 03 Jul 2026 09:00:00 GMT</pubDate>
+<description>Example Corp is looking for a Python Developer to join their team.</description>
+<guid>abcdef1234567890</guid>
+</item>
+<item>
+<title>Backend Python Engineer - Sample Ltd - London, UK</title>
+<link>https://www.indeed.com/rc/clk?jk=0123456789abcdef&amp;from=rss</link>
+<pubDate>Fri, 03 Jul 2026 08:30:00 GMT</pubDate>
+<description>Sample Ltd seeks a Backend Python Engineer for a remote-friendly team.</description>
+<guid>0123456789abcdef</guid>
+</item>
+</channel>
+</rss>
