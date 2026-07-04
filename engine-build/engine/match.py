@@ -60,13 +60,21 @@ class ScoreBreakdown:
     matched: list[str] = field(default_factory=list)
     weak: list[str] = field(default_factory=list)
     ats_warnings: list[str] = field(default_factory=list)
+    discard: bool = False
+    discard_reason: str = ""
 
 
 class Scorer:
-    def __init__(self, config, profile: dict, similarity: Similarity | None = None):
+    def __init__(self, config, profile: dict, similarity: Similarity | None = None,
+                ssot: SSOT | None = None):
         self.config = config
         self.profile = profile
         self.similarity = similarity or TokenOverlapSimilarity()
+        # W4-COMMUTE-GATE (D5): computed once at construction, not per-posting.
+        # ssot is optional and defaults to no gate (fail-open, matches current
+        # behaviour) so every existing call site stays unaffected.
+        self._onsite_policy = (_onsite_policy_from_ssot(ssot)
+                               if ssot is not None else None)
         self._axis_fns = {
             "role_fit": self._role_fit,
             "skills_overlap": self._skills_overlap,
@@ -95,8 +103,15 @@ class Scorer:
             matched.extend(m)
             weak.extend(w)
         warnings = ats_precheck(posting, self.profile, self.config.ats_rules)
-        return ScoreBreakdown(round(100 * weighted), axis_scores, matched, weak,
-                              warnings)
+        discard, gate_message = commute_gate(posting, self._onsite_policy)
+        if not discard and gate_message:
+            warnings = warnings + [gate_message]
+        breakdown = ScoreBreakdown(round(100 * weighted), axis_scores, matched,
+                                   weak, warnings)
+        if discard:
+            breakdown.discard = True
+            breakdown.discard_reason = gate_message
+        return breakdown
 
     def _role_fit(self, posting: Posting):
         roles = self.profile.get("roles", [])
@@ -313,3 +328,116 @@ def _max_amount(comp) -> int | None:
     amounts = [int(num) * (1000 if suffix else 1)
                for num, suffix in re.findall(r"(\d+)\s*([kK])?", plain) if num]
     return max(amounts) if amounts else None
+
+
+# -- W4-COMMUTE-GATE (D5): hard discard for excessive on-site presence --------
+# Policy VALUES are never hardcoded (public branch): they load from the SSOT at
+# `preferences.onsite_policy`. A MISSING or partial policy leaves the gate
+# INACTIVE (fail-open), matching current behaviour with no crash.
+_ONSITE_POLICY_KEYS = ("allowed_cities", "max_onsite_days_per_week_europe",
+                      "max_onsite_days_per_month_rest")
+_WEEKS_PER_MONTH = 4.33
+
+_FULLY_REMOTE_RE = re.compile(r"fully[\s-]*remote", re.IGNORECASE)
+
+# Tried in order, first match wins. Each entry is (compiled pattern, cadence).
+# English + Italian phrasing (spec examples: "on-site", "in office",
+# "hybrid (3 days", "3 days per week in the office", "in sede", "N giorni in
+# ufficio"). Explicit monthly/weekly cadence words are checked before the
+# cadence-less fallbacks, which default to a weekly cadence (the common case
+# for "hybrid"/"giorni in ufficio" phrasing with no cadence word attached).
+_ONSITE_AMOUNT_PATTERNS = (
+    (re.compile(r"(\d+)\s*days?\s*(?:per|a|/)\s*month", re.IGNORECASE), "month"),
+    (re.compile(r"(\d+)\s*days?\s*(?:per|a|/)\s*week", re.IGNORECASE), "week"),
+    (re.compile(r"(\d+)\s*giorni\s*(?:al\s*mese|/\s*mese|per\s*mese)",
+               re.IGNORECASE), "month"),
+    (re.compile(r"(\d+)\s*giorni\s*(?:a\s*settimana|alla\s*settimana|"
+               r"/\s*settimana|per\s*settimana)", re.IGNORECASE), "week"),
+    (re.compile(r"(\d+)\s*giorni\s*in\s*(?:ufficio|sede)", re.IGNORECASE), "week"),
+    (re.compile(r"hybrid\D{0,20}?(\d+)\s*days?", re.IGNORECASE), "week"),
+    (re.compile(r"(\d+)\s*days?\s*in\s*(?:the\s*)?office", re.IGNORECASE), "week"),
+)
+
+
+def commute_gate(posting: Posting, policy: dict | None) -> tuple[bool, str | None]:
+    """Hard DISCARD gate for roles requiring too much on-site presence outside
+    the owner's allowed cities (plan D5: show-and-warn, never guess).
+
+    Returns `(discard, message)`. When `discard` is True, `message` is the
+    discard reason (detected day count + region classification, for the report
+    "why" line). When `discard` is False and `message` is not None, it is a
+    show-and-warn line for an undetectable on-site amount (the caller routes it
+    to `ats_warnings`, never hidden). A `None`/partial policy (SSOT
+    `preferences.onsite_policy` absent or missing a required key) leaves the
+    gate permanently INACTIVE: fail-open, never discards, never raises.
+    """
+    if policy is None:
+        return False, None
+    if posting.remote_flag or _is_fully_remote_text(posting.description):
+        return False, None
+    if _matches_allowed_city(posting.locations, policy["allowed_cities"]):
+        return False, None
+    text = f"{posting.description} {' '.join(posting.locations)}"
+    amount, unit = _detect_onsite_amount(text)
+    if amount is None:
+        return False, "on-site presence unclear"
+    europe = _location_is_europe(posting.locations)
+    if europe:
+        detected = amount if unit == "week" else amount / _WEEKS_PER_MONTH
+        threshold = policy["max_onsite_days_per_week_europe"]
+    else:
+        detected = amount * _WEEKS_PER_MONTH if unit == "week" else amount
+        threshold = policy["max_onsite_days_per_month_rest"]
+    if detected > threshold:
+        return True, _discard_reason(amount, unit, europe, threshold)
+    return False, None
+
+
+def _onsite_policy_from_ssot(ssot: SSOT) -> dict | None:
+    """Read+validate `preferences.onsite_policy`; None if MISSING or partial."""
+    raw = ssot.get("preferences.onsite_policy")
+    if raw is MISSING or not isinstance(raw, dict):
+        return None
+    if any(key not in raw for key in _ONSITE_POLICY_KEYS):
+        return None
+    week_cap = raw.get("max_onsite_days_per_week_europe")
+    month_cap = raw.get("max_onsite_days_per_month_rest")
+    if (isinstance(week_cap, bool) or isinstance(month_cap, bool)
+            or not isinstance(week_cap, (int, float))
+            or not isinstance(month_cap, (int, float))):
+        return None
+    cities = raw.get("allowed_cities")
+    allowed_cities = ([str(c) for c in cities]
+                      if isinstance(cities, (list, tuple)) else [])
+    return {"allowed_cities": allowed_cities,
+            "max_onsite_days_per_week_europe": float(week_cap),
+            "max_onsite_days_per_month_rest": float(month_cap)}
+
+
+def _is_fully_remote_text(description: str) -> bool:
+    return bool(_FULLY_REMOTE_RE.search(description or ""))
+
+
+def _matches_allowed_city(locations: list[str], allowed_cities: list[str]) -> bool:
+    return any(_word_present(city, loc) for loc in locations for city in allowed_cities)
+
+
+def _location_is_europe(locations: list[str]) -> bool:
+    return any(_word_hit(loc.lower(), _EU_COUNTRIES) or _word_hit(loc.lower(), _EU_CITIES)
+              for loc in locations)
+
+
+def _detect_onsite_amount(text: str) -> tuple[float | None, str | None]:
+    """Heuristic day-count + cadence parse over description + location text."""
+    for pattern, unit in _ONSITE_AMOUNT_PATTERNS:
+        match = pattern.search(text or "")
+        if match:
+            return float(match.group(1)), unit
+    return None, None
+
+
+def _discard_reason(amount: float, unit: str, europe: bool, threshold: float) -> str:
+    region = "Europe" if europe else "non-Europe"
+    cap_unit = "week" if europe else "month"
+    return (f"on-site commute gate: detected {amount:g} days/{unit} in {region} "
+           f"exceeds policy cap of {threshold:g} days/{cap_unit}")

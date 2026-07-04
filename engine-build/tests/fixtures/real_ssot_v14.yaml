@@ -30,6 +30,14 @@ preferences:
   excludes:
     - unpaid
     - commission only
+  # W4-COMMUTE-GATE (7.3 D5): placeholder onsite policy structure only. Real
+  # values live in the toto-only, gitignored ssot/job.yaml, never here.
+  onsite_policy:
+    allowed_cities:
+      - Lisbon
+      - London
+    max_onsite_days_per_week_europe: 2
+    max_onsite_days_per_month_rest: 4
 skills:
   programming_languages:
     - Python

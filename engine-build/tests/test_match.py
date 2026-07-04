@@ -177,3 +177,120 @@ def test_seniority_word_boundary_avoids_substring_false_match(jobhunt_config):
         description="Collaborate with international and internal teams."))
     assert breakdown.axis_scores["seniority_fit"] == 0.5
     assert any("seniority unclear" in w for w in breakdown.weak)
+
+
+# -- W4-COMMUTE-GATE (7.3 D5): hard discard for excessive on-site presence -----
+
+def _onsite_ssot(allowed_cities, week_cap, month_cap):
+    return SSOT({"preferences": {"onsite_policy": {
+        "allowed_cities": allowed_cities,
+        "max_onsite_days_per_week_europe": week_cap,
+        "max_onsite_days_per_month_rest": month_cap,
+    }}})
+
+
+def test_commute_gate_inactive_when_policy_missing(jobhunt_config):
+    # No ssot passed at all -> gate off (current-behaviour default).
+    scorer = Scorer(jobhunt_config, {})
+    breakdown = scorer.score(_posting(
+        ["Somewhere, Overthere"], description="5 days per week in office"))
+    assert breakdown.discard is False
+    assert breakdown.discard_reason == ""
+
+    # ssot passed but preferences.onsite_policy absent -> still off.
+    scorer_empty = Scorer(jobhunt_config, {}, ssot=SSOT({}))
+    breakdown_empty = scorer_empty.score(_posting(
+        ["Somewhere, Overthere"], description="5 days per week in office"))
+    assert breakdown_empty.discard is False
+
+    # ssot with a PARTIAL policy (missing a required key) -> still off.
+    partial = SSOT({"preferences": {"onsite_policy": {
+        "allowed_cities": ["Testville"],
+        "max_onsite_days_per_week_europe": 1,
+    }}})
+    scorer_partial = Scorer(jobhunt_config, {}, ssot=partial)
+    breakdown_partial = scorer_partial.score(_posting(
+        ["Somewhere, Overthere"], description="5 days per week in office"))
+    assert breakdown_partial.discard is False
+
+
+def test_commute_gate_allowed_city_passes_full_time_onsite(jobhunt_config):
+    # Rule 2 (allowed city) bypasses the amount check entirely: any on-site
+    # amount, including full-time, is fine in an allowed city.
+    ssot = _onsite_ssot(["Testville"], 1, 4)
+    scorer = Scorer(jobhunt_config, {}, ssot=ssot)
+    breakdown = scorer.score(_posting(
+        ["Testville, Nowhereland"],
+        description="Full-time on-site role, 5 days per week in the office."))
+    assert breakdown.discard is False
+    assert breakdown.discard_reason == ""
+
+
+def test_commute_gate_europe_discards_over_weekly_cap(jobhunt_config):
+    ssot = _onsite_ssot(["Testville"], 1, 4)
+    scorer = Scorer(jobhunt_config, {}, ssot=ssot)
+    breakdown = scorer.score(_posting(
+        ["Milan, Italy"], description="Hybrid, 3 days per week in office."))
+    assert breakdown.discard is True
+    assert "3" in breakdown.discard_reason
+    assert "week" in breakdown.discard_reason
+
+
+def test_commute_gate_europe_passes_within_weekly_cap(jobhunt_config):
+    ssot = _onsite_ssot(["Testville"], 1, 4)
+    scorer = Scorer(jobhunt_config, {}, ssot=ssot)
+    breakdown = scorer.score(_posting(
+        ["Milan, Italy"], description="Hybrid, 1 day per week in office."))
+    assert breakdown.discard is False
+
+
+def test_commute_gate_non_europe_passes_within_monthly_cap(jobhunt_config):
+    ssot = _onsite_ssot(["Testville"], 1, 4)
+    scorer = Scorer(jobhunt_config, {}, ssot=ssot)
+    breakdown = scorer.score(_posting(
+        ["Austin, TX"], description="2 days per month on-site."))
+    assert breakdown.discard is False
+
+
+def test_commute_gate_non_europe_discards_weekly_converted_over_monthly_cap(
+        jobhunt_config):
+    # 3 days/week * 4.33 wk/mo = 12.99 days/mo, over the 4 days/mo cap.
+    ssot = _onsite_ssot(["Testville"], 1, 4)
+    scorer = Scorer(jobhunt_config, {}, ssot=ssot)
+    breakdown = scorer.score(_posting(
+        ["Austin, TX"], description="3 days per week on-site."))
+    assert breakdown.discard is True
+    assert "non-Europe" in breakdown.discard_reason
+
+
+def test_commute_gate_fully_remote_non_europe_passes(jobhunt_config):
+    ssot = _onsite_ssot(["Testville"], 1, 4)
+    scorer = Scorer(jobhunt_config, {}, ssot=ssot)
+    breakdown = scorer.score(_posting(
+        ["Austin, TX"], remote_flag=True, description="Fully remote position."))
+    assert breakdown.discard is False
+    assert breakdown.discard_reason == ""
+
+
+def test_commute_gate_ambiguous_amount_warns_not_discards(jobhunt_config):
+    # Required on-site presence (not remote, not an allowed city) but no
+    # detectable day count: show-and-warn (D5), never a guessed discard.
+    ssot = _onsite_ssot(["Testville"], 1, 4)
+    scorer = Scorer(jobhunt_config, {}, ssot=ssot)
+    breakdown = scorer.score(_posting(
+        ["Milan, Italy"], description="This is an on-site role in our office."))
+    assert breakdown.discard is False
+    assert breakdown.discard_reason == ""
+    assert any("on-site presence unclear" in w for w in breakdown.ats_warnings)
+
+
+def test_commute_gate_italian_phrasing_detection(jobhunt_config):
+    # "N giorni in ufficio" (Italian, implicit weekly cadence) must be parsed
+    # the same as its English equivalent.
+    ssot = _onsite_ssot(["Testville"], 1, 4)
+    scorer = Scorer(jobhunt_config, {}, ssot=ssot)
+    breakdown = scorer.score(_posting(
+        ["Milan, Italy"],
+        description="Richiediamo 3 giorni in ufficio a settimana."))
+    assert breakdown.discard is True
+    assert "3" in breakdown.discard_reason

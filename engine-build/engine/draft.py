@@ -29,10 +29,12 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
 from engine.ssot import MISSING, SSOT
+from engine.validate import validate
+from engine.validate.judge import Judge
 
 _DESCRIPTION_CAP = 4000
 
@@ -46,13 +48,15 @@ GROUNDING_CONTRACT = (
     "NOT use em dashes or en dashes anywhere in the letter."
 )
 
-# Owner cover-letter voice rules (W4 4c criterion 5), carried in the user prompt
-# so the model writes in the owner's shared-example style rather than boilerplate.
+# Owner cover-letter voice rules (W4 4c criterion 5), carried in the system
+# prompt (stable across items) so the model writes in the owner's
+# shared-example style rather than boilerplate.
 _VOICE_RULES = (
     "VOICE RULES (follow every one):\n"
-    "- Paragraph 1 is a HOOK anchored to something SPECIFIC in the posting text "
-    "below (a line, a claim, or the role's essence), stated as a conviction. "
-    "NEVER open with 'I am writing to apply' or any boilerplate.\n"
+    "- Paragraph 1 is a HOOK anchored to something SPECIFIC in the posting "
+    "details you are given (a line, a claim, or the role's essence), stated "
+    "as a conviction. NEVER open with 'I am writing to apply' or any "
+    "boilerplate.\n"
     "- Middle paragraphs are a thematic narrative (for example a research side "
     "and an engineering side) weaving concrete evidence from the SSOT as story, "
     "not bullet lists; use specific numbers wherever the SSOT states them.\n"
@@ -103,6 +107,17 @@ _EMPTY_USAGE = {"input_tokens": 0, "output_tokens": 0,
                 "cache_read": 0, "cache_creation": 0}
 
 
+# Free-text field key + schema the anti-injection L1 validator needs to scan the
+# generated cover-letter BODY against the SSOT allowlist. The body is a single
+# free_text field: it carries prose only (identity values flow code-only from the
+# SSOT, never from model output), so the free_text class is the whole contract.
+_COVER_LETTER_FIELD = "cover_letter"
+
+
+def _cover_letter_schema() -> dict:
+    return {_COVER_LETTER_FIELD: {"class": "free_text"}}
+
+
 @dataclass
 class DraftResult:
     material: str            # cover-letter BODY only (plain text, no LaTeX)
@@ -111,6 +126,14 @@ class DraftResult:
     model: str
     ok: bool
     error: str | None = None
+    # Anti-injection L1 validation of `material` against the SSOT (spec 6b): a
+    # generated body is NOT clean until it passes. `validation_ok` is False and
+    # `validation_violations` is populated whenever the body carries an
+    # attacker link, exfil, homoglyph, or any other L1 finding. Draft GENERATION
+    # success (`ok`) is orthogonal: a syntactically fine draft can still be a
+    # poisoned draft, and callers must gate on `validation_ok`, never on `ok`.
+    validation_ok: bool = True
+    validation_violations: list = field(default_factory=list)
 
 
 class Drafter(Protocol):
@@ -121,23 +144,40 @@ class Drafter(Protocol):
 class ClaudeCliDrafter:
     def __init__(self, model: str = "sonnet", effort: str = "medium",
                  claude_bin: str = "claude",
-                 runner: Callable = subprocess.run, timeout_s: float = 180):
+                 runner: Callable = subprocess.run, timeout_s: float = 180,
+                 judge: Judge | None = None):
         self.model = model
         self.effort = effort
         self.claude_bin = claude_bin
         self.runner = runner
         self.timeout_s = timeout_s
+        # Optional L2 quarantined judge. Left None by default so the drafter's
+        # validation runs pure-code L1 ONLY (no live `claude -p` judge call in the
+        # default path or in tests). Injecting a judge upgrades draft-time
+        # validation to L1+L2 without touching the runner.
+        self.judge = judge
+        # Built once, on the first draft() call, and reused verbatim for every
+        # later call on this instance (one instance = one run, per _make_drafter
+        # in run.py). Byte-identical across items so the CLI's 5-minute prompt
+        # cache hits on calls 2..N instead of missing every time (W4 prompt-cache
+        # cost cut).
+        self._system_prompt: str | None = None
 
     def draft(self, posting: dict, breakdown: dict, ssot: SSOT) -> DraftResult:
-        prompt = build_user_prompt(posting, breakdown, ssot)
+        if self._system_prompt is None:
+            self._system_prompt = build_system_prompt(ssot)
+        prompt = build_user_prompt(posting, breakdown)
         cmd = [
             self.claude_bin, "-p", prompt,
             "--output-format", "json",
             "--model", self.model,
-            "--system-prompt", GROUNDING_CONTRACT,
+            "--system-prompt", self._system_prompt,
             # Drop the CLI's dynamic system-prompt sections so the cached prefix
             # is byte-stable across calls; verified on toto to cut cache_creation
-            # from ~37k to ~24k and let subsequent drafts hit the read cache.
+            # from ~37k to ~24k and let subsequent drafts hit the read cache. The
+            # system prompt itself now also carries the voice rules + SSOT
+            # excerpt (previously per-item in the user prompt), so the same
+            # prefix stability now covers that larger stable block too.
             "--exclude-dynamic-system-prompt-sections",
             "--no-session-persistence",
             "--tools", "",           # disable ALL built-in tools (verified flag)
@@ -153,7 +193,8 @@ class ClaudeCliDrafter:
         if completed.returncode != 0:
             stderr = (completed.stderr or "").strip()[:200]
             return _fail(f"claude exited {completed.returncode}: {stderr}")
-        return _parse_cli_json(completed.stdout, self.model)
+        result = _parse_cli_json(completed.stdout, self.model)
+        return _validate_material(result, ssot, self.judge)
 
 
 def select_language(posting: dict) -> tuple[str, str]:
@@ -208,15 +249,24 @@ def _all_locations_in_italy(locations: list) -> bool:
     return True
 
 
-def build_user_prompt(posting: dict, breakdown: dict, ssot: SSOT) -> str:
-    """Assemble the grounded user prompt: language directive + voice rules +
-    posting facts + score breakdown + SSOT excerpt only."""
+def build_system_prompt(ssot: SSOT) -> str:
+    """Assemble the stable, per-run system prompt: grounding contract + voice
+    rules + SSOT excerpt. None of these depend on the per-item posting, so the
+    result is byte-identical across every item in a run (W4 prompt-cache cost
+    cut: builds once per `ClaudeCliDrafter` instance, see `draft()`)."""
+    return "\n\n".join([GROUNDING_CONTRACT, _VOICE_RULES, _ssot_excerpt(ssot)])
+
+
+def build_user_prompt(posting: dict, breakdown: dict) -> str:
+    """Assemble the per-item user prompt: language directive (posting-dependent
+    via `select_language`) + posting facts + score breakdown. The stable
+    content (grounding contract, voice rules, SSOT excerpt) lives in the system
+    prompt instead (`build_system_prompt`), so this prompt varies only with the
+    posting/breakdown at hand."""
     lang, rationale = select_language(posting)
     locations = ", ".join(posting.get("locations") or []) or "unspecified"
     lines = [
         _language_directive(lang, rationale),
-        "",
-        _VOICE_RULES,
         "",
         "POSTING",
         f"title: {posting.get('title', '')}",
@@ -229,8 +279,6 @@ def build_user_prompt(posting: dict, breakdown: dict, ssot: SSOT) -> str:
         f"total: {breakdown.get('total', '')}",
         f"matched: {'; '.join(breakdown.get('matched') or []) or 'none'}",
         f"weak: {'; '.join(breakdown.get('weak') or []) or 'none'}",
-        "",
-        _ssot_excerpt(ssot),
     ]
     return "\n".join(lines)
 
@@ -282,6 +330,24 @@ def _parse_cli_json(stdout: str, fallback_model: str) -> DraftResult:
         ok=True,
         error=None,
     )
+
+
+def _validate_material(result: DraftResult, ssot: SSOT,
+                       judge: Judge | None) -> DraftResult:
+    """Run the L1 (optionally +L2) anti-injection validation of the generated
+    cover-letter BODY against the SSOT allowlist BEFORE the draft is handed back
+    as clean. A generation failure has no body to validate, so it passes through
+    untouched (its `ok` is already False). On any violation the draft is marked
+    NOT clean (`validation_ok=False`, `validation_violations` populated) rather
+    than silently returned as a poisoned-but-clean draft."""
+    if not result.ok:
+        return result
+    outcome = validate({_COVER_LETTER_FIELD: result.material}, ssot,
+                       _cover_letter_schema(), judge=judge)
+    if not outcome.ok:
+        result.validation_ok = False
+        result.validation_violations = list(outcome.violations)
+    return result
 
 
 def _normalize_usage(usage: dict) -> dict:

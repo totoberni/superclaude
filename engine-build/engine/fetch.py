@@ -29,24 +29,29 @@ from typing import Callable
 
 import yaml
 
-from engine.discover import (
-    AshbyAdapter,
-    GreenhouseAdapter,
-    LeverAdapter,
-    SourceAdapter,
-)
+from engine.discover import SourceAdapter
+from engine.providers import registry
 from engine.store import Store
 
 UA = "abe-automations-jobhunt/0.1 (personal job-search; polite reader)"
 
-_VENDORS = ("greenhouse", "lever", "ashby")
+# _VENDORS / _ADAPTERS are thin projections of the provider registry (the SSOT for
+# per-vendor wiring). Kept as module-level names for import-compat: other code and
+# tests import them from engine.fetch. Deriving them keeps the fetchable-vendor list
+# in exactly one place while these shims retain their original type and their
+# KeyError-on-unknown behaviour. The workable stub (supported=False, adapter=None) is
+# excluded from both, so both stay exactly ("greenhouse", "lever", "ashby").
+_VENDORS: tuple[str, ...] = tuple(
+    vendor for vendor, spec in registry.PROVIDERS.items()
+    if spec.supported and spec.adapter is not None
+)
 _MAX_RETRIES = 2
 _INITIAL_BACKOFF_S = 1.0
 
 _ADAPTERS: dict[str, Callable[[], SourceAdapter]] = {
-    "greenhouse": GreenhouseAdapter,
-    "lever": LeverAdapter,
-    "ashby": AshbyAdapter,
+    vendor: spec.adapter
+    for vendor, spec in registry.PROVIDERS.items()
+    if spec.adapter is not None
 }
 
 
@@ -93,17 +98,16 @@ def load_sources(path: str | Path) -> list[Source]:
 
 
 def endpoint_for(source: Source) -> str:
-    """Absolute request URL for a source (Lever eu routes to its eu host)."""
-    if source.vendor == "greenhouse":
-        return ("https://boards-api.greenhouse.io/v1/boards/"
-                f"{source.slug}/jobs?content=true")
-    if source.vendor == "lever":
-        host = "api.eu.lever.co" if source.region == "eu" else "api.lever.co"
-        return f"https://{host}/v0/postings/{source.slug}?mode=json"
-    if source.vendor == "ashby":
-        return ("https://api.ashbyhq.com/posting-api/job-board/"
-                f"{source.slug}?includeCompensation=true")
-    raise ValueError(f"unknown vendor: {source.vendor}")
+    """Absolute request URL for a source (Lever eu routes to its eu host).
+
+    Thin shim over the provider registry (the single source of truth for per-vendor
+    poll URLs); kept as a module-level function because callers and tests import
+    `endpoint_for` from engine.fetch.
+    """
+    spec = registry.PROVIDERS.get(source.vendor)
+    if spec is None or not spec.supported or spec.endpoint_fn is None:
+        raise ValueError(f"unknown vendor: {source.vendor}")
+    return spec.endpoint_fn(source.slug, source.region)
 
 
 def adapter_for(vendor: str) -> SourceAdapter:

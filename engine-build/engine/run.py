@@ -43,7 +43,6 @@ from engine.fieldmap import (
     MANUAL_ONLY,
     MISSING_STATUS,
     FieldMap,
-    capture_greenhouse,
 )
 from engine.match import Scorer
 from engine.notify import (
@@ -54,6 +53,7 @@ from engine.notify import (
     publish_digest,
 )
 from engine.profile_map import profile_from_real_ssot
+from engine.providers import registry
 from engine.queue_sm import QueueStateMachine
 from engine.ssot import MISSING, SSOT
 
@@ -88,7 +88,7 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
                  runner: Callable = subprocess.run) -> dict:
     started = time.monotonic()
     profile = profile_from_real_ssot(ssot)
-    scorer = Scorer(config, profile)
+    scorer = Scorer(config, profile, ssot=ssot)
     queue = QueueStateMachine(store, config)
 
     discovery, fetch_results = fetch_all(sources, store, fetcher=fetcher)
@@ -107,8 +107,18 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
                         for p in adapter.parse(raw, slug) if p.listed}
 
     enqueued = 0
+    discarded = 0
     for posting in new_postings:
         breakdown = scorer.score(posting)
+        if breakdown.discard:
+            # W4-COMMUTE-GATE: a true removal, never surfaces. Recorded to the
+            # ledger (never enqueued, no item_id) so the structural no-repeat
+            # guarantee covers it too.
+            store.record_ledger(posting.identity_key(), None, posting.vendor,
+                                posting.company_slug, posting.title,
+                                posting.url, "discarded", breakdown.total)
+            discarded += 1
+            continue
         if breakdown.total >= 0:  # threshold gating is rerank's job, not here
             queue.enqueue(posting, breakdown)
             enqueued += 1
@@ -122,7 +132,7 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
         config, queue, store, discovered_index, ssot, profile, options,
         capture_opener)
 
-    usage_totals, cost_total, drafted_items = _draft_top_items(
+    usage_totals, cost_total, drafted_items, validation_held = _draft_top_items(
         config, queue, ssot, discovered_index, store, options, drafter)
 
     live = _live_transport(options, transport)
@@ -140,8 +150,10 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
             "blocked": status_counts.get("blocked", 0),
             "new": len(new_postings),
             "enqueued": enqueued,
+            "discarded": discarded,
             "rescored": rescored,
             "drafted": len(drafted_items),
+            "validation_held": validation_held,
             "closed": len(closed),
             "demoted": len(rerank.demoted_today),
         },
@@ -299,15 +311,17 @@ def _collect_fieldmap(vendor: str, posting, opener):
     so the daily timer run never imports playwright. Browser capture stays
     operator-triggered (only reached under --capture-fieldmaps), never
     default-on.
+
+    Dispatch is delegated to the provider registry (the single source of truth):
+    each vendor's `capture_fn` normalises the two capture signatures onto
+    (slug, job_id, opener) and the registry keeps the browser-vendor references
+    lazy, so this delegation preserves both the never-import-playwright invariant
+    and the module-attribute monkeypatch seam.
     """
-    if vendor == "greenhouse":
-        return capture_greenhouse(posting.company_slug, posting.job_id, opener)
-    from engine import browse
-    if vendor == "ashby":
-        return browse.capture_ashby(posting.company_slug, posting.job_id)
-    if vendor == "lever":
-        return browse.capture_lever(posting.company_slug, posting.job_id)
-    raise ValueError(f"no field-map capture for vendor {vendor!r}")
+    spec = registry.PROVIDERS.get(vendor)
+    if spec is None or not spec.supported or spec.capture_fn is None:
+        raise ValueError(f"no field-map capture for vendor {vendor!r}")
+    return spec.capture_fn(posting.company_slug, posting.job_id, opener)
 
 
 _MISSING_LABELS_CAP = 6
@@ -338,10 +352,10 @@ def _build_capture_opener():
 
 
 def _draft_top_items(config, queue, ssot, discovered_index, store, options,
-                     drafter) -> tuple[dict, float, list[dict]]:
+                     drafter) -> tuple[dict, float, list[dict], int]:
     usage_totals = {key: 0 for key in _USAGE_KEYS}
     if options.no_draft:
-        return usage_totals, 0.0, []
+        return usage_totals, 0.0, [], 0
     drafter = drafter or _make_drafter(config)
 
     candidates = [item for item in queue.items()
@@ -351,6 +365,7 @@ def _draft_top_items(config, queue, ssot, discovered_index, store, options,
 
     cost_total = 0.0
     drafted_items: list[dict] = []
+    validation_held = 0
     for item in candidates[:config.draft_cap]:
         posting = dict(item.payload["posting"])
         discovered = discovered_index.get(item.identity_key)
@@ -360,10 +375,24 @@ def _draft_top_items(config, queue, ssot, discovered_index, store, options,
         result = drafter.draft(posting, breakdown, ssot)
         if not result.ok:
             continue  # fail-soft: item stays pending_review, material unavailable
-        _attach_material(store, item, result.material)
+        # Generation spent real tokens regardless of what the anti-injection
+        # validator decides below, so cost/usage are booked here, before the
+        # validation_ok gate.
         cost_total += result.cost_usd
         for key in _USAGE_KEYS:
             usage_totals[key] += result.usage.get(key, 0)
+        if not result.validation_ok:
+            # Anti-injection L1 (draft.py's `_validate_material`) flagged this
+            # body: a poisoned draft must never be surfaced as ready/clean.
+            # Hold it at awaiting_input (the same 7.6 park/resume mechanism the
+            # missing-required-field questionnaire already uses to keep a
+            # not-yet-safe item off the ready bucket) instead of attaching the
+            # material and adding it to `drafted_items`.
+            _hold_validation_failure(store, queue, item,
+                                     result.validation_violations)
+            validation_held += 1
+            continue
+        _attach_material(store, item, result.material)
         lang, lang_rationale = select_language(posting)
         drafted_items.append({
             "item_id": item.item_id,
@@ -377,7 +406,7 @@ def _draft_top_items(config, queue, ssot, discovered_index, store, options,
             "job_id": discovered.job_id if discovered is not None else None,
             "updated_ts": discovered.updated_ts if discovered is not None else None,
         })
-    return usage_totals, cost_total, drafted_items
+    return usage_totals, cost_total, drafted_items, validation_held
 
 
 def _attach_material(store, item, material: str) -> None:
@@ -386,6 +415,31 @@ def _attach_material(store, item, material: str) -> None:
     store.upsert_queue(item.item_id, item.identity_key, item.state,
                        item.prev_state, item.score, int(item.visible),
                        item.channel, payload)
+
+
+def _hold_validation_failure(store, queue, item, violations: list) -> None:
+    """Park a poisoned draft at awaiting_input instead of leaving it a silent
+    drop (spec 6b enforcement).
+
+    The violations are written onto the payload FIRST so `queue.park()`'s
+    state-preserving write (it re-reads the row and carries its payload
+    through unchanged) picks them up too; the owner can then see WHY the item
+    never reached pending_review/ready, not just that it didn't. `material`
+    is deliberately never attached, so a later run's draft-candidate filter
+    (`not item.payload.get("material")`) still picks the item back up once it
+    resumes.
+    """
+    payload = dict(item.payload)
+    payload["validation_violations"] = [_violation_dict(v) for v in violations]
+    store.upsert_queue(item.item_id, item.identity_key, item.state,
+                       item.prev_state, item.score, int(item.visible),
+                       item.channel, payload)
+    queue.park(item.item_id, reason="anti-injection L1 validation failed")
+
+
+def _violation_dict(violation) -> dict:
+    return {"code": violation.code, "field": violation.field,
+           "detail": violation.detail}
 
 
 def _live_transport(options, transport) -> Transport | None:

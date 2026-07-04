@@ -54,10 +54,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from engine.browse import ashby_application_url, lever_apply_url
 from engine.fieldmap import (
     MANUAL_ONLY,
     MISSING_STATUS,
+    _DECLINE_SECTIONS,
     _PORTAL_WIDGET_KEYS,
     FieldMap,
     Locator,
@@ -65,6 +65,7 @@ from engine.fieldmap import (
     _missing_path_guess,
     capture_greenhouse,
 )
+from engine.providers import registry
 from engine.ssot import MISSING, SSOT
 
 # Canned-answer paths (checked in order) that ratify consent: the first that
@@ -262,9 +263,15 @@ class FillReport:
     asset is missing or was never attached, AND a required field whose
     readback did not confirm the value (a value the page silently rejected),
     so a mandatory answer or CV/photo that never made it onto the page can
-    never read as done. `justified_skips` counts non-hidden fields left
-    unfilled for a justified reason: an EEO/demographic field (always, any
-    requiredness) or a file-upload/asset-missing skip on an OPTIONAL field
+    never read as done. A REQUIRED field whose SSOT answer resolves to
+    empty/whitespace is likewise a gap (nothing landed), never a confirmed
+    fill. `justified_skips` counts non-hidden fields left unfilled for a
+    justified reason: an EEO/demographic skip ONLY when the field is a GENUINE
+    demographic field (a demographic / EEOC / voluntary section, or
+    decline_allowed=True -- regardless of requiredness, decline is always
+    allowed there) -- a REQUIRED field is never EEO-justified merely because
+    its label carries an EEO keyword when it is not really a demographic-
+    section field -- or a file-upload/asset-missing skip on an OPTIONAL field
     only. `complete` is True iff there are no required gaps (Z == 0); an
     optional field left unfilled for any other reason does not, by itself,
     force NOT COMPLETE -- the X/Y counts already surface that partial coverage,
@@ -680,13 +687,26 @@ def _render_text(raw, path: str):
     if isinstance(raw, bool):
         return ("Yes" if raw else "No"), None
     if isinstance(raw, str):
+        if not raw.strip():
+            return None, _empty_value_skip(path)
         return raw, None
     if isinstance(raw, (int, float)):
         return str(raw), None
     if isinstance(raw, list) and all(
             isinstance(item, (str, int, float)) for item in raw):
-        return ", ".join(str(item) for item in raw), None
+        rendered = ", ".join(str(item) for item in raw)
+        if not rendered.strip():
+            return None, _empty_value_skip(path)
+        return rendered, None
     return None, f"value for {path} is not renderable as text"
+
+
+def _empty_value_skip(path: str) -> str:
+    """The skip reason for a required/answerable field whose SSOT path resolves
+    to an empty/whitespace value: there is nothing to fill, so it is SKIPPED
+    (never a confirmed fill). A required field with this reason lands in
+    `required_unfilled` -> NOT COMPLETE, never a silent false-COMPLETE."""
+    return f"empty SSOT value at {path} (nothing to fill)"
 
 
 def _short(value) -> str:
@@ -914,11 +934,16 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
     """Compute (fillable_total, required_unfilled, justified_skips) (criterion 1).
 
     A required field left unfilled for an UNjustified reason enters
-    `required_unfilled` (Z); any non-hidden field left unfilled for a justified
-    reason (file-upload-handled / EEO / demographic) is counted in
-    `justified_skips`. Hidden portal-telemetry fields are excluded entirely.
-    Without a field map the report degrades to the fields fill_form saw and
-    cannot assert requiredness, so `required_unfilled` is empty.
+    `required_unfilled` (Z); a non-hidden field left unfilled is counted in
+    `justified_skips` only for a justified reason -- a GENUINE demographic-
+    section skip (`_is_justified_eeo_skip`: section in COMPLIANCE_EEOC /
+    DEMOGRAPHIC / VOLUNTARY, or decline_allowed=True -- regardless of
+    requiredness) or an OPTIONAL file-upload/asset-missing skip. A REQUIRED
+    field is never justified on EEO grounds merely because its label/reason
+    contains an EEO keyword when it is NOT a genuine demographic-section
+    field. Hidden portal-telemetry fields are excluded entirely. Without a
+    field map the report degrades to the fields fill_form saw and cannot
+    assert requiredness, so `required_unfilled` is empty.
     """
     skip_reason = dict(all_skips)
     if fieldmap is None:
@@ -927,7 +952,7 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
         # as before the fix -- there is no `f.required` to gate it on.
         fillable_total = filled + len(skip_reason)
         justified = sum(1 for reason in skip_reason.values()
-                        if _is_justified_skip(reason) or _is_upload_skip(reason))
+                        if _is_eeo_reason(reason) or _is_upload_skip(reason))
         return fillable_total, [], justified
 
     non_hidden = [f for f in fieldmap.fields if not _is_hidden_field(f)]
@@ -937,7 +962,7 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
         if f.key in filled_keys:
             continue
         reason = skip_reason.get(f.key, "not filled")
-        if _is_justified_skip(reason):
+        if _is_justified_eeo_skip(f, reason):
             justified += 1
         elif _is_upload_skip(reason) and not f.required:
             justified += 1
@@ -953,12 +978,44 @@ def _is_hidden_field(fld) -> bool:
     return (fld.key or "").lower() in _PORTAL_WIDGET_KEYS
 
 
-def _is_justified_skip(reason: str) -> bool:
-    """A skip that is ALWAYS justified, regardless of requiredness: an
-    EEO/demographic field. Policy forbids ever auto-answering these, so a
-    required-but-untouched demographic field is not a real gap."""
+def _is_eeo_reason(reason: str) -> bool:
+    """True iff the skip reason names an EEO/demographic classification.
+
+    A reason-STRING check ONLY: on its own it does NOT justify a skip. A real
+    required question can carry this reason via a mere label-keyword match (the
+    `fieldmap._manual_only_reason` keyword list flags e.g. "disability" on a
+    STANDARD-section field), so justification additionally requires the field to
+    be a genuine voluntary demographic field -- see `_is_justified_eeo_skip`.
+    Used directly only in the no-field-map branch of `_completeness`, where
+    requiredness cannot be asserted anyway."""
     low = (reason or "").lower()
     return "demographic" in low or "eeo" in low
+
+
+def _is_justified_eeo_skip(f, reason: str) -> bool:
+    """An EEO/demographic skip is justified for a GENUINE demographic field:
+    a COMPLIANCE_EEOC / DEMOGRAPHIC / VOLUNTARY section (`_DECLINE_SECTIONS`),
+    or `decline_allowed=True`. This holds REGARDLESS of requiredness: policy
+    never auto-answers a real demographic question and decline is always
+    allowed there, so even a genuinely demographic field that (unusually)
+    carries `required=True` stays justified, never a false gap (Greenhouse's
+    own capture already forces `required=False` on these -- `_fields_from_
+    question`/`_fields_from_demographic` -- but the gate itself must not
+    depend on that normalization holding for every vendor/path).
+
+    A REQUIRED field is NEVER justified on EEO grounds merely because its
+    reason string (or its LABEL) happens to contain an EEO keyword: a
+    genuinely non-demographic question (STANDARD/CUSTOM/LOCATION section,
+    e.g. "disability accommodations needed for the interview?") stays a
+    required gap even when `_manual_only_reason`'s keyword-based safety net
+    (never auto-fill a suspected-EEO field) fires on its label -- that keyword
+    match only prevents auto-fill; it never by itself proves the field is a
+    real demographic question. The SECTION (a structural signal set from the
+    vendor schema's own section/source tag, never from a label keyword) is the
+    gate, not the reason string and not requiredness."""
+    return (_is_eeo_reason(reason)
+            and (f.decline_allowed
+                 or getattr(f, "section", "") in _DECLINE_SECTIONS))
 
 
 def _is_upload_skip(reason: str) -> bool:
@@ -1043,7 +1100,17 @@ def _locate(page, fv: FieldValue):
 
 
 def _readback(locator, value):
-    """Read the control's current value back and decide if it matches intent."""
+    """Read the control's current value back and decide if it matches intent.
+
+    An empty/whitespace INTENDED text value is NEVER a confirmed fill: `fill`/
+    `type_human` place nothing in the control (type_human early-returns on empty),
+    so a blank control reading back "equal" to a blank intent would be a false
+    match. Such a field is reported unconfirmed (ok=False) so a required field
+    whose SSOT answer is empty becomes a required gap, never a silent
+    false-COMPLETE. (The resolve layer already skips blank values before they
+    reach here; this is the defence-in-depth guard at the readback boundary that
+    covers every provider sharing `_readback`.)
+    """
     if isinstance(value, bool):
         actual = locator.is_checked()
         return actual, bool(actual) == value
@@ -1053,6 +1120,8 @@ def _readback(locator, value):
         return actual, all(str(item).strip().lower() in haystack
                            for item in value)
     actual = locator.input_value()
+    if not _norm(value):
+        return actual, False
     return actual, _norm(actual) == _norm(value)
 
 
@@ -1109,13 +1178,11 @@ def greenhouse_apply_url(slug: str, job_id: str) -> str:
 
 
 def _apply_url(vendor: str, slug: str, job_id: str) -> str:
-    if vendor == "greenhouse":
-        return greenhouse_apply_url(slug, job_id)
-    if vendor == "lever":
-        return lever_apply_url(slug, job_id)
-    if vendor == "ashby":
-        return ashby_application_url(slug, job_id)
-    raise ValueError(f"unknown vendor {vendor!r} (expected greenhouse/lever/ashby)")
+    spec = registry.PROVIDERS.get(vendor)
+    if spec is None or not spec.supported or spec.apply_url_fn is None:
+        raise ValueError(
+            f"unknown vendor {vendor!r} (expected greenhouse/lever/ashby)")
+    return spec.apply_url_fn(slug, job_id)
 
 
 def _current_url(page) -> str:

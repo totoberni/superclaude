@@ -15,9 +15,12 @@ from engine.fieldmap import (
     SCHEMA_VERSION,
     Field,
     FieldMap,
+    FieldType,
     Locator,
+    Section,
     capture_greenhouse,
     coverage,
+    normalize_type,
     parse_greenhouse,
 )
 from engine.profile_map import profile_from_real_ssot
@@ -110,7 +113,8 @@ def test_fieldmap_json_roundtrips(greenhouse_questions_raw):
         "vendor", "posting_id", "schema_version", "captured_at", "fields"]
     assert list(fm.to_dict()["fields"][0].keys()) == [
         "key", "label", "type", "required", "options", "source",
-        "locator", "step_index", "conditional_on"]
+        "locator", "step_index", "conditional_on", "decline_allowed",
+        "max_length", "accept_types", "norm_type", "section"]
 
 
 def test_parse_is_pure_and_matches_capture(greenhouse_questions_raw):
@@ -279,3 +283,166 @@ def test_coverage_consent_pattern_is_answerable(real_ssot_path):
     for fld in report.fields:
         assert fld.status == ANSWERABLE, fld.label
         assert fld.path == "canned_answers.optional_consents"
+
+
+# -- W5 additive schema extension (schema_version 2) -------------------------
+
+
+def test_field_new_w5_columns_default_additively():
+    # Every existing construction site (browse.py, fixtures, older tests)
+    # keeps working: only the original 7 positional-ish args are required.
+    fld = Field(key="k", label="L", type="input_text", required=True,
+               options=[], source="questions",
+               locator=Locator(role="textbox", name="L"))
+    assert fld.step_index is None
+    assert fld.conditional_on is None
+    assert fld.decline_allowed is False
+    assert fld.max_length is None
+    assert fld.accept_types is None
+    assert fld.norm_type == ""
+    assert fld.section == "STANDARD"
+
+
+def test_normalize_type_maps_greenhouse_and_lever_vocabulary():
+    # This is also the vocabulary Lever's DOM controls and Ashby's own
+    # browse.py _ASHBY_TYPE_MAP shim collapse into (engine/browse.py).
+    assert normalize_type("input_text") == FieldType.TEXT
+    assert normalize_type("textarea") == FieldType.LONGTEXT
+    assert normalize_type("multi_value_single_select") == FieldType.SINGLE_SELECT
+    assert normalize_type("multi_value_multi_select") == FieldType.MULTI_SELECT
+    assert normalize_type("boolean") == FieldType.BOOLEAN
+    assert normalize_type("input_file") == FieldType.FILE
+    # input_hidden is a skip signal, never a FieldType member.
+    assert normalize_type("input_hidden") == ""
+
+
+def test_normalize_type_maps_raw_ashby_vocabulary():
+    assert normalize_type("String") == FieldType.TEXT
+    assert normalize_type("Email") == FieldType.EMAIL
+    assert normalize_type("LongText") == FieldType.LONGTEXT
+    assert normalize_type("ValueSelect") == FieldType.SINGLE_SELECT
+    assert normalize_type("MultiValueSelect") == FieldType.MULTI_SELECT
+    assert normalize_type("Phone") == FieldType.PHONE
+    assert normalize_type("Date") == FieldType.DATE
+    assert normalize_type("Boolean") == FieldType.BOOLEAN
+    assert normalize_type("File") == FieldType.FILE
+    assert normalize_type("Number") == FieldType.NUMBER
+
+
+def test_normalize_type_falls_back_to_text_for_unknown_native():
+    assert normalize_type("some_future_vendor_type") == FieldType.TEXT
+    assert normalize_type("") == FieldType.TEXT
+
+
+def test_capture_populates_section_and_decline_allowed_additively():
+    # A synthetic questions=true payload exercising all four Greenhouse
+    # buckets (questions, location_questions, compliance,
+    # demographic_questions) plus an input_hidden tracking sub-field.
+    raw = {
+        "id": "9001",
+        "questions": [
+            {"label": "First Name", "required": True,
+             "fields": [{"name": "first_name", "type": "input_text",
+                        "values": []}]},
+            {"label": "Tracking Pixel", "required": True,
+             "fields": [{"name": "utm_source", "type": "input_hidden",
+                        "values": []}]},
+        ],
+        "location_questions": [
+            {"label": "Country", "required": False,
+             "fields": [{"name": "country", "type": "input_text",
+                        "values": []}]},
+        ],
+        "compliance": [
+            {"label": "I certify the above is accurate", "required": True,
+             "fields": [{"name": "certify", "type": "boolean",
+                        "values": []}]},
+        ],
+        "demographic_questions": {
+            "questions": [
+                {"id": 1, "label": "Gender", "required": True,
+                 "type": "multi_value_single_select",
+                 "answer_options": [{"id": 1, "label": "Man"}]},
+            ],
+        },
+    }
+    fm = parse_greenhouse(raw, "acme", "9001", now=lambda: _PINNED)
+    by_key = {f.key: f for f in fm.fields}
+
+    # input_hidden sub-fields never become a Field at all (not a user field).
+    assert "utm_source" not in by_key
+
+    standard = by_key["first_name"]
+    assert standard.section == Section.STANDARD
+    assert standard.decline_allowed is False
+    assert standard.required is True
+    assert standard.norm_type == FieldType.TEXT
+
+    location = by_key["country"]
+    assert location.section == Section.LOCATION
+    assert location.decline_allowed is False
+
+    compliance = by_key["certify"]
+    assert compliance.section == Section.COMPLIANCE_EEOC
+    assert compliance.decline_allowed is True
+    assert compliance.required is False  # forced despite raw required=True
+    assert compliance.norm_type == FieldType.BOOLEAN
+
+    demographic = by_key["demographic_1"]
+    assert demographic.section == Section.DEMOGRAPHIC
+    assert demographic.decline_allowed is True
+    assert demographic.required is False  # forced despite raw required=True
+    assert demographic.norm_type == FieldType.SINGLE_SELECT
+
+
+def test_store_roundtrip_tolerates_v1_shaped_fieldmap_body(store):
+    # A row cached before this extension: no decline_allowed/max_length/
+    # accept_types/norm_type/section keys at all. Must deserialize cleanly
+    # via Field.from_dict's defaults, no store-side migration required.
+    v1_body = {
+        "vendor": "greenhouse", "posting_id": "1", "schema_version": "1",
+        "captured_at": _PINNED,
+        "fields": [{
+            "key": "first_name", "label": "First Name", "type": "input_text",
+            "required": True, "options": [], "source": "questions",
+            "locator": {"role": "textbox", "name": "First Name"},
+            "step_index": 0, "conditional_on": None,
+        }],
+    }
+    store.put_fieldmap("greenhouse", "1", "u1", v1_body, _PINNED)
+    cached = store.get_fieldmap("greenhouse", "1", "u1")
+    fm = FieldMap.from_dict(cached["body"])
+
+    assert fm.schema_version == "1"
+    fld = fm.fields[0]
+    assert fld.key == "first_name"
+    assert fld.step_index == 0
+    assert fld.conditional_on is None
+    # W5 fields default cleanly for a v1-shaped cached row.
+    assert fld.decline_allowed is False
+    assert fld.max_length is None
+    assert fld.accept_types is None
+    assert fld.norm_type == ""
+    assert fld.section == "STANDARD"
+
+
+def test_store_roundtrip_preserves_v2_shaped_fieldmap_body(store):
+    fm = FieldMap(vendor="greenhouse", posting_id="2", captured_at=_PINNED,
+                  fields=[Field(
+                      key="certify", label="I certify", type="boolean",
+                      required=False, options=[], source="compliance",
+                      locator=Locator(role="checkbox", name="I certify"),
+                      step_index=0, conditional_on=None,
+                      decline_allowed=True, max_length=None,
+                      accept_types=None, norm_type=FieldType.BOOLEAN,
+                      section=Section.COMPLIANCE_EEOC)])
+    store.put_fieldmap("greenhouse", "2", "u1", fm.to_dict(), fm.captured_at)
+    cached = store.get_fieldmap("greenhouse", "2", "u1")
+    restored = FieldMap.from_dict(cached["body"])
+
+    assert restored.to_dict() == fm.to_dict()
+    assert restored.schema_version == SCHEMA_VERSION
+    fld = restored.fields[0]
+    assert fld.decline_allowed is True
+    assert fld.norm_type == FieldType.BOOLEAN
+    assert fld.section == Section.COMPLIANCE_EEOC

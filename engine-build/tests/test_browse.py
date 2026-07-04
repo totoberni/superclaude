@@ -28,7 +28,8 @@ _PINNED = "2026-07-03T00:00:00+00:00"
 
 _TOP_KEYS = ["vendor", "posting_id", "schema_version", "captured_at", "fields"]
 _FIELD_KEYS = ["key", "label", "type", "required", "options", "source",
-               "locator", "step_index", "conditional_on"]
+               "locator", "step_index", "conditional_on", "decline_allowed",
+               "max_length", "accept_types", "norm_type", "section"]
 
 
 class _FakeResponse:
@@ -337,26 +338,27 @@ def test_lever_raises_when_form_absent():
 
 # --- import guard -------------------------------------------------------------
 
-def test_browse_module_imports_without_playwright():
-    # This module imports engine.browse at the top with no playwright installed,
-    # so a clean import already proves the guard; assert the entrypoints exist.
+def test_browse_module_imports_without_browser_driver():
+    # This module imports engine.browse at the top without the browser driver
+    # loaded (patchright is imported lazily), so a clean import already proves the
+    # guard; assert the entrypoints exist.
     import engine.browse as browse
     assert callable(browse.capture_ashby)
     assert callable(browse.capture_lever)
 
 
-def test_invoking_default_factory_without_playwright_raises_clear_error():
+def test_invoking_default_factory_without_patchright_raises_clear_error():
     try:
-        import playwright  # noqa: F401
+        import patchright  # noqa: F401
     except ImportError:
-        playwright_present = False
+        patchright_present = False
     else:
-        playwright_present = True
+        patchright_present = True
 
-    if playwright_present:
-        pytest.skip("playwright is installed here; the not-installed error path "
+    if patchright_present:
+        pytest.skip("patchright is installed here; the not-installed error path "
                     "cannot be exercised in this venv")
-    # No browser_factory -> the default factory imports playwright lazily and
+    # No browser_factory -> the default factory imports patchright lazily and
     # must raise a clear, actionable install error, not a bare ImportError.
-    with pytest.raises(RuntimeError, match=r"pip install playwright==1\.56\.\*"):
+    with pytest.raises(RuntimeError, match=r"pip install patchright==1\.61\.\*"):
         capture_lever("globex", "req-77")

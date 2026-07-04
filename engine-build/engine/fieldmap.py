@@ -7,11 +7,15 @@ field map and the SSOT playtest loop can judge coverage field by field.
 Greenhouse is the browserless vendor: the sanctioned schema source is
 `boards-api.greenhouse.io/v1/boards/{slug}/jobs/{id}?questions=true`, one polite
 GET per posting (Lever/Ashby need a browser and land in browse.py, a later wave).
-The captured shape is the R-WT-8 C canonical field map, verbatim:
+The captured shape is the R-WT-8 C canonical field map (schema_version 2 adds
+the trailing W5 fields additively; every consumer built against schema_version
+1 keeps working via the new fields' defaults):
 
     {vendor, posting_id, schema_version, captured_at,
      fields: [{key, label, type, required, options, source,
-               locator: {role, name}, step_index, conditional_on}]}
+               locator: {role, name}, step_index, conditional_on,
+               decline_allowed, max_length, accept_types, norm_type,
+               section}]}
 
 `coverage(fieldmap, ssot, profile)` classifies every REQUIRED field as
 answerable / missing:<dotted-path-guess> / manual-only. It is deterministic
@@ -34,12 +38,65 @@ from typing import Callable
 from engine.fetch import UA
 from engine.ssot import MISSING, SSOT
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 # The three classification verdicts a required field can receive.
 ANSWERABLE = "answerable"
 MISSING_STATUS = "missing"
 MANUAL_ONLY = "manual-only"
+
+
+class FieldType:
+    """The unified FieldSchema type vocabulary (W5 angle-5 spec, section 3).
+
+    `Field.norm_type` (schema_version 2+) carries one of these, independent of
+    the vendor-native `type` string kept in `Field.type` for backward
+    compatibility with fill.py/coverage's existing string matching.
+    """
+
+    TEXT = "TEXT"
+    EMAIL = "EMAIL"
+    PHONE = "PHONE"
+    URL = "URL"
+    NUMBER = "NUMBER"
+    DATE = "DATE"
+    LONGTEXT = "LONGTEXT"
+    SINGLE_SELECT = "SINGLE_SELECT"
+    MULTI_SELECT = "MULTI_SELECT"
+    BOOLEAN = "BOOLEAN"
+    FILE = "FILE"
+
+
+class Section:
+    """The unified FieldSchema section vocabulary (W5 angle-5 spec, section 3).
+
+    `Field.section` (schema_version 2+) classifies where a field came from.
+    COMPLIANCE_EEOC/DEMOGRAPHIC/VOLUNTARY fields are never auto-answered
+    (R-WT-8 8) and are marked `decline_allowed=True, required=False` at
+    capture time.
+    """
+
+    STANDARD = "STANDARD"
+    CUSTOM = "CUSTOM"
+    LOCATION = "LOCATION"
+    COMPLIANCE_EEOC = "COMPLIANCE_EEOC"
+    DEMOGRAPHIC = "DEMOGRAPHIC"
+    VOLUNTARY = "VOLUNTARY"
+
+
+# Sections that are always declinable and never block a fill/coverage run.
+_DECLINE_SECTIONS = frozenset({
+    Section.COMPLIANCE_EEOC, Section.DEMOGRAPHIC, Section.VOLUNTARY,
+})
+
+# parse_greenhouse's `source` tag (the bucket a question arrived in) -> the
+# canonical Section. Unrecognised sources fall back to STANDARD.
+_SECTION_FOR_SOURCE = {
+    "questions": Section.STANDARD,
+    "location_questions": Section.LOCATION,
+    "compliance": Section.COMPLIANCE_EEOC,
+    "demographic": Section.DEMOGRAPHIC,
+}
 
 # Greenhouse field `type` string -> ARIA role for the a11y locator hint. The
 # HTTP questions endpoint carries no DOM, so the locator is a best-effort role
@@ -54,6 +111,55 @@ _ROLE_FOR_TYPE = {
     "boolean": "checkbox",
     "yes_no": "combobox",
 }
+
+# Vendor-native `type` string -> canonical FieldType. Covers the Greenhouse
+# HTTP-schema vocabulary (also what Lever's DOM controls and Ashby's own
+# _ASHBY_TYPE_MAP shim collapse into today, browse.py) PLUS the raw Ashby
+# ApiJobPosting type strings, so a future provider can call `normalize_type`
+# directly on either vocabulary without drift.
+_TYPE_MAP = {
+    # Greenhouse HTTP schema / Lever DOM / post-collapse Ashby.
+    "input_text": FieldType.TEXT,
+    "textarea": FieldType.LONGTEXT,
+    "multi_value_single_select": FieldType.SINGLE_SELECT,
+    "multi_value_multi_select": FieldType.MULTI_SELECT,
+    "boolean": FieldType.BOOLEAN,
+    "input_file": FieldType.FILE,
+    # Raw Ashby ApiJobPosting field `type` (pre-collapse).
+    "String": FieldType.TEXT,
+    "Email": FieldType.EMAIL,
+    "LongText": FieldType.LONGTEXT,
+    "ValueSelect": FieldType.SINGLE_SELECT,
+    "MultiValueSelect": FieldType.MULTI_SELECT,
+    "Phone": FieldType.PHONE,
+    "Date": FieldType.DATE,
+    "Boolean": FieldType.BOOLEAN,
+    "File": FieldType.FILE,
+    "Number": FieldType.NUMBER,
+}
+
+# Greenhouse tracking/hidden fields (`input_hidden`) carry no user-facing
+# control at all: never a fillable Field, so `normalize_type` returns "" for
+# them and capture skips creating a Field for the sub-field entirely.
+_HIDDEN_TYPES = frozenset({"input_hidden"})
+
+
+def normalize_type(vendor_native: str) -> str:
+    """Map a vendor-native `type` string onto the canonical `FieldType`.
+
+    Reused across every capture path (Greenhouse HTTP schema, the raw Ashby
+    ApiJobPosting type before browse.py's own collapse, Lever's DOM-derived
+    types which already share the Greenhouse vocabulary) so downstream
+    consumers reason about ONE type system. `input_hidden` has no user-facing
+    control and returns "" (skip signal, not a `FieldType` member); an
+    unrecognised native falls back to `FieldType.TEXT` (mirrors
+    `_role_for_type`'s fallback-to-textbox convention).
+    """
+    key = vendor_native or ""
+    if key in _HIDDEN_TYPES:
+        return ""
+    return _TYPE_MAP.get(key, FieldType.TEXT)
+
 
 # Label keywords that mark a field as EEO/demographic no matter which section it
 # arrived in (defence in depth on top of the source tag).
@@ -136,8 +242,17 @@ class Field:
     options: list[str]
     source: str
     locator: Locator
-    step_index: int
-    conditional_on: object | None
+    step_index: int | None = None
+    conditional_on: dict | None = None
+    # -- W5 additive extension (schema_version 2): every new field defaults so
+    # every existing construction site (browse.py, tests, fixtures) keeps
+    # working unchanged, and every v1-shaped cached FieldMap deserializes via
+    # these same defaults (see `from_dict`).
+    decline_allowed: bool = False
+    max_length: int | None = None
+    accept_types: list[str] | None = None
+    norm_type: str = ""
+    section: str = "STANDARD"
 
     def to_dict(self) -> dict:
         return {
@@ -150,11 +265,27 @@ class Field:
             "locator": {"role": self.locator.role, "name": self.locator.name},
             "step_index": self.step_index,
             "conditional_on": self.conditional_on,
+            "decline_allowed": self.decline_allowed,
+            "max_length": self.max_length,
+            "accept_types": (list(self.accept_types)
+                            if self.accept_types is not None else None),
+            "norm_type": self.norm_type,
+            "section": self.section,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "Field":
+        """Reconstruct a `Field` from a dict of either shape.
+
+        Tolerant by construction (`.get(key, <dataclass default>)` for every
+        W5 field): a schema_version-1 cached row that never carried
+        decline_allowed/max_length/accept_types/norm_type/section
+        deserializes cleanly via these defaults, no store-side migration or
+        version branch needed.
+        """
         locator = data.get("locator") or {}
+        accept_types = data.get("accept_types")
+        raw_step = data.get("step_index")
         return cls(
             key=data["key"],
             label=data["label"],
@@ -164,8 +295,14 @@ class Field:
             source=data["source"],
             locator=Locator(role=locator.get("role", ""),
                             name=locator.get("name", "")),
-            step_index=int(data.get("step_index", 0)),
+            step_index=int(raw_step) if raw_step is not None else None,
             conditional_on=data.get("conditional_on"),
+            decline_allowed=bool(data.get("decline_allowed", False)),
+            max_length=data.get("max_length"),
+            accept_types=(list(accept_types) if accept_types is not None
+                         else None),
+            norm_type=data.get("norm_type", ""),
+            section=data.get("section", "STANDARD"),
         )
 
 
@@ -390,26 +527,36 @@ def _missing_path_guess(label: str) -> str:
 def _fields_from_question(question: dict, source: str) -> list[Field]:
     label = question.get("label", "")
     required = bool(question.get("required", False))
+    section = _SECTION_FOR_SOURCE.get(source, Section.STANDARD)
+    decline_allowed = section in _DECLINE_SECTIONS
     out: list[Field] = []
     for sub in question.get("fields") or []:
         field_type = sub.get("type", "input_text")
+        if field_type in _HIDDEN_TYPES:
+            continue  # input_hidden: portal tracking, never a user field
         out.append(Field(
             key=sub.get("name", ""),
             label=label,
             type=field_type,
-            required=required,
+            required=False if decline_allowed else required,
             options=_option_labels(sub.get("values")),
             source=source,
             locator=Locator(role=_role_for_type(field_type), name=label),
             step_index=0,
             conditional_on=None,
+            decline_allowed=decline_allowed,
+            norm_type=normalize_type(field_type),
+            section=section,
         ))
     return out
 
 
 def _fields_from_demographic(block) -> list[Field]:
     """The demographic block is a separate object with its own question shape
-    (`answer_options`, type on the question). Captured but always manual-only."""
+    (`answer_options`, type on the question). Captured but always manual-only,
+    and (W5) always `decline_allowed=True, required=False` regardless of what
+    the raw payload's own `required` flag says (R-WT-8 8: never auto-answered,
+    never blocking)."""
     if not isinstance(block, dict):
         return []
     out: list[Field] = []
@@ -419,13 +566,16 @@ def _fields_from_demographic(block) -> list[Field]:
             key=f"demographic_{question.get('id', '')}",
             label=question.get("label", ""),
             type=field_type,
-            required=bool(question.get("required", False)),
+            required=False,
             options=_option_labels(question.get("answer_options")),
             source="demographic",
             locator=Locator(role=_role_for_type(field_type),
                             name=question.get("label", "")),
             step_index=0,
             conditional_on=None,
+            decline_allowed=True,
+            norm_type=normalize_type(field_type),
+            section=Section.DEMOGRAPHIC,
         ))
     return out
 

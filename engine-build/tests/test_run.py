@@ -27,6 +27,7 @@ from engine.run import (
 )
 from engine.ssot import SSOT
 from engine.store import Store
+from engine.validate.checks import Violation
 
 
 class _Clock:
@@ -93,6 +94,37 @@ class FakeDrafter:
             usage={"input_tokens": 10, "output_tokens": 5, "cache_read": 1,
                    "cache_creation": 0},
             cost_usd=0.002, model="claude-sonnet-4-5", ok=True)
+
+
+class PartiallyPoisonedDrafter:
+    """First draft() call returns a poisoned (validation_ok=False) result, as
+    if the L1 anti-injection scan (draft.py's `_validate_material`) caught a
+    smuggled attacker link; every later call returns a clean, explicitly
+    validation_ok=True result. Exercises the held path and the normal ready
+    path side by side in one run."""
+
+    def __init__(self):
+        self.calls = []
+
+    def draft(self, posting, breakdown, ssot):
+        self.calls.append(posting)
+        if len(self.calls) == 1:
+            return DraftResult(
+                material="Dear Hiring Manager,\n\nSee more at "
+                        "evil-exfil.com/steal.\n\nBest,\nTest Candidate",
+                usage={"input_tokens": 10, "output_tokens": 5, "cache_read": 1,
+                       "cache_creation": 0},
+                cost_usd=0.002, model="claude-sonnet-4-5", ok=True,
+                validation_ok=False,
+                validation_violations=[Violation(
+                    code="disallowed_url", field=None,
+                    detail="evil-exfil.com/steal")])
+        return DraftResult(
+            material="COVER LETTER\n\nFIELD DATA\nnotice_period: 1 month",
+            usage={"input_tokens": 10, "output_tokens": 5, "cache_read": 1,
+                   "cache_creation": 0},
+            cost_usd=0.002, model="claude-sonnet-4-5", ok=True,
+            validation_ok=True, validation_violations=[])
 
 
 def _sources():
@@ -250,6 +282,105 @@ def test_no_draft_skips_drafting(tmp_path, jobhunt_config, real_ssot_path,
     assert transport.sent_files == []
 
 
+# -- anti-injection L1 enforcement (spec 6b): poisoned drafts must be held ---
+
+def test_validation_failed_draft_is_held_not_surfaced_ready(
+        tmp_path, jobhunt_config, real_ssot_path, greenhouse_raw, lever_raw,
+        ashby_raw, fake_pdflatex):
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    artifacts_dir = tmp_path / "artifacts"
+    transport = FakeTransport()
+    drafter = PartiallyPoisonedDrafter()
+    # Of the 4 live listed postings across the 3 sources, exactly 2 (Senior
+    # Backend Engineer @ 74, Machine Learning Engineer @ 77) clear the
+    # jobhunt threshold (70) and become visible pending_review draft
+    # candidates -- enough to exercise the held item next to a clean one.
+    fetcher = _fetcher(store, greenhouse_raw, lever_raw, ashby_raw)
+
+    record = run_pipeline(
+        jobhunt_config, _sources(), SSOT.load(real_ssot_path), store,
+        options=RunOptions(), drafter=drafter, transport=transport,
+        fetcher=fetcher, runs_path=runs, artifacts_dir=artifacts_dir,
+        runner=fake_pdflatex())
+
+    # both above-threshold postings were drafted: one poisoned (held), one clean
+    assert len(drafter.calls) == 2
+    assert record["counts"]["validation_held"] == 1
+    assert record["counts"]["drafted"] == 1
+
+    # cost/usage accounting is preserved for the held draft too: generation
+    # ran (and spent real tokens) for both calls, not just the clean one
+    assert record["cost_usd_total"] == round(0.002 * 2, 6)
+    assert record["usage_totals"]["input_tokens"] == 10 * 2
+
+    # only the CLEAN item's artifacts were rendered and published; the
+    # poisoned draft never reaches artifact rendering
+    assert record["artifacts"]["letter_pdf"] == 1
+    assert record["artifacts"]["report_pdf"] == 1
+    assert len(transport.sent_files) == 2  # one letter + one report
+
+    # the digest's ready bucket must not count the held item
+    header = transport.sent[0][1].splitlines()[0]
+    assert re.fullmatch(r"\d+ ready · \d+ manual · \d+ held · \d+ demoted today",
+                        header)
+    ready = int(header.split(" ready")[0])
+    assert ready == 1
+
+    # the held item is parked at awaiting_input, never attached material, and
+    # carries the violation as the reason -- not a silent drop
+    parked = [r for r in store.all_queue_rows() if r["state"] == "awaiting_input"]
+    assert len(parked) == 1
+    held_row = parked[0]
+    assert not held_row["payload"].get("material")
+    violations = held_row["payload"]["validation_violations"]
+    assert violations
+    assert violations[0]["code"] == "disallowed_url"
+    store.close()
+
+    # runs.jsonl telemetry line carries the same held count
+    parsed = json.loads(runs.read_text().splitlines()[0])
+    assert parsed["counts"]["validation_held"] == 1
+
+
+def test_validation_ok_draft_flows_through_normally(
+        tmp_path, jobhunt_config, real_ssot_path, greenhouse_raw,
+        fake_pdflatex):
+    # Control: an explicit validation_ok=True result is treated exactly like
+    # the pre-existing default-clean path -- no item is held.
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    transport = FakeTransport()
+
+    class CleanDrafter:
+        def __init__(self):
+            self.calls = []
+
+        def draft(self, posting, breakdown, ssot):
+            self.calls.append(posting)
+            return DraftResult(
+                material="COVER LETTER\n\nFIELD DATA\nnotice_period: 1 month",
+                usage={"input_tokens": 10, "output_tokens": 5, "cache_read": 1,
+                       "cache_creation": 0},
+                cost_usd=0.002, model="claude-sonnet-4-5", ok=True,
+                validation_ok=True, validation_violations=[])
+
+    drafter = CleanDrafter()
+    fetcher = _fetcher(store, greenhouse_raw)
+
+    record = run_pipeline(
+        jobhunt_config, [Source("greenhouse", "acme", "Acme")],
+        SSOT.load(real_ssot_path), store, options=RunOptions(),
+        drafter=drafter, transport=transport, fetcher=fetcher,
+        runs_path=runs, artifacts_dir=tmp_path / "artifacts",
+        runner=fake_pdflatex())
+
+    assert record["counts"]["validation_held"] == 0
+    assert record["counts"]["drafted"] == len(drafter.calls)
+    assert not any(r["state"] == "awaiting_input" for r in store.all_queue_rows())
+    store.close()
+
+
 def test_failed_fetch_source_never_closes(tmp_path, jobhunt_config,
                                          real_ssot_path, greenhouse_raw):
     store = Store(tmp_path / "store.db")
@@ -348,6 +479,53 @@ def test_rescore_off_by_default_records_zero(tmp_path, jobhunt_config,
     assert record["counts"]["rescored"] == 0
     parsed = json.loads(runs.read_text().splitlines()[0])
     assert parsed["counts"]["rescored"] == 0
+
+
+# -- W4-COMMUTE-GATE run.py integration --------------------------------------
+
+def test_discarded_posting_never_enqueued_and_ledger_records_discarded(
+        tmp_path, jobhunt_config):
+    store = Store(tmp_path / "store.db")
+    runs = tmp_path / "runs.jsonl"
+    raw = {"jobs": [{
+        "id": 9001,
+        "title": "Senior Backend Engineer",
+        "updated_at": "2026-06-20T14:30:00-04:00",
+        "first_published": "2026-06-12T09:00:00-04:00",
+        "location": {"name": "Milan, Italy"},
+        "absolute_url": "https://boards.greenhouse.io/acme/jobs/9001",
+        "content": "Backend role in Python. On-site 5 days per week in the "
+                  "office, no remote option.",
+    }]}
+    # FIXTURE policy values (never real owner values): a Europe cap of 1
+    # day/week, no allowed cities, so the 5-days/week Milan role is discarded.
+    ssot = SSOT({"preferences": {"onsite_policy": {
+        "allowed_cities": ["Testville"],
+        "max_onsite_days_per_week_europe": 1,
+        "max_onsite_days_per_month_rest": 4,
+    }}})
+
+    record = run_pipeline(
+        jobhunt_config, [Source("greenhouse", "acme", "Acme")], ssot, store,
+        options=RunOptions(no_draft=True), transport=FakeTransport(),
+        fetcher=_fetcher(store, raw), runs_path=runs,
+        artifacts_dir=tmp_path / "artifacts")
+
+    assert record["counts"]["new"] == 1
+    assert record["counts"]["enqueued"] == 0
+    assert record["counts"]["discarded"] == 1
+    # a true removal: the item never enters the queue at all
+    assert store.all_queue_rows() == []
+
+    posting = GreenhouseAdapter().parse(raw, "acme")[0]
+    row = store._conn.execute(
+        "SELECT status FROM ledger WHERE identity_key=?",
+        (posting.identity_key(),)).fetchone()
+    assert row["status"] == "discarded"
+    store.close()
+
+    parsed = json.loads(runs.read_text().splitlines()[0])
+    assert parsed["counts"]["discarded"] == 1
 
 
 def _run_with_attach_mode(tmp_path, config, real_ssot_path, raws, runner,

@@ -27,7 +27,13 @@ from engine.fill import (
     publish_evidence,
     resolve_values,
 )
-from engine.fieldmap import Field, FieldMap, Locator
+from engine.fieldmap import (
+    Field,
+    FieldMap,
+    Locator,
+    _DECLINE_SECTIONS,
+    _SECTION_FOR_SOURCE,
+)
 from engine.profile_map import profile_from_real_ssot
 from engine.ssot import SSOT
 
@@ -38,11 +44,21 @@ _NO_OVERRIDE = object()  # sentinel: input_value() is not overridden
 # --- fixture builders ---------------------------------------------------------
 
 def _field(key, label, *, type_="input_text", required=True, options=None,
-           source="questions", role="textbox"):
+           source="questions", role="textbox", section=None):
+    """The `section` (schema_version 2+ structural signal, never derived from a
+    label keyword) mirrors real `fieldmap.py` capture: `_SECTION_FOR_SOURCE.get
+    (source, STANDARD)`, same as `_fields_from_question` stamps it, unless the
+    caller passes an explicit override (e.g. to construct a required question
+    that merely SHARES a label keyword with an EEO field while staying a
+    genuinely non-demographic STANDARD-section field)."""
+    resolved_section = (section if section is not None
+                        else _SECTION_FOR_SOURCE.get(source, "STANDARD"))
     return Field(key=key, label=label, type=type_, required=required,
                  options=options or [], source=source,
                  locator=Locator(role=role, name=label),
-                 step_index=0, conditional_on=None)
+                 step_index=0, conditional_on=None,
+                 section=resolved_section,
+                 decline_allowed=resolved_section in _DECLINE_SECTIONS)
 
 
 def _fieldmap(*fields, vendor="greenhouse", posting_id="9"):
@@ -299,6 +315,25 @@ def test_resolve_skips_manual_missing_and_file(real_ssot_path):
     assert reasons["resume"] == "file-upload"
     assert reasons["demographic_1"] == "demographic/EEO"
     assert reasons["q_colour"].startswith("missing:canned_answers.")
+
+
+def test_resolve_whitespace_only_ssot_value_is_skipped_not_a_confirmed_fill():
+    # FIX 2 (honest completeness, promise C): a whitespace-only SSOT value is
+    # NOT caught by `SSOT.get`'s own MISSING check (that only catches a
+    # zero-length string, so "   " resolves as a real, non-MISSING value and
+    # reaches the render layer) -- it must still be SKIPPED here, never
+    # rendered as a fill value, since there is nothing real to type/select.
+    ssot = SSOT({"identity": {"name": "   ", "email": "  "}})
+    fm = _fieldmap(_field("first_name", "First Name"),
+                   _field("email", "Email"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values == {}
+    reasons = dict(resolved.skipped)
+    assert "empty SSOT value" in reasons["first_name"]
+    assert "identity.name" in reasons["first_name"]
+    assert "empty SSOT value" in reasons["email"]
+    assert "identity.email" in reasons["email"]
 
 
 # =============================================================================
@@ -791,6 +826,37 @@ def test_completeness_required_unfilled_forces_not_complete(
                "1 required unfilled - NOT COMPLETE")
 
 
+def test_completeness_required_field_empty_ssot_value_is_not_complete(tmp_path):
+    # FIX 2 (honest completeness, promise C): a REQUIRED field whose SSOT path
+    # resolves to whitespace-only must never be counted as filled -- the old
+    # `_readback` would compare the (empty) intended value against the (empty)
+    # control and read ok=True even though `type_human`/`fill` placed nothing.
+    # It must land in required_unfilled with a clear reason, never COMPLETE.
+    ssot = SSOT({"identity": {"name": "   ", "email": "test@example.invalid"}})
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("email", "Email"),
+    )
+    values = resolve_values(fm, ssot, {}, assets=assets)
+    assert "first_name" not in values.values
+    assert "empty SSOT value" in dict(values.skipped)["first_name"]
+
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+
+    assert report.fillable_total == 2
+    assert report.filled == 1                       # email only
+    assert len(report.required_unfilled) == 1
+    assert report.required_unfilled[0]["key"] == "first_name"
+    assert "empty SSOT value" in report.required_unfilled[0]["reason"]
+    assert report.justified_skips == 0
+    assert report.complete is False
+    assert report.caption().endswith("NOT COMPLETE")
+
+
 def test_completeness_upload_counts_and_stays_complete(tmp_path, real_ssot_path):
     ssot = SSOT.load(real_ssot_path)
     assets = _make_assets(tmp_path)
@@ -952,6 +1018,44 @@ def test_completeness_required_demographic_skip_stays_justified(
                "0 required unfilled - COMPLETE")
 
 
+def test_completeness_required_eeo_keyword_label_but_not_demographic_section_is_not_complete(
+        tmp_path, real_ssot_path):
+    # Adversarial-review finding (FIX 3): a REQUIRED question whose LABEL merely
+    # contains an EEO keyword ("disability") but is NOT a genuine demographic
+    # field (section stays STANDARD, source stays "questions" -- a real
+    # interview-logistics question, not an EEOC/demographic capture) must never
+    # be silently justified into a false COMPLETE. `_manual_only_reason`'s
+    # keyword-based safety net still fires (never auto-fills a suspected-EEO
+    # field), but the section gate in `_completeness` refuses to justify it,
+    # so it stays a required gap -> NOT COMPLETE.
+    ssot = SSOT.load(real_ssot_path)
+    assets = _make_assets(tmp_path)
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("q_accommodations",
+               "Do you require any disability accommodations for the "
+               "interview?", required=True),   # source="questions" -> STANDARD
+    )
+    assert fm.fields[1].section == "STANDARD"
+    assert fm.fields[1].required is True
+
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    assert "q_accommodations" not in values.values     # never auto-filled
+
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(_control_page(values.fields)()),
+                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       now=lambda: _PINNED)
+
+    assert report.fillable_total == 2
+    assert report.filled == 1                       # first_name only
+    assert len(report.required_unfilled) == 1
+    assert report.required_unfilled[0]["key"] == "q_accommodations"
+    assert report.justified_skips == 0
+    assert report.complete is False
+    assert report.caption().endswith("NOT COMPLETE")
+
+
 def test_completeness_3_of_10_with_missing_required_cv_is_not_complete(
         tmp_path, real_ssot_path):
     # The owner's exact complaint scenario: a partial fill (3/10) with a
@@ -994,6 +1098,28 @@ def test_completeness_3_of_10_with_missing_required_cv_is_not_complete(
 # page silently rejected -- text/select mismatch or a swallowed upload -- must
 # force NOT COMPLETE rather than silently reading COMPLETE.
 # =============================================================================
+
+def test_readback_never_confirms_a_blank_intended_value_even_if_control_reads_blank():
+    # FIX 2, the readback-boundary guard (defence in depth on top of the
+    # resolve-layer skip): an empty/whitespace INTENDED value must never read
+    # as a confirmed fill just because the control ALSO reads back empty --
+    # `fill`/`type_human` never wrote anything (type_human early-returns on
+    # empty text), so "both sides are blank" is not a match, it is "nothing
+    # happened". Exercised at the `_readback` function boundary directly so
+    # the guard is proven to apply to every provider sharing it.
+    from engine.fill import _readback
+
+    blank_control = _FakeLocator()          # input_value() defaults to ""
+    actual, ok = _readback(blank_control, "   ")
+    assert ok is False
+    actual, ok = _readback(blank_control, "")
+    assert ok is False
+    # Non-blank intent still confirms normally (no regression).
+    filled_control = _FakeLocator()
+    filled_control.fill("Test Candidate")
+    actual, ok = _readback(filled_control, "Test Candidate")
+    assert ok is True
+
 
 def test_readback_mismatch_required_text_field_forces_not_complete(tmp_path):
     mutated = _FakeLocator(readback="Someone Else")
