@@ -1,0 +1,62 @@
+{
+  "id": 7701001,
+  "internal_job_id": 4001,
+  "title": "Platform Engineer",
+  "updated_at": "2026-07-01T09:00:00-04:00",
+  "location": { "name": "Remote (EU)" },
+  "absolute_url": "https://boards.greenhouse.io/fakeco/jobs/7701001",
+  "content": "&lt;p&gt;Synthetic FAKE posting for the provider-contract test fixture.&lt;/p&gt;",
+  "questions": [
+    {
+      "label": "First Name",
+      "required": true,
+      "fields": [{ "name": "first_name", "type": "input_text", "values": [] }]
+    },
+    {
+      "label": "Email",
+      "required": true,
+      "fields": [{ "name": "email", "type": "input_text", "values": [] }]
+    },
+    {
+      "label": "Resume/CV",
+      "required": true,
+      "fields": [{ "name": "resume", "type": "input_file", "values": [] }]
+    },
+    {
+      "label": "Profile picture",
+      "required": false,
+      "fields": [{ "name": "headshot", "type": "input_file", "values": [] }]
+    },
+    {
+      "label": "Will you now or in the future require visa sponsorship for employment?",
+      "required": true,
+      "fields": [{
+        "name": "question_50001",
+        "type": "multi_value_single_select",
+        "values": [
+          { "value": 0, "label": "Yes" },
+          { "value": 1, "label": "No" }
+        ]
+      }]
+    }
+  ],
+  "location_questions": [],
+  "compliance": [],
+  "demographic_questions": {
+    "header": "Voluntary Self-Identification",
+    "description": "Completion is voluntary and will not affect your application.",
+    "questions": [
+      {
+        "id": 91001,
+        "label": "Gender",
+        "required": false,
+        "type": "multi_value_single_select",
+        "answer_options": [
+          { "id": 1, "label": "Man" },
+          { "id": 2, "label": "Woman" },
+          { "id": 3, "label": "Prefer not to disclose" }
+        ]
+      }
+    ]
+  }
+}

@@ -26,11 +26,11 @@ cookies persisted), exactly ONE page load per capture, 20s timeouts, and no
 retry beyond that single load. NO clicks, NO login, NO submission: this wave is
 read-only.
 
-Import guard: this module imports cleanly WITHOUT playwright installed (the
-engine core stays stdlib+PyYAML). playwright is imported lazily, only when a
+Import guard: this module imports cleanly WITHOUT the browser driver installed
+(the engine core stays stdlib+PyYAML). Patchright is imported lazily, only when a
 capture is actually invoked with the default (real) browser factory; invoking it
-without playwright raises a clear "pip install playwright==1.56.*" error. Tests
-drive both paths with fake browser/page objects and never touch playwright or the
+without patchright raises a clear "pip install patchright==1.61.*" error. Tests
+drive both paths with fake browser/page objects and never touch patchright or the
 network.
 
 CAVEAT (load-bearing): the Ashby graphql envelope was confirmed LIVE against
@@ -59,6 +59,7 @@ enclosing element's own text before ever emitting an empty label.
 from __future__ import annotations
 
 import contextlib
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -67,9 +68,12 @@ from typing import Callable
 
 from engine.fieldmap import Field, FieldMap, Locator, _role_for_type
 
-# Pinned per R-WT-8 A (1.57 carried a memory regression); surfaced verbatim in
-# the not-installed error so an operator copies the exact remediation.
-PLAYWRIGHT_PIN = "playwright==1.56.*"
+# The browser driver is Patchright (an undetected Playwright fork: it patches
+# navigator.webdriver + the Runtime.enable CDP leak at source, beating
+# playwright-stealth on our non-Cloudflare ATSes). Pinned to the 1.61.x line;
+# surfaced verbatim in the not-installed error so an operator copies the exact
+# remediation.
+PATCHRIGHT_PIN = "patchright==1.61.*"
 
 _TIMEOUT_MS = 20_000
 
@@ -182,40 +186,63 @@ def capture_lever(slug: str, job_id: str, browser_factory=None, *,
     return _parse_lever(html_source, slug, job_id, now=now)
 
 
-# -- playwright lifecycle (lazy import; the only place playwright is touched) ---
+# -- patchright lifecycle (lazy import; the only place the driver is touched) ---
 
-def _require_playwright():
+def _require_patchright():
     try:
-        from playwright.sync_api import sync_playwright
+        from patchright.sync_api import sync_playwright
     except ImportError as exc:
         raise RuntimeError(
-            "playwright is not installed, so the browser field-map capture path "
+            "patchright is not installed, so the browser field-map capture path "
             f"is unavailable. Install the pinned build: pip install "
-            f"{PLAYWRIGHT_PIN} && playwright install chromium --with-deps"
+            f"{PATCHRIGHT_PIN} && patchright install chrome"
         ) from exc
     return sync_playwright
 
 
-@contextlib.contextmanager
-def _default_browser_page():
-    """Yield a headless chromium page in a fresh anonymous context.
+def _headless_default() -> bool:
+    """Run headed under a real display (Xvfb sets DISPLAY), headless otherwise.
 
-    One context per capture, no storage state and no persisted cookies (the
-    default `new_context()` is stateless), torn down unconditionally on exit.
+    Patchright drives real Chrome (`channel="chrome"`); headed under Xvfb is the
+    least-detectable mode on toto, while offline/CI (no DISPLAY) falls back to
+    headless so the capture still runs without a display server.
     """
-    sync_playwright = _require_playwright()
+    return not bool(os.environ.get("DISPLAY"))
+
+
+@contextlib.contextmanager
+def _default_browser_page(user_data_dir=None):
+    """Yield a real-Chrome page with the never-send interceptor already armed.
+
+    One context per capture, torn down unconditionally on exit. A throwaway
+    (stateless) context is the default; passing `user_data_dir` opts into a
+    persistent per-vendor profile (design default is throwaway for capture). The
+    STRUCTURAL never-send interceptor is installed on the context by default
+    (defence in depth for the fill-only phase): a submit POST is aborted at the
+    network layer regardless of any UI path.
+    """
+    from engine.providers.base import install_never_send  # lazy: keeps import light
+
+    sync_playwright = _require_patchright()
+    headless = _headless_default()
     with sync_playwright() as controller:
-        browser = controller.chromium.launch(headless=True)
-        try:
+        if user_data_dir is not None:
+            context = controller.chromium.launch_persistent_context(
+                str(user_data_dir), channel="chrome", headless=headless)
+            browser = None
+        else:
+            browser = controller.chromium.launch(
+                channel="chrome", headless=headless)
             context = browser.new_context()  # anonymous: no storage_state, no cookies
-            try:
-                page = context.new_page()
-                page.set_default_timeout(_TIMEOUT_MS)
-                yield page
-            finally:
-                context.close()
+        try:
+            install_never_send(context)
+            page = context.new_page()
+            page.set_default_timeout(_TIMEOUT_MS)
+            yield page
         finally:
-            browser.close()
+            context.close()
+            if browser is not None:
+                browser.close()
 
 
 # -- Ashby graphql parse -------------------------------------------------------

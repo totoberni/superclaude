@@ -1,0 +1,75 @@
+<!--
+Representative (hand-crafted) Greenhouse embed apply-form DOM fixture,
+matching the fields captured in questions.json (W5.2 greenhouse provider,
+FAKE SSOT / FAKE posting, no owner PII).
+
+This file documents the live-DOM SHAPE the base.py primitives are built
+against (react-select combobox markup, required/asterisk conventions, a
+plain file input) for the later live-browser HAR capture (a separate step
+noted in the provider-contract test). It is NOT mechanically parsed by
+tests/test_providers_greenhouse.py in this wave -- Tier 1 (this wave) proves
+the fill()/DOM-sweep LOGIC offline via fake page/locator objects mirroring
+this same shape (see providers/base.py's own test conventions); Tier 2 (a
+later toto acceptance run) exercises this fixture against a real browser.
+-->
+<!doctype html>
+<html lang="en">
+<body>
+  <form id="application_form" action="/fakeco/jobs/7701001" method="post">
+
+    <fieldset>
+      <label for="first_name">First Name *</label>
+      <input type="text" id="first_name" name="job_application[first_name]" required>
+    </fieldset>
+
+    <fieldset>
+      <label for="email">Email *</label>
+      <input type="email" id="email" name="job_application[email]" required>
+    </fieldset>
+
+    <fieldset>
+      <label for="resume">Resume/CV *</label>
+      <input type="file" id="resume" name="job_application[resume]"
+             accept=".pdf,.doc,.docx,.txt,.rtf" required>
+    </fieldset>
+
+    <fieldset>
+      <label for="headshot">Profile picture</label>
+      <input type="file" id="headshot" name="job_application[headshot]"
+             accept="image/png,image/jpeg">
+    </fieldset>
+
+    <!-- react-select combobox: multi_value_single_select "Will you now or
+         in the future require visa sponsorship for employment?" -->
+    <fieldset>
+      <label id="question_50001-label" for="react-select-question_50001-input">
+        Will you now or in the future require visa sponsorship for
+        employment? *
+      </label>
+      <div id="react-select-question_50001-container" class="select-shell">
+        <div class="select__control">
+          <input id="react-select-question_50001-input"
+                 role="combobox" aria-required="true"
+                 aria-labelledby="question_50001-label">
+          <div class="select__single-value"></div>
+        </div>
+        <div id="react-select-question_50001-listbox" role="listbox" hidden>
+          <div role="option" id="question_50001-option-0">Yes</div>
+          <div role="option" id="question_50001-option-1">No</div>
+        </div>
+      </div>
+    </fieldset>
+
+    <!-- EEOC / demographic: decline_allowed, never required, no asterisk. -->
+    <fieldset>
+      <label for="demographic_91001">Gender</label>
+      <select id="demographic_91001" name="demographic_question[91001]">
+        <option value="1">Man</option>
+        <option value="2">Woman</option>
+        <option value="3">Prefer not to disclose</option>
+      </select>
+    </fieldset>
+
+  </form>
+</body>
+</html>

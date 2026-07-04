@@ -1,0 +1,13 @@
+# Runtime dependencies beyond the stdlib for the automations engine.
+#
+# imap-tools wraps imaplib for engine.ingest.inbox's dedicated-Gmail IMAP
+# reader (spec 7, w5-locked): a dedicated automation inbox read via IMAP +
+# App Password, never the primary Gmail. See engine/ingest/inbox.py.
+imap-tools>=1.5,<2
+#
+# patchright is the undetected Playwright fork that drives the browser field-map
+# capture + form-fill paths (engine.browse / engine.providers): channel="chrome",
+# navigator.webdriver + Runtime.enable CDP leak patched at source. Pinned to the
+# 1.61.x line (imported lazily; the browser itself is fetched via
+# `patchright install chrome`, not required for the offline test suite).
+patchright==1.61.*

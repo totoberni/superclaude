@@ -1,0 +1,116 @@
+{
+  "data": {
+    "jobPosting": {
+      "id": "9001aa00-1111-2222-3333-fauxfauxfaux",
+      "title": "Senior Backend Engineer",
+      "applicationForm": {
+        "__typename": "FormRender",
+        "id": "form-9001",
+        "errorMessages": [],
+        "formErrors": [],
+        "sourceFormDefinitionId": "formdef-9001",
+        "formControls": [
+          { "__typename": "FormControl", "identifier": "submit", "title": "Submit application" }
+        ],
+        "sections": [
+          {
+            "__typename": "FormSectionRender",
+            "title": "Personal Information",
+            "descriptionHtml": null,
+            "isHidden": null,
+            "fieldEntries": [
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_name",
+                "field": { "id": "field__systemfield_name", "path": "_systemfield_name", "humanReadablePath": "Name", "title": "Full name", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "String", "__autoSerializationID": "StringField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_email",
+                "field": { "id": "field__systemfield_email", "path": "_systemfield_email", "humanReadablePath": "Email", "title": "Email", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "Email", "__autoSerializationID": "EmailField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_phone",
+                "field": { "id": "field__systemfield_phone", "path": "_systemfield_phone", "humanReadablePath": "Phone", "title": "Phone", "isNullable": true, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "Phone", "__autoSerializationID": "PhoneField" },
+                "fieldValue": null,
+                "isRequired": false,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_resume",
+                "field": { "id": "field__systemfield_resume", "path": "_systemfield_resume", "humanReadablePath": "Resume", "title": "Resume", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "File", "__autoSerializationID": "FileField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              }
+            ]
+          },
+          {
+            "__typename": "FormSectionRender",
+            "title": "Eligibility",
+            "descriptionHtml": null,
+            "isHidden": null,
+            "fieldEntries": [
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry_custom_visa",
+                "field": { "id": "field_custom_visa", "path": "custom_visa", "humanReadablePath": "Will you now or in the future require visa sponsorship for employment?", "title": "Will you now or in the future require visa sponsorship for employment?", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "ValueSelect", "selectableValues": [ { "label": "Yes", "value": "yes" }, { "label": "No", "value": "no" } ], "__autoSerializationID": "ValueSelectField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry_custom_consent",
+                "field": { "id": "field_custom_consent", "path": "custom_consent", "humanReadablePath": "I agree to the privacy policy and consent to the processing of my data.", "title": "I agree to the privacy policy and consent to the processing of my data.", "isNullable": false, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "Boolean", "__autoSerializationID": "BooleanField" },
+                "fieldValue": null,
+                "isRequired": true,
+                "descriptionHtml": null,
+                "isHidden": null
+              }
+            ]
+          },
+          {
+            "__typename": "FormSectionRender",
+            "title": "Voluntary Self-Identification",
+            "descriptionHtml": null,
+            "isHidden": null,
+            "fieldEntries": [
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry_custom_gender",
+                "field": { "id": "field_custom_gender", "path": "custom_gender", "humanReadablePath": "Gender", "title": "Gender", "isNullable": true, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "ValueSelect", "selectableValues": [ { "label": "Male", "value": "m" }, { "label": "Female", "value": "f" }, { "label": "Non-binary", "value": "nb" }, { "label": "Decline to self-identify", "value": "decline" } ], "__autoSerializationID": "ValueSelectField" },
+                "fieldValue": null,
+                "isRequired": false,
+                "descriptionHtml": null,
+                "isHidden": null
+              },
+              {
+                "__typename": "FormFieldEntry",
+                "id": "entry__systemfield_hidden_source",
+                "field": { "id": "field__systemfield_hidden_source", "path": "_systemfield_hidden_source", "humanReadablePath": "How did you hear about us?", "title": "How did you hear about us?", "isNullable": true, "isPrivate": false, "isDeactivated": false, "isMany": false, "metadata": {}, "type": "String", "__autoSerializationID": "StringField" },
+                "fieldValue": null,
+                "isRequired": false,
+                "descriptionHtml": null,
+                "isHidden": true
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

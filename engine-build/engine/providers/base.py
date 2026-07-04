@@ -1,0 +1,423 @@
+"""Shared browser primitives every ATS provider builds on (W5.1 spine).
+
+This module is the single home for the cross-vendor fill mechanics that the
+per-vendor providers (greenhouse/lever/ashby/workable, landing in W5.2) reuse:
+the four live fill primitives from `engine.fill`, a STRUCTURAL never-send network
+interceptor, human-cadence typing, a DOM-sweep completeness check, and the
+react-select combobox driver that W4 deferred.
+
+LAZY-IMPORT INVARIANT (load-bearing, mirrors registry.py): the daily poller must
+never load the browser stack. `engine.run` imports `engine.providers` (the package
+__init__, which pulls in `registry` only), NOT this module, and this module never
+imports patchright or `engine.browse` at load time. Every browser reference here is
+resolved through the page/locator/route objects the caller passes in; the only
+cross-module import (`engine.fill`, itself patchright-free) happens at CALL time
+inside the re-export wrappers.
+
+FILL-PRIMITIVE ACCESS -- re-export via call-time wrappers, NOT a top-level
+`from engine.fill import ...` and NOT a code move out of fill.py:
+- No code is moved out of the live W4 `fill.py` (the running jobhunt fills through
+  it); a move would be a needless risk. The primitives stay where `fill_form` uses
+  them and are surfaced here by thin pass-through wrappers.
+- The wrappers look the target up on the `engine.fill` module object at call time,
+  so they honour the monkeypatch seam (a test patching `engine.fill._safe_click`
+  is reflected here) exactly as `registry.py` looks up `browse.capture_ashby` at
+  call time. A top-level `from engine.fill import _safe_click` would bind the
+  reference at import and defeat that seam.
+- Importing `engine.fill` lazily (inside the wrappers) also keeps this module's own
+  import cheap and dodges any import-order fragility with the providers package.
+
+The NEW primitives (`install_never_send`, `type_human`, `sweep_required` +
+`completeness_mismatch`, `select_react_combobox`) are pure-Python here: they drive
+whatever page/locator/route object is handed to them, so their branching logic is
+unit-tested now with fakes and their live-DOM behaviour is fixture-validated in
+W5.2.
+"""
+
+from __future__ import annotations
+
+import random
+import re
+import time
+
+# -- re-exported fill primitives (call-time lookup preserves the patch seam) ----
+
+
+def _fill():
+    """The live `engine.fill` module, imported lazily so this module stays cheap
+    to load and the reference is resolved fresh on every call (patch seam)."""
+    from engine import fill
+    return fill
+
+
+def _safe_click(*args, **kwargs):
+    """Re-export of `engine.fill._safe_click` (the sole sanctioned click gateway;
+    refuses any submit-like accessible name)."""
+    return _fill()._safe_click(*args, **kwargs)
+
+
+def _safe_upload(*args, **kwargs):
+    """Re-export of `engine.fill._safe_upload` (whitelisted-asset attach; never
+    submits)."""
+    return _fill()._safe_upload(*args, **kwargs)
+
+
+def _readback(*args, **kwargs):
+    """Re-export of `engine.fill._readback` (reads a control back to confirm a
+    value actually landed)."""
+    return _fill()._readback(*args, **kwargs)
+
+
+def _locate(*args, **kwargs):
+    """Re-export of `engine.fill._locate` (role/label locator resolution)."""
+    return _fill()._locate(*args, **kwargs)
+
+
+# -- STRUCTURAL never-send (HOLE-FIX a): abort submit POSTs at the network layer -
+# The last-line network guarantee that the fill-only phase never applies. Registered
+# on every launched context/page by default (browse.py); a submit POST is aborted
+# before it leaves the browser regardless of any UI bug.
+#
+# The submit-endpoint URL set is derived from the registry apply hosts
+# (greenhouse.io / lever.co / ashbyhq.com / workable.com) plus the known
+# per-vendor application-submission paths (spec section 1 table).
+
+# POST to any of these URLs is unconditionally a form submission -> abort.
+_SUBMIT_URL_PATTERNS = (
+    # Greenhouse: legacy embed application POST, board-API / job-board application
+    # POST (.../jobs/{id}[/applications]), and any explicit /applications action.
+    re.compile(
+        r"greenhouse(?:-api)?\.io/(?:embed/job_app\b|"
+        r".*?/jobs/\d+(?:/applications?)?/?(?:[?#]|$))", re.I),
+    re.compile(r"greenhouse(?:-api)?\.io/.*?/applications?(?:[/?#]|$)", re.I),
+    # Lever: the apply-form POST (jobs.lever.co/{slug}/{id}/apply) + api postings apply.
+    re.compile(r"lever\.co/.*?/apply(?:[/?#]|$)", re.I),
+    re.compile(r"lever\.co/(?:v\d+/)?postings/[^/]+/[^/]+/apply\b", re.I),
+    # Ashby: the direct application-submit path (the non-graphql submit shape).
+    re.compile(r"ashbyhq\.com/.*?application(?:Form)?[./]submit\b", re.I),
+    # Workable: candidate-create (application submission) + apply POST.
+    re.compile(r"workable\.com/.*?/candidates?(?:[/?#]|$)", re.I),
+    re.compile(
+        r"workable\.com/(?:spi/v\d+/)?.*?/(?:apply|application)(?:[/?#]|$)", re.I),
+)
+
+# Graphql endpoints carry BOTH read queries and submit mutations on ONE URL, so a
+# POST here is aborted ONLY when its body names a submit operation. This keeps the
+# Ashby form-schema READ (the capture path in browse.py) flowing while still
+# blocking the submit mutation.
+_SUBMIT_GRAPHQL_URL_PATTERNS = (
+    re.compile(r"ashbyhq\.com/.*?non-user-graphql", re.I),
+    re.compile(r"workable\.com/.*?graphql", re.I),
+)
+_SUBMIT_OPERATION_RE = re.compile(
+    r"submitApplication|SubmitApplicationForm|applicationForm\.submit|"
+    r"ApplicationSubmit|createCandidate|candidateCreate|submitForm", re.I)
+
+
+def _is_submit_request(method: str, url: str, post_data: str | None) -> bool:
+    """True iff this is a POST to a vendor application-submit endpoint.
+
+    GETs (and every other verb) pass -- only a POST can submit. A POST to a plain
+    submit URL matches outright; a POST to a shared graphql endpoint matches only
+    when its body names a submit operation, so a form-schema read is never aborted.
+    """
+    if (method or "").upper() != "POST":
+        return False
+    url = url or ""
+    for pattern in _SUBMIT_URL_PATTERNS:
+        if pattern.search(url):
+            return True
+    for pattern in _SUBMIT_GRAPHQL_URL_PATTERNS:
+        if pattern.search(url) and _SUBMIT_OPERATION_RE.search(post_data or ""):
+            return True
+    return False
+
+
+def _never_send_handler():
+    """Build the `page.route` handler that aborts submit POSTs, passes the rest."""
+    def _handler(route):
+        request = getattr(route, "request", None)
+        method = getattr(request, "method", "") or ""
+        url = getattr(request, "url", "") or ""
+        post_data = _request_post_data(request)
+        if _is_submit_request(method, url, post_data):
+            route.abort()
+        else:
+            route.continue_()
+    return _handler
+
+
+def _request_post_data(request) -> str | None:
+    """Best-effort read of a request body; None when absent or unreadable."""
+    if request is None:
+        return None
+    try:
+        return request.post_data
+    except Exception:
+        return None
+
+
+def install_never_send(context_or_page):
+    """Register a route interceptor that ABORTS any application-submit POST.
+
+    Installs at CONTEXT scope whenever possible so the guard covers EVERY page
+    the context opens -- including a popup / new tab a submit-form opens mid-fill,
+    which a page-scoped route would NOT cover (that page escaped the interceptor).
+    When handed a bare Page, the route is installed on `page.context`; when handed
+    a BrowserContext (or any object with no reachable `.context`), it is installed
+    on that object directly (safe fallback). GETs and non-submit POSTs pass
+    through untouched; a POST whose method+URL (and, for graphql endpoints, body)
+    matches a vendor submit endpoint is aborted before it leaves the browser.
+    Returns the handler so a caller (or test) can drive it directly.
+    """
+    handler = _never_send_handler()
+    _route_target(context_or_page).route("**", handler)
+    return handler
+
+
+def _route_target(context_or_page):
+    """Prefer the browser CONTEXT (covers every page/popup it opens) over a bare
+    page: return `context_or_page.context` when present, else the object itself.
+
+    A Playwright Page exposes `.context` (its owning BrowserContext); a
+    BrowserContext has no `.context`, so it is used directly -- the safe fallback
+    that also keeps a caller passing a context (or a page-shaped fake with no
+    `.context`) working unchanged.
+    """
+    context = getattr(context_or_page, "context", None)
+    if context is not None:
+        return context
+    return context_or_page
+
+
+# -- human-cadence typing (reCAPTCHA v3 score protection) ----------------------
+
+
+def type_human(locator, text, *, min_delay: float = 60, max_delay: float = 180):
+    """Type `text` into `locator` one real keystroke at a time, random per-char delay.
+
+    Uses `press_sequentially` (genuine key events) with a fresh random inter-key
+    delay in `[min_delay, max_delay]` ms per character. NEVER `locator.fill()` and
+    NEVER any JS injection: reCAPTCHA v3 scores an instant value-set as bot-like,
+    so the whole point is a human keystroke cadence. `locator` is injected by the
+    caller (a real Playwright locator live; a fake in tests)."""
+    if not text:
+        return
+    for char in str(text):
+        delay = random.uniform(min_delay, max_delay)
+        locator.press_sequentially(char, delay=delay)
+
+
+# -- DOM-sweep completeness (HOLE-FIX d) ---------------------------------------
+# A form is COMPLETE only when the DOM's required-field set and the schema's
+# required-field set agree. Lever carries no custom-question schema at all, so the
+# DOM sweep is the sole completeness oracle there; for the schema vendors it is a
+# cross-check that the schema did not miss a field the page actually requires.
+
+_REQUIRED_CSS = "[required], [aria-required='true']"
+_ASTERISK_CSS = "label, legend"
+
+
+def _normalize_name(text) -> str:
+    """Lowercase, strip `*` required-markers, and collapse whitespace to a stable
+    accessible-name key so DOM and schema names compare apples-to-apples."""
+    if not text:
+        return ""
+    cleaned = str(text).replace("*", " ")
+    return re.sub(r"\s+", " ", cleaned).strip().lower()
+
+
+def completeness_mismatch(schema_required: set[str],
+                          dom_required: set[str]) -> dict:
+    """Two-directional diff of the required-field sets (normalized both sides).
+
+    Returns {"dom_only": [...], "schema_only": [...]} sorted for determinism.
+    `dom_only` = required on the page but absent from the schema (the schema
+    missed a field); `schema_only` = required by the schema but not found on the
+    page. Any non-empty side means the form is NOT_COMPLETE.
+    """
+    schema = {_normalize_name(name) for name in (schema_required or set())} - {""}
+    dom = {_normalize_name(name) for name in (dom_required or set())} - {""}
+    return {
+        "dom_only": sorted(dom - schema),
+        "schema_only": sorted(schema - dom),
+    }
+
+
+def sweep_required(page) -> set[str]:
+    """Enumerate the page's visible required-looking controls -> normalized names.
+
+    Collects controls carrying `required` / `aria-required="true"` plus fields whose
+    label/legend shows a visible asterisk, skipping aria-hidden / offscreen nodes,
+    and returns their normalized accessible-name set. The live-DOM extraction is
+    fixture-validated in W5.2; the normalization + diff logic (`_normalize_name`,
+    `completeness_mismatch`) is unit-tested now.
+    """
+    names: set[str] = set()
+    for locator in _visible_locators(page, _REQUIRED_CSS):
+        name = _normalize_name(_accessible_name(locator))
+        if name:
+            names.add(name)
+    for locator in _visible_locators(page, _ASTERISK_CSS):
+        text = _locator_text(locator)
+        if text and "*" in text:
+            name = _normalize_name(text)
+            if name:
+                names.add(name)
+    return names
+
+
+def _visible_locators(page, css: str) -> list:
+    """All locators matching `css` that are visible and not aria-hidden.
+
+    Guarded end to end: a page/locator missing a probed method is treated as
+    zero matches rather than raising, so a partial fake never crashes the sweep."""
+    locator_fn = getattr(page, "locator", None)
+    if locator_fn is None:
+        return []
+    try:
+        candidates = locator_fn(css).all()
+    except Exception:
+        return []
+    visible: list = []
+    for locator in candidates or []:
+        if _is_visible(locator) and not _is_aria_hidden(locator):
+            visible.append(locator)
+    return visible
+
+
+def _is_visible(locator) -> bool:
+    checker = getattr(locator, "is_visible", None)
+    if checker is None:
+        return True
+    try:
+        return bool(checker())
+    except Exception:
+        return False
+
+
+def _is_aria_hidden(locator) -> bool:
+    try:
+        return (locator.get_attribute("aria-hidden") or "").strip().lower() == "true"
+    except Exception:
+        return False
+
+
+def _accessible_name(locator) -> str:
+    """Best-effort accessible name: aria-label, then label text, then placeholder,
+    then the control's own name attribute (live-DOM refinement is W5.2's job)."""
+    for attr in ("aria-label", "placeholder", "name"):
+        try:
+            value = (locator.get_attribute(attr) or "").strip()
+        except Exception:
+            value = ""
+        if value:
+            return value
+    return _locator_text(locator)
+
+
+def _locator_text(locator) -> str:
+    getter = getattr(locator, "inner_text", None) or getattr(locator, "text_content", None)
+    if getter is None:
+        return ""
+    try:
+        return (getter() or "").strip()
+    except Exception:
+        return ""
+
+
+# -- react-select combobox driver (Greenhouse; W4-deferred) --------------------
+
+
+def select_react_combobox(page, field_id: str, option_text: str, *,
+                          min_delay: float = 60, max_delay: float = 180,
+                          poll_ms: tuple[int, ...] = (200, 500),
+                          wait_timeout: int = 5000) -> bool:
+    """Drive one react-select combobox: open, filter, pick, and confirm the choice.
+
+    Sequence (fresh locators at every step; react-select recycles nodes):
+      1. Click the combobox input to open it.
+      2. `type_human` the option text to filter the menu (never fill()).
+      3. Wait for a visible option in `#react-select-{field_id}-listbox`, click it.
+      4. Poll `.select__single-value` at +200/+500 ms to confirm the value landed.
+      5. Dismiss with Escape -- NEVER blur (a blur can re-open / clear the widget).
+
+    Returns True iff the readback confirms the selection landed. The live-DOM
+    behaviour is fixture-validated in W5.2; the sequencing logic is unit-tested
+    now against a mocked page.
+    """
+    listbox_selector = f"#react-select-{field_id}-listbox"
+
+    _combobox_input(page, field_id).click()
+    type_human(_combobox_input(page, field_id), option_text,
+               min_delay=min_delay, max_delay=max_delay)
+
+    option = _visible_option(page, listbox_selector, option_text)
+    _wait_visible(option, wait_timeout)
+    option.click()
+
+    landed = _poll_single_value(page, field_id, option_text, poll_ms)
+    # Escape dismisses the still-open menu without a blur.
+    _combobox_input(page, field_id).press("Escape")
+    return landed
+
+
+def _combobox_input(page, field_id: str):
+    """A FRESH locator for the combobox text input (react-select recycles it)."""
+    return page.locator(f"#react-select-{field_id}-input")
+
+
+def _visible_option(page, listbox_selector: str, option_text: str):
+    """A FRESH locator for the matching option inside the open listbox."""
+    options = page.locator(f"{listbox_selector} [role='option']")
+    filterer = getattr(options, "filter", None)
+    if callable(filterer):
+        options = filterer(has_text=option_text)
+    first = getattr(options, "first", None)
+    return first if first is not None else options
+
+
+def _wait_visible(locator, timeout: int) -> None:
+    waiter = getattr(locator, "wait_for", None)
+    if callable(waiter):
+        waiter(state="visible", timeout=timeout)
+
+
+def _poll_single_value(page, field_id: str, option_text: str,
+                       poll_ms: tuple[int, ...]) -> bool:
+    """Poll the rendered `.select__single-value` at the given cumulative offsets.
+
+    Returns True as soon as the shown value contains the chosen option text. Waits
+    are the cumulative deltas so `(200, 500)` reads at +200 ms then +500 ms."""
+    want = _normalize_name(option_text)
+    if not want:
+        return False
+    elapsed = 0
+    for mark in poll_ms:
+        _wait_timeout(page, mark - elapsed)
+        elapsed = mark
+        shown = _normalize_name(_single_value_text(page, field_id))
+        if shown and want in shown:
+            return True
+    return False
+
+
+def _single_value_text(page, field_id: str) -> str:
+    locator_fn = getattr(page, "locator", None)
+    if locator_fn is None:
+        return ""
+    try:
+        return _locator_text(locator_fn(
+            f"#react-select-{field_id}-container .select__single-value"))
+    except Exception:
+        return ""
+
+
+def _wait_timeout(page, ms: int) -> None:
+    if ms <= 0:
+        return
+    waiter = getattr(page, "wait_for_timeout", None)
+    if callable(waiter):
+        waiter(ms)
+    else:
+        time.sleep(ms / 1000.0)

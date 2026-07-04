@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Apply - Staff Reliability Engineer - FauxCorp</title></head>
+<body>
+  <!-- A crafted, representative server-rendered Lever apply DOM (source
+       "lever_dom"). Lever exposes NO custom-question schema over its postings
+       API, so capture_lever/_parse_lever derives the field map straight from
+       THIS rendered markup; the same markup is what the provider's fill() drives.
+       Everything here is FAKE (no owner PII).
+
+       It exercises every shape the Lever provider must handle:
+         - base text fields (name, email, phone) + urls[] link fields,
+         - a server-rendered NATIVE <select> (NOT a react-select combobox),
+         - an EEO/demographic decline field (never auto-answered),
+         - an OPTIONAL marketing checkbox (safe path: left unticked),
+         - a REQUIRED consent checkbox = the hCaptcha-hazard control (a
+           programmatic click is intercepted mid-form, so it is handed to a
+           human; being required, that hand-off forces NOT_COMPLETE). -->
+  <div class="content">
+    <form class="application-form" method="POST" enctype="multipart/form-data">
+      <ul class="application-fields">
+        <li class="application-field">
+          <label class="application-label">Full name<span class="required">*</span></label>
+          <input type="text" name="name" required>
+        </li>
+        <li class="application-field">
+          <label class="application-label">Email<span class="required">*</span></label>
+          <input type="text" name="email" required>
+        </li>
+        <li class="application-field">
+          <label class="application-label">Phone</label>
+          <input type="text" name="phone">
+        </li>
+        <li class="application-field">
+          <label class="application-label">LinkedIn URL</label>
+          <input type="text" name="urls[LinkedIn]">
+        </li>
+        <li class="application-field">
+          <label class="application-label">GitHub URL</label>
+          <input type="text" name="urls[GitHub]">
+        </li>
+        <li class="application-field application-field-resume">
+          <label class="application-label">Resume / CV<span class="required">*</span></label>
+          <input type="file" name="resume" required>
+        </li>
+      </ul>
+
+      <div class="section-wrapper card">
+        <!-- Server-rendered NATIVE select: driven by select_option, never the
+             react-select click/filter/pick dance. Its locator role is still
+             "combobox" (fieldmap _role_for_type), so the provider must NOT infer
+             react-select from the role alone. -->
+        <div class="application-question dropdown">
+          <div class="application-label">
+            <div class="text">Will you now or in the future require visa sponsorship for employment?<span class="required">&#10033;</span></div>
+          </div>
+          <select name="cards[a1b2c3][field0]" required>
+            <option value="">Select...</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+
+        <!-- EEO / demographic decline field: policy forbids auto-answering it,
+             so the classifier marks it manual-only and fill() never touches it. -->
+        <div class="application-question dropdown eeo">
+          <div class="application-label">
+            <div class="text">Gender</div>
+          </div>
+          <select name="eeo[gender]">
+            <option value="">Select...</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="nonbinary">Non-binary</option>
+            <option value="decline">Decline to self-identify</option>
+          </select>
+        </div>
+
+        <!-- OPTIONAL marketing checkbox: the safe path -- a marketing box is
+             left unticked, so no click is ever attempted and it never blocks. -->
+        <div class="application-question checkbox-question">
+          <label class="application-checkbox-label">
+            <input type="checkbox" name="consent[marketing]">
+            Subscribe me to the FauxCorp newsletter and product updates.
+          </label>
+        </div>
+
+        <!-- REQUIRED consent checkbox = the hCaptcha hazard. resolve_values wants
+             to tick it True, but fill() refuses to auto-click it (hCaptcha
+             intercepts programmatic checkbox clicks) and hands it to a human;
+             being required, the un-ticked hand-off forces NOT_COMPLETE. -->
+        <div class="application-question checkbox-question">
+          <label class="application-checkbox-label">
+            <input type="checkbox" name="consent[privacy]" required>
+            I agree to the privacy policy and consent to the processing of my data.
+          </label>
+        </div>
+      </div>
+
+      <button type="submit">Submit application</button>
+    </form>
+  </div>
+</body>
+</html>
