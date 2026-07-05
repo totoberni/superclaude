@@ -9,7 +9,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY="${JOBHUNT_PYTHON:-python3}"
+PY="${JOBHUNT_PYTHON:-$HOME/automations/.venv/bin/python}"
 
 exec "$PY" -m engine.run \
   --config "${JOBHUNT_CONFIG:-$HERE/instances/jobhunt/config.yaml}" \
