@@ -164,10 +164,11 @@ def test_run_end_to_end_one_push_and_telemetry(tmp_path, jobhunt_config,
     assert topic == jobhunt_config.topic
     assert record["push_sent"] is True
 
-    header = message.splitlines()[0]
-    assert re.fullmatch(r"\d+ ready · \d+ manual · \d+ held · \d+ demoted today",
-                        header)
-    ready = int(header.split(" ready")[0])
+    header = message.splitlines()[1]
+    match = re.fullmatch(
+        r"\*\*(\d+) ready\*\* · \d+ manual · \d+ held · \d+ demoted today", header)
+    assert match
+    ready = int(match.group(1))
 
     # 2 greenhouse + 1 lever + 1 listed ashby = 4 live; unlisted ashby dropped
     assert record["counts"]["new"] == 4
@@ -321,10 +322,11 @@ def test_validation_failed_draft_is_held_not_surfaced_ready(
     assert len(transport.sent_files) == 2  # one letter + one report
 
     # the digest's ready bucket must not count the held item
-    header = transport.sent[0][1].splitlines()[0]
-    assert re.fullmatch(r"\d+ ready · \d+ manual · \d+ held · \d+ demoted today",
-                        header)
-    ready = int(header.split(" ready")[0])
+    header = transport.sent[0][1].splitlines()[1]
+    match = re.fullmatch(
+        r"\*\*(\d+) ready\*\* · \d+ manual · \d+ held · \d+ demoted today", header)
+    assert match
+    ready = int(match.group(1))
     assert ready == 1
 
     # the held item is parked at awaiting_input, never attached material, and

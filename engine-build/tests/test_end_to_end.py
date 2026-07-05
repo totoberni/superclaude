@@ -63,9 +63,9 @@ def test_end_to_end_dry_run(store, jobhunt_config, job_ssot_path,
     transport = FakeTransport()
     message = publish_digest(transport, jobhunt_config.topic, sm.items(),
                             len(rerank.demoted_today))
-    header = message.splitlines()[0]
-    assert header == "3 ready · 0 manual · 1 held · 0 demoted today"
-    assert "matched:" in message  # breakdown reaches the report line
+    header = message.splitlines()[1]
+    assert header == "**3 ready** · 0 manual · 1 held · 0 demoted today"
+    assert "**Match:**" in message  # breakdown reaches the report line
     assert transport.sent == [(jobhunt_config.topic, message)]
 
     # -- stage B: structural no-repeat -------------------------------------

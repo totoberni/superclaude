@@ -1,11 +1,19 @@
 """ntfy publisher + report renderers (digest header, per-item breakdown).
 
 The single phone-facing surface (plan Section 5). A run emits one push per topic:
-a scannable digest header `N ready · M manual · K held · J demoted today`, then
-the ready bucket (automatable, submit on your go) and the manual/copy-paste bucket
-which carries the FULL tailored material (D2), not just a link. Every line shows
-the score and the why (top matched criteria + missing/weak), so the owner learns
-what to strengthen (7.3).
+a Markdown digest (`# JobHunt · <date>` + a bold `N ready · M manual · K held ·
+J demoted today` line), then the ready bucket (automatable, submit on your go)
+and the manual/copy-paste bucket which carries the FULL tailored material (D2),
+not just a link. Every item is a labelled-bullet block (score, match/weak/flags,
+location/comp when present) so the owner learns what to strengthen (7.3) at a
+glance on the phone, instead of a flat text blob (owner directive, legibility is
+first-class).
+
+Rendering uses ntfy Markdown formatting: publishing with the `Markdown` header
+(an alias of `X-Markdown`) set to `yes` turns on headings/bold/bullets/code-fences
+in the ntfy app (docs.ntfy.sh/publish, "Markdown formatting"). `publish` sends
+this header by default; `publish_file` captions ride the `Message` header
+instead, which does not render Markdown, so those stay plain single-line text.
 
 Publishing rides the live toto ntfy server via NtfyTransport; tests inject
 FakeTransport, so no network is touched. Credentials are read from
@@ -16,6 +24,7 @@ loading is fail-closed: absent or world-readable credentials raise (7.8/Section 
 from __future__ import annotations
 
 import unicodedata
+from datetime import date
 from email.header import Header
 from pathlib import Path
 from typing import Protocol
@@ -33,7 +42,7 @@ class CredentialsError(RuntimeError):
 
 
 class Transport(Protocol):
-    def publish(self, topic: str, message: str) -> None:
+    def publish(self, topic: str, message: str, markdown: bool = True) -> None:
         ...
 
     def publish_file(self, topic: str, path: str | Path, message: str,
@@ -48,7 +57,7 @@ class FakeTransport:
         self.sent: list[tuple[str, str]] = []
         self.sent_files: list[tuple[str, str, str, str]] = []
 
-    def publish(self, topic: str, message: str) -> None:
+    def publish(self, topic: str, message: str, markdown: bool = True) -> None:
         self.sent.append((topic, message))
 
     def publish_file(self, topic: str, path: str | Path, message: str,
@@ -72,11 +81,20 @@ class NtfyTransport:
                 "(fail-closed: refusing an unauthenticated transport)"
             )
 
-    def publish(self, topic: str, message: str) -> None:
+    def publish(self, topic: str, message: str, markdown: bool = True) -> None:
+        """Publish the digest/item body, Markdown-formatted by default.
+
+        Verified against docs.ntfy.sh/publish ("Markdown formatting"): the
+        `Markdown` header (alias of `X-Markdown`) set to `yes` enables
+        headings/bold/bullets/code-fences in the ntfy app. `markdown=False`
+        opts out (plain text), kept for callers that need it.
+        """
         import urllib.request
 
         req = urllib.request.Request(f"{self.url}/{topic}",
                                      data=message.encode("utf-8"))
+        if markdown:
+            req.add_header("Markdown", "yes")
         self._authorize(req)
         urllib.request.urlopen(req, timeout=10)
 
@@ -86,8 +104,9 @@ class NtfyTransport:
 
         Verified against docs.ntfy.sh/publish (Attachments): PUT the raw file
         bytes as the body with a `Filename` header for the attachment name; the
-        caption rides the `Message` header (documented alias of `X-Message`).
-        Auth reuses the existing Bearer/Basic scheme.
+        caption rides the `Message` header (documented alias of `X-Message`),
+        which does not render Markdown, so it stays plain text. Auth reuses
+        the existing Bearer/Basic scheme.
         """
         import urllib.request
 
@@ -158,43 +177,107 @@ def _require_0600(p: Path) -> None:
         raise CredentialsError(f"ntfy credentials must be 0600, found {mode}")
 
 
-def render_digest(items: list[QueueItem], demoted_today: int = 0) -> str:
-    """Render the one-push digest: header + ready bucket + manual bucket (D2)."""
+# -- status emoji (channel/state at-a-glance, own directive) ------------------
+_EMOJI_READY = "🟢"    # automatable, visible, pending_review
+_EMOJI_MANUAL = "✋"    # manual, visible, pending_review
+_EMOJI_HELD = "⏸️"      # held/demoted (not visible, or state == demoted)
+
+
+def render_digest(items: list[QueueItem], demoted_today: int = 0,
+                  run_date: str | None = None) -> str:
+    """Render the one-push Markdown digest: title + counts + ready/manual
+    buckets (D2). `run_date` is the run's own date when the caller has one;
+    defaults to today so the existing (unchanged) call site keeps working."""
     items = [i for i in items if not _is_closed(i)]
     ready = [i for i in items if _is_visible_review(i) and i.channel == "automatable"]
     manual = [i for i in items if _is_visible_review(i) and i.channel == "manual"]
     held = [i for i in items if not i.visible and i.state == "demoted"]
-    header = (f"{len(ready)} ready · {len(manual)} manual · "
-              f"{len(held)} held · {demoted_today} demoted today")
-    lines = [header]
-    _append_bucket(lines, "Ready (I can submit on your go):", ready, full=False)
-    _append_bucket(lines, "Manual / copy-paste (full material below):", manual,
-                   full=True)
+    date_str = run_date or date.today().isoformat()
+    lines = [
+        f"# 💼 JobHunt · {date_str}",
+        f"**{len(ready)} ready** · {len(manual)} manual · "
+        f"{len(held)} held · {demoted_today} demoted today",
+    ]
+    _append_bucket(lines, f"## {_EMOJI_READY} Ready (I can submit on your go)",
+                   ready, full=False)
+    _append_bucket(lines,
+                   f"## {_EMOJI_MANUAL} Manual / copy-paste (full material below)",
+                   manual, full=True)
     return "\n".join(lines)
 
 
 def render_item(item: QueueItem, full: bool = False) -> str:
+    """Render one posting as a Markdown block: emoji/id/title header, score
+    line, one labelled bullet per non-empty field, optional full copy-paste
+    material in a code fence, and a reply-by-ID hint. Every structured field
+    the payload carries is surfaced; an absent/empty field is simply omitted
+    (no blank labels) rather than invented.
+    """
     posting = item.payload["posting"]
     breakdown = item.payload["breakdown"]
-    lines = [f"[{item.item_id}] {posting['title']} @ {posting['company_slug']} "
-             f"· score {breakdown['total']}"]
-    if breakdown["matched"]:
-        lines.append("  matched: " + "; ".join(breakdown["matched"]))
-    if breakdown["weak"]:
-        lines.append("  weak: " + "; ".join(breakdown["weak"]))
-    lines.extend(f"  {warning}" for warning in breakdown["ats_warnings"])
-    if posting.get("unverified"):
-        lines.append("  unverified (re-verify against vendor endpoint)")
+    lines = [
+        f"### {_status_emoji(item)} `{item.item_id}` · {posting['title']}",
+        f"**{posting['company_slug']}** · score **{breakdown['total']}/100**",
+    ]
+    bullets = _render_bullets(posting, breakdown)
+    if bullets:
+        lines.append("")
+        lines.extend(bullets)
     if full and item.payload.get("material"):
-        lines.append("  --- material (copy-paste) ---")
-        lines.append(_indent(item.payload["material"]))
+        lines.append("")
+        lines.append("**Copy-paste material:**")
+        lines.append("```")
+        lines.append(item.payload["material"])
+        lines.append("```")
+    lines.append("")
+    lines.append(f"_Reply `{item.item_id} <instruction>` to act._")
     return "\n".join(lines)
 
 
+def _status_emoji(item: QueueItem) -> str:
+    if not item.visible or item.state == "demoted":
+        return _EMOJI_HELD
+    return _EMOJI_MANUAL if item.channel == "manual" else _EMOJI_READY
+
+
+def _render_bullets(posting: dict, breakdown: dict) -> list[str]:
+    bullets: list[str] = []
+    _add_bullet(bullets, "✅", "Match", "; ".join(breakdown["matched"]))
+    _add_bullet(bullets, "⚠️", "Weak/gaps", "; ".join(breakdown["weak"]))
+    _add_bullet(bullets, "📍", "Location", _location_text(posting))
+    _add_bullet(bullets, "💰", "Comp", posting.get("comp") or "")
+    _add_bullet(bullets, "🚩", "Flags", "; ".join(_flags(posting, breakdown)))
+    return bullets
+
+
+def _add_bullet(bullets: list[str], emoji: str, label: str, value: str) -> None:
+    if value:
+        bullets.append(f"- {emoji} **{label}:** {value}")
+
+
+def _location_text(posting: dict) -> str:
+    """Locations joined with the remote flag folded in (no empty label when
+    neither is present)."""
+    text = ", ".join(posting.get("locations") or [])
+    if posting.get("remote_flag"):
+        return f"{text} (Remote)" if text else "Remote"
+    return text
+
+
+def _flags(posting: dict, breakdown: dict) -> list[str]:
+    """ATS pre-check warnings plus the unverified marker, unified under one
+    bullet (both are "watch out before you act" signals)."""
+    flags = list(breakdown["ats_warnings"])
+    if posting.get("unverified"):
+        flags.append("unverified (re-verify against vendor endpoint)")
+    return flags
+
+
 def publish_digest(transport: Transport, topic: str, items: list[QueueItem],
-                  demoted_today: int = 0) -> str:
-    message = render_digest(items, demoted_today)
-    transport.publish(topic, message)
+                  demoted_today: int = 0, run_date: str | None = None,
+                  markdown: bool = True) -> str:
+    message = render_digest(items, demoted_today, run_date)
+    transport.publish(topic, message, markdown=markdown)
     return message
 
 
@@ -214,8 +297,6 @@ def _append_bucket(lines: list[str], heading: str, items: list[QueueItem],
         return
     lines.append("")
     lines.append(heading)
-    lines.extend(render_item(item, full=full) for item in items)
-
-
-def _indent(text: str) -> str:
-    return "\n".join(f"    {line}" for line in text.splitlines())
+    for item in items:
+        lines.append("")
+        lines.append(render_item(item, full=full))
