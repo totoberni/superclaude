@@ -61,6 +61,7 @@ run_mod() {
 run_mod mod_parse
 run_mod mod_gc
 run_mod mod_bootstrap_check
+run_mod mod_skm_session
 run_mod mod_context_check
 run_mod mod_nudge
 run_mod mod_thinking_nudge

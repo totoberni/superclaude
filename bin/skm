@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# skm: Session Key Manager for toto access.
+#
+# WHY: replaces the single long-lived ~/.ssh/totoserver key (which grants ssh login AND
+# passwordless root forever, to every agent) with per-session EPHEMERAL SSH CERTIFICATES.
+# Each agent session mints a fresh keypair, signs a short-TTL certificate with the CA, loads
+# it into a session-scoped ssh-agent, and shreds the on-disk private key. Credentials are
+# useless after the session: the cert validity window expires (sshd + pam_ssh_agent_auth both
+# reject it) AND the agent is killed + keys shredded on SessionEnd.
+#
+# The CA private key (~/.ssh/skm-ca) is the ONE long-lived secret; it never leaves WSL: only
+# the CA public key is a trust anchor on toto. A leaked session key is worthless within minutes.
+#
+# Subcommands:
+#   skm mint <session_id> <agent> [ttl_seconds]   mint+load a session cert (SessionStart)
+#   skm revoke <session_id>                        kill agent + shred keys (SessionEnd)
+#   skm sock                                       print the current live session agent socket
+#   skm status                                     list live sessions + expiries
+#   skm gc                                         reap dead/expired session dirs
+#   skm doctor                                     self-check (CA present, dirs, perms)
+set -euo pipefail
+
+CA="$HOME/.ssh/skm-ca"
+PRINCIPAL="toto"
+DEFAULT_TTL="${SKM_DEFAULT_TTL:-5400}"   # 90 min; orch hard-block is 53 min, meta is longer
+# BASE must be identical whether skm is called from a hook (minimal env, XDG_RUNTIME_DIR often
+# unset) or a wrapper (XDG set), or mint/resolve would use different dirs. Resolve deterministically
+# to the per-uid tmpfs when it exists (best place for ephemeral secrets), else fall back.
+_uid="$(id -u)"
+if [ -d "/run/user/$_uid" ] && [ -w "/run/user/$_uid" ]; then _RT="/run/user/$_uid"
+else _RT="${XDG_RUNTIME_DIR:-$HOME/.ssh}"; fi   # fallback: briefly touches disk with the pre-shred key (0600, shredded in step 4)
+_RT="${_RT%/}"
+BASE="$_RT/skm"
+CURRENT="$BASE/current"                  # symlink -> <session_id> dir
+umask 077
+
+TOTO_HOST="${SKM_TOTO_HOST:-toto}"
+
+die() { echo "skm: $*" >&2; exit 1; }
+
+_shred() { command -v shred >/dev/null 2>&1 && shred -u "$@" 2>/dev/null || rm -f "$@"; }
+
+# Register the session's ephemeral RAW pubkey for sudo, gated by the CA cert (helper self-verifies).
+# Login uses the session cert; `sudo skm-authorize` is NOPASSWD so no prior sudo access is needed.
+# Best-effort: a toto-down failure leaves the login cert usable; cmd_ensure retries registration
+# on the next `skm ensure` call (see the .registered marker below), so sudo recovers once toto is
+# reachable again instead of staying dead for the rest of the session.
+_toto_register() {
+  local dir="$1" sid="$2"
+  case "$sid" in *[!A-Za-z0-9_-]*) return 1;; esac
+  [ -f "$dir/id-cert.pub" ] && [ -f "$dir/id.pub" ] || return 1
+  { cat "$dir/id-cert.pub"; cat "$dir/id.pub"; } | \
+    SSH_AUTH_SOCK="$dir/agent.sock" timeout "${SKM_TOTO_TIMEOUT:-25}" \
+      ssh -o BatchMode=yes -o ConnectTimeout=12 "$TOTO_HOST" \
+      'sudo /usr/local/sbin/skm-authorize register '"$sid" >/dev/null 2>&1
+}
+_toto_remove() {
+  local dir="$1" sid="$2"
+  case "$sid" in *[!A-Za-z0-9_-]*) return 1;; esac
+  SSH_AUTH_SOCK="$dir/agent.sock" timeout "${SKM_TOTO_TIMEOUT:-20}" \
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$TOTO_HOST" \
+    'sudo /usr/local/sbin/skm-authorize remove '"$sid" >/dev/null 2>&1
+}
+
+cmd_mint() {
+  local sid="${1:-}" agent="${2:-unknown}" ttl="${3:-$DEFAULT_TTL}"
+  [ -n "$sid" ] || die "mint: session_id required"
+  [ -f "$CA" ] || die "mint: CA missing ($CA); run the one-time CA setup first"
+  mkdir -p "$BASE"; chmod 700 "$BASE"
+  local dir="$BASE/$sid"
+  # If a live session dir already exists, reuse it (idempotent SessionStart re-fire).
+  if [ -S "$dir/agent.sock" ] && [ -f "$dir/agent.env" ] && \
+     ( . "$dir/agent.env" >/dev/null 2>&1; kill -0 "${SSH_AGENT_PID:-0}" 2>/dev/null ); then
+    ln -sfn "$dir" "$CURRENT"
+    echo "$dir/agent.sock"; return 0
+  fi
+  rm -rf "$dir"; mkdir -p "$dir"; chmod 700 "$dir"
+  # 1. ephemeral keypair
+  ssh-keygen -q -t ed25519 -N '' -C "skm-$agent-$sid" -f "$dir/id"
+  # 2. sign a short-TTL certificate (validity window = the whole point)
+  local ttl_spec="+${ttl}s"
+  ssh-keygen -q -s "$CA" -I "skm-$agent-$sid" -n "$PRINCIPAL" -V "$ttl_spec" "$dir/id.pub"
+  # 3. session-scoped agent, load key+cert with matching TTL (agent auto-drops at expiry)
+  rm -f "$dir/agent.sock"
+  ssh-agent -a "$dir/agent.sock" > "$dir/agent.env"
+  chmod 600 "$dir/agent.env"
+  ( . "$dir/agent.env" >/dev/null; SSH_AUTH_SOCK="$dir/agent.sock" ssh-add -t "$ttl" "$dir/id" >/dev/null 2>&1 )
+  # Confirm the agent actually holds the key before going further: a silent ssh-add failure would
+  # otherwise hand back a live-looking but KEYLESS socket, and since wrappers only fall back to the
+  # legacy agent when skm returns nothing usable, a keyless socket here is a lockout.
+  if ! SSH_AUTH_SOCK="$dir/agent.sock" ssh-add -l >/dev/null 2>&1; then
+    ( . "$dir/agent.env" >/dev/null 2>&1; [ -n "${SSH_AGENT_PID:-}" ] && kill "$SSH_AGENT_PID" 2>/dev/null ) || true
+    rm -rf "$dir"
+    echo "skm: mint: ssh-add did not load the key, aborting session build" >&2
+    return 1
+  fi
+  # 4. shred the on-disk PRIVATE key: the agent now holds it in memory; disk copy not needed.
+  #    Keep id.pub / id-cert.pub (public) for inspection.
+  _shred "$dir/id"
+  # 5. record metadata + point 'current' at this session
+  { echo "agent=$agent"; echo "sid=$sid"; echo "ttl=$ttl";
+    echo "minted=$(date +%s)"; echo "expires=$(( $(date +%s) + ttl ))"; } > "$dir/meta"
+  chmod 600 "$dir/meta"
+  ln -sfn "$dir" "$CURRENT"
+  # Register the ephemeral raw key for sudo (best-effort; login cert already usable regardless).
+  # Marks $dir/.registered ONLY on success, so cmd_ensure can detect and backfill a deferred
+  # registration later instead of leaving sudo dead for the rest of the session.
+  if [ "${SKM_REGISTER_SUDO:-1}" = "1" ]; then
+    if _toto_register "$dir" "$sid"; then
+      touch "$dir/.registered"
+    else
+      echo "skm: warn: toto sudo registration deferred (toto unreachable?)" >&2
+    fi
+  fi
+  echo "$dir/agent.sock"
+}
+
+cmd_revoke() {
+  local sid="${1:-}"; [ -n "$sid" ] || die "revoke: session_id required"
+  local dir="$BASE/$sid"
+  [ -d "$dir" ] || { echo "skm: no session dir for $sid (already gone)"; return 0; }
+  # Deregister the sudo key while the session agent is still alive (best-effort; the toto prune
+  # timer removes it at cert expiry anyway if this fails, e.g. on a crash).
+  [ -S "$dir/agent.sock" ] && _toto_remove "$dir" "$sid" || true
+  if [ -f "$dir/agent.env" ]; then
+    ( . "$dir/agent.env" >/dev/null 2>&1; [ -n "${SSH_AGENT_PID:-}" ] && kill "$SSH_AGENT_PID" 2>/dev/null ) || true
+  fi
+  find "$dir" -type f -exec sh -c 'command -v shred >/dev/null 2>&1 && shred -u "$@" 2>/dev/null || rm -f "$@"' _ {} + 2>/dev/null || true
+  rm -rf "$dir"
+  # If 'current' pointed here, repoint it at another LIVE session dir if one exists (so other
+  # live sessions are not orphaned into an ad-hoc re-mint); else drop it (next mint repoints).
+  if [ "$(readlink "$CURRENT" 2>/dev/null)" = "$dir" ]; then
+    local other="" d
+    for d in "$BASE"/*/; do
+      [ -d "$d" ] || continue
+      [ -L "${d%/}" ] && continue
+      [ "${d%/}" = "$dir" ] && continue
+      if [ -f "$d/agent.env" ] && ( . "$d/agent.env" >/dev/null 2>&1; kill -0 "${SSH_AGENT_PID:-0}" 2>/dev/null ); then
+        other="${d%/}"; break
+      fi
+    done
+    if [ -n "$other" ]; then ln -sfn "$other" "$CURRENT"; else rm -f "$CURRENT"; fi
+  fi
+  echo "skm: revoked $sid"
+}
+
+# Resolve the current live session agent socket. Prefer an already-exported live SSH_AUTH_SOCK
+# that lives under our BASE; else the 'current' pointer; else nothing (caller falls back).
+cmd_sock() {
+  if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ] && \
+     case "$SSH_AUTH_SOCK" in "$BASE"/*) true;; *) false;; esac; then
+    echo "$SSH_AUTH_SOCK"; return 0
+  fi
+  local dir; dir="$(readlink "$CURRENT" 2>/dev/null || true)"
+  if [ -n "$dir" ] && [ -S "$dir/agent.sock" ] && [ -f "$dir/agent.env" ] && \
+     ( . "$dir/agent.env" >/dev/null 2>&1; kill -0 "${SSH_AGENT_PID:-0}" 2>/dev/null ) && \
+     ( SSH_AUTH_SOCK="$dir/agent.sock" ssh-add -l >/dev/null 2>&1 ); then
+    echo "$dir/agent.sock"; return 0
+  fi
+  return 1
+}
+
+# Return a live session socket, minting an ad-hoc one if none is live. This is the wrappers'
+# entry point: it guarantees a usable ephemeral cert even outside a hook-managed session (e.g. a
+# session that started before the SKM hook existed, or one whose cert TTL elapsed mid-session).
+cmd_ensure() {
+  local s; s="$(cmd_sock 2>/dev/null || true)"
+  if [ -n "$s" ]; then
+    # Backfill a deferred sudo registration (toto was unreachable at mint time) so sudo access
+    # recovers once toto is reachable again, instead of staying dead for the rest of the session.
+    local d; d="$(dirname "$s")"
+    if [ "${SKM_REGISTER_SUDO:-1}" = "1" ] && [ ! -f "$d/.registered" ]; then
+      _toto_register "$d" "$(basename "$d")" && touch "$d/.registered"
+    fi
+    echo "$s"; return 0
+  fi
+  cmd_mint "adhoc-$(date +%s)-$$" "${SKM_AGENT:-adhoc}" "${SKM_DEFAULT_TTL:-$DEFAULT_TTL}"
+}
+
+cmd_status() {
+  echo "SKM base: $BASE"
+  [ -f "$CA" ] && echo "CA: present ($CA)" || echo "CA: MISSING"
+  local now; now=$(date +%s)
+  local any=0
+  for d in "$BASE"/*/; do
+    [ -d "$d" ] || continue
+    [ -L "${d%/}" ] && continue          # skip the 'current' symlink (it aliases a real dir)
+    [ -f "$d/meta" ] || continue
+    any=1
+    # shellcheck disable=SC1090
+    ( . "$d/meta"
+      local alive="dead"
+      if [ -f "$d/agent.env" ] && ( . "$d/agent.env" >/dev/null 2>&1; kill -0 "${SSH_AGENT_PID:-0}" 2>/dev/null ); then alive="alive"; fi
+      local left=$(( expires - now ))
+      printf '  %-40s agent=%-14s %s  expires_in=%ss\n' "$sid" "$agent" "$alive" "$left" )
+  done
+  [ "$any" -eq 0 ] && echo "  (no sessions)"
+}
+
+cmd_gc() {
+  local now reaped=0
+  now=$(date +%s)
+  for d in "$BASE"/*/; do
+    [ -d "$d" ] || continue
+    [ -L "${d%/}" ] && continue          # skip the 'current' symlink
+    local sid; sid="$(basename "$d")"
+    local dead=0
+    if [ -f "$d/agent.env" ]; then
+      ( . "$d/agent.env" >/dev/null 2>&1; kill -0 "${SSH_AGENT_PID:-0}" 2>/dev/null ) || dead=1
+    else dead=1; fi
+    if [ -f "$d/meta" ]; then ( . "$d/meta"; [ "$now" -gt "$expires" ]; ) && dead=1; fi
+    if [ "$dead" -eq 1 ]; then cmd_revoke "$sid" >/dev/null 2>&1 && reaped=$((reaped+1)); fi
+  done
+  echo "skm gc: reaped $reaped dead/expired session(s)"
+}
+
+cmd_doctor() {
+  local ok=1
+  [ -f "$CA" ] && echo "[ok] CA present" || { echo "[FAIL] CA missing ($CA)"; ok=0; }
+  [ -f "$CA" ] && [ "$(stat -c '%a' "$CA")" = "600" ] && echo "[ok] CA perms 600" || { echo "[warn] CA perms not 600"; }
+  mkdir -p "$BASE"; chmod 700 "$BASE"
+  [ -d "$BASE" ] && echo "[ok] base dir $BASE" || { echo "[FAIL] base dir"; ok=0; }
+  command -v ssh-keygen >/dev/null && echo "[ok] ssh-keygen" || { echo "[FAIL] ssh-keygen"; ok=0; }
+  command -v ssh-agent  >/dev/null && echo "[ok] ssh-agent"  || { echo "[FAIL] ssh-agent";  ok=0; }
+  [ "$ok" -eq 1 ] && echo "SKM_DOCTOR_OK" || { echo "SKM_DOCTOR_FAIL"; return 1; }
+}
+
+case "${1:-}" in
+  mint)   shift; cmd_mint "$@";;
+  revoke) shift; cmd_revoke "$@";;
+  sock)   cmd_sock;;
+  ensure) cmd_ensure;;
+  status) cmd_status;;
+  gc)     cmd_gc;;
+  doctor) cmd_doctor;;
+  *) echo "usage: skm {mint <sid> <agent> [ttl]|revoke <sid>|sock|status|gc|doctor}" >&2; exit 1;;
+esac

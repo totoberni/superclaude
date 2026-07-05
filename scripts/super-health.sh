@@ -734,7 +734,7 @@ PY
     ss_award "$w" "$ok" "$lbl"
   }
 
-  local SK="$CLAUDE/skills" SC="$SCRIPTS" HK="$CLAUDE/hooks"
+  local SK="$CLAUDE/skills" SC="$SCRIPTS" HK="$CLAUDE/hooks" BIN="$CLAUDE/bin"
 
   # 1. render / viewer pipeline (the deleted swarm/subagent monitor is EXCLUDED).
   ss_exists 8 render "$SC/memory/render.py" "$SC/memory/viewer.py" "$SC/memory/comms_viewer.py"
@@ -909,11 +909,35 @@ PY
   #     double-count it (the run already covers a missing/broken script → 0), so it is
   #     deliberately absent from the subsystems denominator.
 
+  # 12. skm (Session Key Manager): per-session ephemeral toto SSH cert minting via
+  #     ~/.claude/bin/skm + skm-authorize (replaces the old long-lived totoserver
+  #     key). Structural: both scripts exist, are executable, and are bash -n clean.
+  #     Deep extra: `skm doctor` self-check (CA present, ssh-keygen/ssh-agent
+  #     available) must exit 0 and print SKM_DOCTOR_OK. READ-ONLY: doctor never
+  #     mints a session or registers/removes a toto sudo key.
+  ss_exists 6 skm "$BIN/skm" "$BIN/skm-authorize"
+  local skm_x=0
+  { [ -x "$BIN/skm" ] && [ -x "$BIN/skm-authorize" ]; } && skm_x=1
+  ss_award 2 "$skm_x" skm-exec
+  ss_bashcheck 2 skm-syntax "$BIN/skm"
+  ss_bashcheck 2 skm-authorize-syntax "$BIN/skm-authorize"
+  # skm-doctor is CA-dependent (it self-checks ~/.ssh/skm-ca): on a host where SKM was never
+  # set up (CI runner, fresh clone) that is legitimately N/A, not a failure, so it touches
+  # NEITHER AW nor PO there (same GRACEFUL-ABSENT convention as super-mem above).
+  local skmd_detail="N/A(no-CA)"
+  if [ "$deep" -eq 1 ] && [ -f "$HOME/.ssh/skm-ca" ]; then
+    local skmd_out skmd_rc skm_doctor=0
+    skmd_out=$(timeout 15 bash "$BIN/skm" doctor 2>&1); skmd_rc=$?
+    { [ "$skmd_rc" -eq 0 ] && printf '%s' "$skmd_out" | grep -q "SKM_DOCTOR_OK"; } && skm_doctor=1
+    ss_award 3 "$skm_doctor" skm-doctor
+    skmd_detail="ran"
+  fi
+
   # ── Roll up. Guard PO>0 (always true: structural checks are tier-independent). ──
   local sc=0
   [ "$PO" -gt 0 ] && sc=$(( AW * 100 / PO ))
   [ "$sc" -gt 100 ] && sc=100
-  echo "Subsystems detail (awarded=$AW/$PO): super-mem=$sm_detail;$detail"
+  echo "Subsystems detail (awarded=$AW/$PO): super-mem=$sm_detail;skm-doctor=$skmd_detail;$detail"
   echo "SCORE: $sc/100"
 }
 

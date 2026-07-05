@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# skm-authorize: toto-side root helper for per-session ephemeral SUDO keys.
+#
+# WHY: pam_ssh_agent_auth 0.10.4 cannot parse SSH certificates (only raw keys), so the sudo path
+# cannot use the CA cert directly. This helper registers a session's ephemeral RAW pubkey into the
+# pam authorized_keys file, but ONLY after cryptographically proving the caller holds a currently
+# valid CA-signed certificate for that same key. An attacker with a toto shell cannot forge such a
+# cert (the CA private key lives only on WSL), so a NOPASSWD sudoers rule scoped to this one command
+# is safe: possession of a valid short-TTL CA cert is the authorization.
+#
+# Registered lines self-expire: they carry an `skm-sess-<sid>-exp<epoch>` comment; `prune` (and a
+# systemd timer) drop expired lines, and `remove` drops them at session end. Nothing long-lived.
+#
+# Usage (stdin = cert line, then raw-pubkey line, for `register`):
+#   skm-authorize register <sid>   < <(printf '%s\n%s\n' "$CERT_LINE" "$RAWKEY_LINE")
+#   skm-authorize remove   <sid>
+#   skm-authorize prune
+#   skm-authorize list
+set -euo pipefail
+
+CA_PUB=/etc/ssh/skm-ca.pub
+AK=/etc/security/authorized_keys
+LOCK=/etc/security/.skm-authorize.lock
+PRINCIPAL_REQ=toto
+MARK_PREFIX="skm-sess-"
+
+die() { echo "skm-authorize: $*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "must run as root (via the scoped NOPASSWD sudoers rule)"
+[ -f "$CA_PUB" ] || die "CA public key missing at $CA_PUB"
+
+fp_of() { ssh-keygen -l -f "$1" 2>/dev/null | awk '{print $2}'; }   # -> SHA256:xxxx
+# Serialize register/remove/prune against each other: each opens its own fd 9 onto the SAME
+# lock file and blocks until exclusive access is granted (released automatically on exit).
+_lock_ak() { exec 9>"$LOCK"; flock 9; }
+
+cmd="${1:-}"; sid="${2:-}"
+
+# One trap covers every branch's temp artefacts (register's $tmp dir + each branch's $tmpak on
+# /etc/security); avoids a leaked authorized_keys.XXXXXX on a rare chown/chmod/mv failure.
+tmp=""; tmpak=""
+trap 'rm -rf "${tmp:-}" "${tmpak:-}" 2>/dev/null || true' EXIT
+
+case "$cmd" in
+  register)
+    [ -n "$sid" ] || die "register: <sid> required"
+    case "$sid" in *[!A-Za-z0-9_-]*) die "register: sid has illegal chars";; esac
+    tmp="$(mktemp -d)"
+    IFS= read -r cert_line || die "no cert on stdin"
+    IFS= read -r raw_line  || die "no raw pubkey on stdin"
+    printf '%s\n' "$cert_line" > "$tmp/cert.pub"
+    printf '%s\n' "$raw_line"  > "$tmp/raw.pub"
+
+    # Parse the certificate (rejects a non-cert / malformed blob outright).
+    L="$(ssh-keygen -L -f "$tmp/cert.pub" 2>/dev/null)" || die "not a valid certificate"
+    printf '%s\n' "$L" | grep -q "user certificate" || die "not a USER certificate"
+
+    # 1. Signing CA must be OUR CA (fingerprint compare, not string trust).
+    ca_fp_expected="$(fp_of "$CA_PUB")"
+    ca_fp_cert="$(printf '%s\n' "$L" | sed -n 's/.*Signing CA:.*SHA256:\([A-Za-z0-9+/=]*\).*/SHA256:\1/p' | head -1)"
+    [ -n "$ca_fp_cert" ] || die "cannot read Signing CA from cert"
+    [ "$ca_fp_cert" = "$ca_fp_expected" ] || die "cert not signed by our CA ($ca_fp_cert != $ca_fp_expected)"
+
+    # 2. Principal must include the required principal.
+    printf '%s\n' "$L" | awk '/Principals:/{f=1;next} /Critical|Extensions:/{f=0} f' | grep -qw "$PRINCIPAL_REQ" \
+      || printf '%s\n' "$L" | grep -q "Principals:.*$PRINCIPAL_REQ" \
+      || die "cert principal does not include $PRINCIPAL_REQ"
+
+    # 3. Validity window must contain 'now'.
+    vfrom="$(printf '%s\n' "$L" | sed -n 's/.*Valid: from \([0-9T:-]*\) to .*/\1/p' | head -1)"
+    vto="$(printf '%s\n' "$L"  | sed -n 's/.*Valid: from [0-9T:-]* to \([0-9T:-]*\).*/\1/p' | head -1)"
+    [ -n "$vto" ] || die "cannot read cert validity window"
+    now="$(date +%s)"
+    from_e="$(date -d "$vfrom" +%s 2>/dev/null)" || die "cannot parse cert validity start ($vfrom)"
+    to_e="$(date -d "$vto" +%s 2>/dev/null || echo 0)"
+    [ "$now" -ge "$from_e" ] || die "cert not yet valid"
+    [ "$now" -lt "$to_e" ]   || die "cert EXPIRED (validity ended $vto)"
+
+    # 4. The presented RAW pubkey must be the cert's underlying key (fingerprint identity).
+    raw_fp="$(fp_of "$tmp/raw.pub")"
+    cert_key_fp="$(fp_of "$tmp/cert.pub")"
+    [ -n "$raw_fp" ] || die "raw pubkey unreadable"
+    [ "$raw_fp" = "$cert_key_fp" ] || die "raw pubkey is not the cert's key ($raw_fp != $cert_key_fp)"
+
+    # All checks passed → register the raw key with an expiry comment. Idempotent (dedup by sid).
+    # Serialized against other register/remove/prune calls (flock) and written atomically on the
+    # same filesystem as AK (mktemp "${AK}.XXXXXX" + mv -f), so readers never see a partial file.
+    _lock_ak
+    [ -f "$AK" ] || : > "$AK"        # first-ever registration: treat an absent pam file as empty
+    tmpak="$(mktemp "${AK}.XXXXXX")"
+    # Capture grep's REAL exit (0=lines kept, 1=none matched; BOTH proceed to append). Using
+    # `cmd || rc=$?` avoids the `if ! cmd; then rc=$?` trap where $? is the negated pipeline
+    # status (always 0), which made this die on the benign empty/single-key steady state.
+    rc=0
+    grep -vF "${MARK_PREFIX}${sid}-exp" "$AK" > "$tmpak" || rc=$?
+    [ "$rc" -le 1 ] || die "register: failed to read $AK (grep exit $rc): aborting instead of clobbering existing keys"
+    raw_fields="$(awk '{print $1, $2}' "$tmp/raw.pub")"
+    printf '%s %s%s-exp%s\n' "$raw_fields" "$MARK_PREFIX" "$sid" "$to_e" >> "$tmpak"
+    chown root:root "$tmpak"; chmod 644 "$tmpak"
+    mv -f "$tmpak" "$AK"
+    echo "skm-authorize: registered $sid (expires $vto)"
+    ;;
+
+  remove)
+    [ -n "$sid" ] || die "remove: <sid> required"
+    case "$sid" in *[!A-Za-z0-9_-]*) die "remove: sid has illegal chars";; esac
+    _lock_ak
+    tmpak="$(mktemp "${AK}.XXXXXX")"
+    grep -vF "${MARK_PREFIX}${sid}-exp" "$AK" > "$tmpak" 2>/dev/null || true
+    chown root:root "$tmpak"; chmod 644 "$tmpak"
+    mv -f "$tmpak" "$AK"
+    echo "skm-authorize: removed $sid"
+    ;;
+
+  prune)
+    _lock_ak
+    now="$(date +%s)"; tmpak="$(mktemp "${AK}.XXXXXX")"; dropped=0
+    while IFS= read -r line; do
+      exp="$(printf '%s\n' "$line" | sed -n "s/.*${MARK_PREFIX}[A-Za-z0-9._-]*-exp\([0-9]*\).*/\1/p")"
+      if [ -n "$exp" ] && [ "$now" -ge "$exp" ]; then dropped=$((dropped+1)); continue; fi
+      printf '%s\n' "$line" >> "$tmpak"
+    done < "$AK"
+    chown root:root "$tmpak"; chmod 644 "$tmpak"
+    mv -f "$tmpak" "$AK"
+    echo "skm-authorize: pruned $dropped expired session key(s)"
+    ;;
+
+  list)
+    grep -n "$MARK_PREFIX" "$AK" 2>/dev/null || echo "(no skm session keys registered)"
+    ;;
+
+  *) die "usage: skm-authorize {register <sid>|remove <sid>|prune|list}";;
+esac

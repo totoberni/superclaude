@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tsh.example — TEMPLATE for the remote-exec shortcut (agent-forwarded ssh, no sudo).
+# tsh.example; TEMPLATE for the remote-exec shortcut (agent-forwarded ssh, no sudo).
 #
 # ADOPTION NOTES:
 #   1. Copy this file to bin/tsh (tsh is gitignored; only this .example ships in the public repo).
@@ -20,6 +20,12 @@ if [ "$(hostname)" = "PEERNAME" ]; then
 fi
 
 SOCK="$HOME/.ssh/agent.sock"
+# OPTIONAL SKM integration (see tsudo.example): prefer a per-session ephemeral-cert agent when
+# bin/skm is installed and ~/.ssh/skm/ENABLED exists. Lockout-safe; remove if not using SKM.
+if [ -f "$HOME/.ssh/skm/ENABLED" ]; then
+  _skm_sock="$(SKM_AGENT=wrapper "$HOME/.claude/bin/skm" ensure 2>/dev/null || true)"
+  [ -n "$_skm_sock" ] && SOCK="$_skm_sock"
+fi
 AGENT_OK=1
 { [ -S "$SOCK" ] && SSH_AUTH_SOCK="$SOCK" ssh-add -l >/dev/null 2>&1; } || AGENT_OK=0
 

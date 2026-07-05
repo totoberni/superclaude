@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tsudo.example — TEMPLATE for the remote-root shortcut (agent-keyed sudo via pam_ssh_agent_auth).
+# tsudo.example; TEMPLATE for the remote-root shortcut (agent-keyed sudo via pam_ssh_agent_auth).
 #
 # ADOPTION NOTES:
 #   1. Copy this file to bin/tsudo (tsudo is gitignored; only this .example ships in the public repo).
@@ -9,7 +9,7 @@
 #   3. Peer-side setup required: pam_ssh_agent_auth in /etc/pam.d/sudo +
 #      Defaults env_keep += "SSH_AUTH_SOCK" (see your infra notes).
 #   4. NEVER pass -n to the remote sudo: sudo -n bypasses pam_ssh_agent_auth.
-#   5. The forwarded agent is REQUIRED here (pam_ssh_agent_auth) — unlike tsh, a dead agent is
+#   5. The forwarded agent is REQUIRED here (pam_ssh_agent_auth); unlike tsh, a dead agent is
 #      NOT a fallback case: sudo would otherwise hit an unattended password prompt. Transient
 #      connect failures (timeout/refused/unreachable) are retried up to 3x with 2s/4s backoff;
 #      a clean non-zero exit from the REMOTE sudo command is never retried.
@@ -20,6 +20,14 @@ set -euo pipefail
 [ $# -eq 0 ] && { echo "usage: tsudo <command...>" >&2; exit 1; }
 
 SOCK="$HOME/.ssh/agent.sock"
+# OPTIONAL SKM (Session Key Manager) integration: if a per-session ephemeral-cert manager is
+# installed (bin/skm) and enabled (marker ~/.ssh/skm/ENABLED), prefer its short-TTL session agent
+# over the long-lived one. Lockout-safe: only overrides when the marker exists AND skm resolves a
+# live socket. Remove this block if you are not using SKM.
+if [ -f "$HOME/.ssh/skm/ENABLED" ]; then
+  _skm_sock="$(SKM_AGENT=wrapper "$HOME/.claude/bin/skm" ensure 2>/dev/null || true)"
+  [ -n "$_skm_sock" ] && SOCK="$_skm_sock"
+fi
 if ! { [ -S "$SOCK" ] && SSH_AUTH_SOCK="$SOCK" ssh-add -l >/dev/null 2>&1; }; then
   echo "tsudo: agent not ready. Fix: rm -f $SOCK; ssh-agent -a $SOCK; SSH_AUTH_SOCK=$SOCK ssh-add KEYFILE" >&2
   echo "tsudo: if the agent is already running, just: ssh-add KEYFILE" >&2

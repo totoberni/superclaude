@@ -759,7 +759,10 @@ test_matrix() {
       fail "M3 orphan dirs" "class/$CNAME: no mtm.md"
     fi
   done
-  # Row 3: instance dirs must have MEMORY.md
+  # Row 3: instance dirs must be populated. v3 is DB-backed: an instance dir holds individual
+  # per-memory <name>.md files (indexed by .memory.db), NOT a pre-v3 MEMORY.md index. So an
+  # orphan is a dir with NO .md files at all (matches this block's stated intent above), not one
+  # merely lacking the obsolete MEMORY.md filename.
   for idir in "$MEM_DIR"/instance/*/; do
     [ -d "$idir" ] || continue
     local INAME
@@ -767,9 +770,9 @@ test_matrix() {
     case "$INAME" in
       archive|_archive) continue ;;  # archive containers, not orch instances
     esac
-    if [ ! -f "$idir/MEMORY.md" ]; then
+    if ! ls "$idir"*.md >/dev/null 2>&1 && ! ls "$idir"*/*.md >/dev/null 2>&1; then
       ALL_POPULATED=false
-      fail "M3 orphan dirs" "instance/$INAME: no MEMORY.md"
+      fail "M3 orphan dirs" "instance/$INAME: empty (no .md memory files)"
     fi
   done
   [ "$ALL_POPULATED" = true ] && pass "M3 no orphan matrix directories"
@@ -795,6 +798,94 @@ test_matrix() {
 }
 
 # ═══════════════════════════════════════════════════
+# SK: SKM Tests (Session Key Manager -- toto-access ephemeral cert minting)
+# ═══════════════════════════════════════════════════
+test_skm() {
+  section "SKM Tests (SK)"
+
+  local SKM_BIN="$CLAUDE_DIR/bin/skm"
+  local SKM_AUTH_BIN="$CLAUDE_DIR/bin/skm-authorize"
+
+  # SK1-SK4 need a configured CA (~/.ssh/skm-ca). On a host where SKM was never set up
+  # (CI runner, fresh clone) there is no CA and `skm doctor`/`mint` legitimately die --
+  # gate on CA presence so those hosts SKIP (not FAIL), mirroring the ABSENT->SKIP
+  # convention used for the comms search-store (C4) above.
+  if [ ! -f "$HOME/.ssh/skm-ca" ]; then
+    warn "SK1-SK4 skm lifecycle" "SKM not configured on this host (no ~/.ssh/skm-ca) -- skipping"
+  else
+    # SK1: skm doctor -- CA present, deps available, exit 0, prints SKM_DOCTOR_OK.
+    local SK1_OUT SK1_RC
+    SK1_OUT=$(timeout 15 bash "$SKM_BIN" doctor 2>&1); SK1_RC=$?
+    if [ "$SK1_RC" -eq 0 ] && echo "$SK1_OUT" | grep -q "SKM_DOCTOR_OK"; then
+      pass "SK1 skm doctor (exit 0, SKM_DOCTOR_OK)"
+    else
+      fail "SK1 skm doctor" "rc=$SK1_RC out=$SK1_OUT"
+    fi
+
+    # SK2-SK4: local-only mint/sock/revoke lifecycle for a throwaway session.
+    # SKM_REGISTER_SUDO=0 skips the toto ssh round-trip entirely (no network/toto call).
+    # XDG_RUNTIME_DIR points at a scratch dir as best-effort isolation: skm prefers
+    # /run/user/$uid over XDG_RUNTIME_DIR whenever that path is writable, so on most
+    # dev machines the throwaway session still lands under the real BASE dir (cleaned
+    # up defensively below either way); the override only takes effect where
+    # /run/user/$uid is unavailable. A short 60s TTL keeps the throwaway session
+    # self-expiring even if cleanup below is somehow skipped.
+    local SK_SID="infratest-skm-$$-$(date +%s)"
+    local SK_SCRATCH
+    SK_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/infratest-skm.XXXXXX" 2>/dev/null)
+
+    local SK_MINT_RC
+    XDG_RUNTIME_DIR="$SK_SCRATCH" SKM_REGISTER_SUDO=0 timeout 15 bash "$SKM_BIN" mint "$SK_SID" infratest 60 >/dev/null 2>&1
+    SK_MINT_RC=$?
+
+    # SK2: skm sock -- returns a live unix socket path for the just-minted session.
+    local SK_SOCK
+    SK_SOCK=$(XDG_RUNTIME_DIR="$SK_SCRATCH" timeout 10 bash "$SKM_BIN" sock 2>/dev/null)
+    if [ "$SK_MINT_RC" -eq 0 ] && [ -n "$SK_SOCK" ] && [ -S "$SK_SOCK" ]; then
+      pass "SK2 skm mint + sock (throwaway session socket resolves)"
+    else
+      fail "SK2 skm mint + sock" "mint_rc=$SK_MINT_RC sock=$SK_SOCK"
+    fi
+
+    # SK3: the session agent holds the minted key (ssh-add -l exits 0 = 1+ identities).
+    local SK3_RC=2
+    if [ -n "$SK_SOCK" ] && [ -S "$SK_SOCK" ]; then
+      SSH_AUTH_SOCK="$SK_SOCK" ssh-add -l >/dev/null 2>&1
+      SK3_RC=$?
+    fi
+    if [ "$SK3_RC" -eq 0 ]; then
+      pass "SK3 skm session agent holds a key (ssh-add -l exit 0)"
+    else
+      fail "SK3 skm session agent" "ssh-add -l rc=$SK3_RC on socket=$SK_SOCK"
+    fi
+
+    # SK4: skm revoke -- kills the agent, shreds keys; socket must no longer exist.
+    XDG_RUNTIME_DIR="$SK_SCRATCH" timeout 15 bash "$SKM_BIN" revoke "$SK_SID" >/dev/null 2>&1
+    local SK4_RC=$?
+    local SK4_SOCK_GONE=true
+    [ -n "$SK_SOCK" ] && [ -S "$SK_SOCK" ] && SK4_SOCK_GONE=false
+    if [ "$SK4_RC" -eq 0 ] && [ "$SK4_SOCK_GONE" = true ]; then
+      pass "SK4 skm revoke (session agent + socket removed)"
+    else
+      fail "SK4 skm revoke" "rc=$SK4_RC socket_gone=$SK4_SOCK_GONE"
+    fi
+
+    # Cleanup: throwaway scratch dir + defensive removal from the real BASE (see note
+    # above on /run/user/$uid precedence).
+    rm -rf "$SK_SCRATCH" 2>/dev/null
+    rm -rf "/run/user/$(id -u)/skm/$SK_SID" 2>/dev/null
+  fi
+
+  # SK5: skm-authorize -- bash -n clean. Root-only toto-side helper; never executed here.
+  # Always runs regardless of CA presence (pure syntax check, no toto/CA dependency).
+  if bash -n "$SKM_AUTH_BIN" 2>/dev/null; then
+    pass "SK5 skm-authorize bash -n clean"
+  else
+    fail "SK5 skm-authorize" "bash -n failed"
+  fi
+}
+
+# ═══════════════════════════════════════════════════
 # Run selected tests
 # ═══════════════════════════════════════════════════
 
@@ -812,9 +903,10 @@ elif [ -n "$COMPONENT" ]; then
     rules|rule|R)       test_rules ;;
     comms|C)            test_comms ;;
     matrix|memory|M)    test_matrix ;;
+    skm|SK)             test_skm ;;
     *)
       echo "Unknown component: $COMPONENT"
-      echo "Valid: hooks, settings, agents, skills, rules, comms, matrix"
+      echo "Valid: hooks, settings, agents, skills, rules, comms, matrix, skm"
       exit 2
       ;;
   esac
@@ -827,6 +919,7 @@ else
   test_rules
   test_comms
   test_matrix
+  test_skm
 fi
 
 END_TIME=$(date +%s)

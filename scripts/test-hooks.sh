@@ -1428,6 +1428,34 @@ else
 fi
 rm -f "$P725_ENV_FILE" 2>/dev/null
 
+# P7.26: 55-skm-session.sh -- bash -n clean, sourcing defines mod_skm_session, and it
+#        is a safe no-op (no mint, exit 0) when ~/.ssh/skm/ENABLED is absent (the
+#        lockout-safe rollout gate). HOME is overridden to ISO_HOME (no .ssh/skm/
+#        ENABLED there) so this test can NEVER mint a real session or touch toto/ssh,
+#        regardless of whether the real machine has SKM enabled.
+SKM_MODULE="$HOOK_DIR/modules/55-skm-session.sh"
+(
+  bash -n "$SKM_MODULE" 2>/dev/null || exit 1
+  AGENT_NAME="meta"
+  SESSION_ID="iso726abc"
+  TIMER_DIR="$FAKE_TIMER_DIR"
+  HOME="$ISO_HOME"
+  source_module 55-skm-session.sh
+  declare -f mod_skm_session >/dev/null 2>&1 || exit 1
+  mod_skm_session
+  RC=$?
+  [ $RC -eq 0 ] || exit 1
+  [ -f "$FAKE_TIMER_DIR/iso726abc.skm-minted" ] && exit 1
+  exit 0
+) 2>/dev/null
+P726_RC=$?
+rm -f "$FAKE_TIMER_DIR"/iso726abc.* 2>/dev/null
+if [ $P726_RC -eq 0 ]; then
+  pass "P7.26 55-skm-session.sh (bash -n clean, mod_skm_session defined, safe no-op without ENABLED marker)"
+else
+  fail "P7.26 55-skm-session.sh" "syntax/definition/no-op check failed (rc=$P726_RC)"
+fi
+
 rm -f "$SCRATCH/iso.stdout" "$SCRATCH/iso.stderr" 2>/dev/null
 
 # ═══════════════════════════════════════════════════════

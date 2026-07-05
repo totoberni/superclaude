@@ -35,6 +35,13 @@ if [ -f "$TIMER_DIR/${SESSION_ID}.start" ]; then
   fi
 fi
 
+# SKM: revoke the session's ephemeral toto credential (deregister sudo key + kill agent + shred).
+# Backgrounded + best-effort: the toto prune timer and cert TTL are the backstops if this does not
+# finish within the SessionEnd window. No-op unless SKM is enabled.
+if [ -f "$HOME/.ssh/skm/ENABLED" ] && [ -x "$HOME/.claude/bin/skm" ]; then
+  ( "$HOME/.claude/bin/skm" revoke "$SESSION_ID" >/dev/null 2>&1 & ) 2>/dev/null
+fi
+
 # Delete all timer files for this session (lib.sh::rm_session_files handles
 # chmod + rm). For this session-id it removes every per-session sidecar:
 #   .start  .agent  .pid  .override  .calls  .tdd  .context-warned
