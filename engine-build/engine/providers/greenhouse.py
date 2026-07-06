@@ -171,27 +171,44 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     uploads: list[dict] = []
     filled_keys: set[str] = set()
     satisfied_by_sibling: set[str] = set()
+    # The TRUTHFUL, immediate sibling-satisfaction signal (racy-render
+    # hole-fix, 2026-07-06 gitlab/8503792002 full-fill run): a key lands
+    # here the moment `_fill_upload` confirms `el.files.length>=1` on the
+    # native input, via `engine.fill._upload_attached` with NO `confirm=`
+    # argument -- independent of Greenhouse's own (racy) React re-render.
+    # `filled_keys` stays the RENDER-CONFIRMED signal (gated on `confirm=`,
+    # used for the report's `uploads`/completeness); `file_attached_keys` is
+    # the separate, earlier "genuinely on the input" signal the `<name>_text`
+    # sibling check below is now based on, so a delayed or still-pending
+    # render can never force a paste-textarea to be (mis)driven.
+    file_attached_keys: set[str] = set()
 
     # Uploads FIRST, order-independent of the schema's own field ordering: a
     # `<name>_text` paste textarea's sibling `<name>` file field (hole-fix,
-    # BUG 3) must already be in `filled_keys` by the time the text-field pass
-    # below checks it, regardless of which one the schema lists first.
+    # BUG 3) must already be in `file_attached_keys` by the time the
+    # text-field pass below checks it, regardless of which one the schema
+    # lists first.
     upload_fields = [fv for fv in values.fields if _is_upload(fv)]
     other_fields = [fv for fv in values.fields if not _is_upload(fv)]
 
     for fv in upload_fields:
-        _fill_upload(page, fv, uploads, extra_skips, filled_keys)
+        _fill_upload(page, fv, uploads, extra_skips, filled_keys,
+                    file_attached_keys)
 
     # (2) + (3) drive + readback-gate every resolved non-upload field.
     for fv in other_fields:
         sibling_key = _TEXT_UPLOAD_SIBLINGS.get(fv.key)
-        if sibling_key is not None and sibling_key in filled_keys:
+        if sibling_key is not None and sibling_key in file_attached_keys:
             # Greenhouse's schema exposes BOTH the file field and its
             # paste-text alternative even though the LIVE form renders only
             # one (whichever input mode the org configured); the textarea
             # is simply ABSENT from the DOM when file mode is active, so
             # driving it always times out. The sibling file already carries
-            # the same document -- satisfied, never attempted.
+            # the same document (genuinely on the input, `file_attached_
+            # keys`) -- satisfied, never attempted, regardless of whether
+            # Greenhouse's own widget has rendered a visible confirmation
+            # yet (that render is `filled_keys`/`uploads`'s OWN separate
+            # gate, untouched by this decision).
             extra_skips.append(
                 (fv.key, f"satisfied by sibling file upload: {sibling_key}"))
             satisfied_by_sibling.add(fv.key)
@@ -379,19 +396,32 @@ _NATIVE_SELECT_TYPES = frozenset({"multi_value_multi_select"})
 
 def _fill_upload(page, fv, uploads: list[dict],
                  extra_skips: list[tuple[str, str]],
-                 filled_keys: set[str]) -> None:
+                 filled_keys: set[str],
+                 file_attached_keys: set[str]) -> None:
     """Attach a whitelisted asset via the reused `base._safe_upload` /
     `engine.fill._locate_file_input` (the real `<input type=file>` locator;
     the fieldmap's best-effort role=button hint never reaches it). A
-    successful upload counts as filled ONLY once BOTH the input's own
-    readback confirms a file actually attached AND Greenhouse's own rendered
-    widget shows it (`confirm=`, see `base.poll_upload_confirmed`): a live
-    probe proved the native FileList alone can be non-empty while
-    Greenhouse's React-driven widget never rendered the attach (HOSTILE
-    REVIEW #1, 2026-07-06 gitlab/8503792002 run), so `el.files.length` on its
-    own is a structural false positive here. This mirrors `fill._fill_upload`'s
-    contract otherwise exactly (this module drives the SAME primitives, not a
-    reimplementation of the attach-confirmation logic)."""
+    successful upload counts as filled (`filled_keys`/`uploads`) ONLY once
+    BOTH the input's own readback confirms a file actually attached AND
+    Greenhouse's own rendered widget shows it (`confirm=`, see `base.
+    poll_upload_confirmed`): a live probe proved the native FileList alone
+    can be non-empty while Greenhouse's React-driven widget never rendered
+    the attach (HOSTILE REVIEW #1, 2026-07-06 gitlab/8503792002 run), so
+    `el.files.length` on its own is a structural false positive for THAT
+    signal. This mirrors `fill._fill_upload`'s contract otherwise exactly
+    (this module drives the SAME primitives, not a reimplementation of the
+    attach-confirmation logic).
+
+    `file_attached_keys` (FIX 1, racy-render decoupling, 2026-07-06
+    gitlab/8503792002 full-fill run): the TRUTHFUL, immediate `el.files.
+    length>=1` signal alone -- `engine.fill._upload_attached(control)` with
+    NO `confirm=` argument, read right after `set_input_files` -- recorded
+    independently of whether the render-confirmed gate below succeeds. This
+    is the ONLY signal a `<name>_text` paste-textarea sibling is satisfied
+    by (see `fill()`'s `_TEXT_UPLOAD_SIBLINGS` branch): the render can lag
+    (or, under a busy full-fill load, not land within even the extended
+    poll window) while the file is already genuinely on the input, and the
+    textarea must never be driven in that state regardless."""
     from engine import fill as _fill
 
     control = _fill._locate_file_input(page, fv)
@@ -406,6 +436,8 @@ def _fill_upload(page, fv, uploads: list[dict],
     except Exception as exc:  # per-field upload error is fail-soft
         extra_skips.append((fv.key, f"upload-error: {exc}"))
         return
+    if _fill._upload_attached(control):
+        file_attached_keys.add(fv.key)
     confirm = lambda: base.poll_upload_confirmed(page, control, str(fv.value))
     if not _fill._upload_attached(control, confirm=confirm):
         extra_skips.append((fv.key, "upload did not attach (readback)"))

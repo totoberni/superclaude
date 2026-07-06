@@ -198,18 +198,29 @@ _NO_OVERRIDE = object()
 class _FakeFileInput:
     """`rendered_confirmed` models whether GREENHOUSE'S OWN widget renders the
     attach (filename text + a remove control), independently of the native
-    `input_value()` readback: the live probe (HOSTILE REVIEW #1, 2026-07-06
-    gitlab/8503792002 run) proved the native FileList can be genuinely
-    non-empty while the widget NEVER renders it, so these two signals are
-    modelled as INDEPENDENT here on purpose. Defaults True (the widget
-    confirms once uploaded) -- pass `rendered_confirmed=False` to reproduce
-    the false-positive bug (file attached, widget never shows it)."""
+    `input_value()`/`evaluate()` (`el.files.length`) readback: the live probe
+    (HOSTILE REVIEW #1, 2026-07-06 gitlab/8503792002 run) proved the native
+    FileList can be genuinely non-empty while the widget NEVER renders it, so
+    these two signals are modelled as INDEPENDENT here on purpose. Defaults
+    True (the widget confirms once uploaded) -- pass `rendered_confirmed=
+    False` to reproduce the false-positive bug (file attached, widget never
+    shows it) / the racy-render hole-fix (FIX 1/2, file attached, widget not
+    YET shown).
+
+    `attach_succeeds` (FIX 1 negative case) models the native FileList's OWN
+    truthful state: True (default) means `set_input_files` genuinely lands
+    the file (`evaluate()`/`input_value()` both read it back); False means
+    the attach never reaches the native input at all (e.g. a widget that
+    swallows the file before it lands) -- `el.files.length` stays 0 despite
+    the call, so a sibling paste-textarea must NOT be satisfied."""
 
     def __init__(self, *, id=None, name=None, accept=None,
-                 readback=_NO_OVERRIDE, rendered_confirmed=True):
+                 readback=_NO_OVERRIDE, rendered_confirmed=True,
+                 attach_succeeds=True):
         self._attrs = {"id": id, "name": name, "accept": accept}
         self._readback_override = readback
         self._rendered_confirmed = rendered_confirmed
+        self._attach_succeeds = attach_succeeds
         self.set_input_files_calls = 0
         self.uploaded = None
         self.clicks = 0
@@ -219,7 +230,8 @@ class _FakeFileInput:
 
     def set_input_files(self, files):
         self.set_input_files_calls += 1
-        self.uploaded = files
+        if self._attach_succeeds:
+            self.uploaded = files
 
     def click(self):
         self.clicks += 1
@@ -228,6 +240,15 @@ class _FakeFileInput:
         if self._readback_override is not _NO_OVERRIDE:
             return self._readback_override
         return self.uploaded or ""
+
+    def evaluate(self, script):
+        """Models `el.files.length`: the native FileList holds the file
+        IMMEDIATELY once `set_input_files` genuinely lands it, INDEPENDENT of
+        whether Greenhouse's own React widget has rendered a confirmation
+        yet (`_rendered_confirmed` models that separate, later signal).
+        `script` is ignored -- this fake only ever receives the one
+        `el.files.length` probe `engine.fill._upload_attached` sends."""
+        return 1 if self.uploaded else 0
 
     def locator(self, css):
         """The widget's own immediate container (`xpath=..`, mirroring
@@ -666,6 +687,107 @@ def test_fill_reconfirms_late_rendered_upload_at_end_of_fill(
     assert report.required_unfilled == []
     assert report.complete is True
     assert report.caption().endswith("COMPLETE")
+
+
+def test_fill_resume_text_satisfied_by_sibling_when_render_not_yet_confirmed(
+        tmp_path):
+    # FIX 1 (racy-render decoupling, 2026-07-06 gitlab/8503792002 full-fill
+    # run): Greenhouse's own rendered confirmation (filename text + a remove
+    # control) is RACY under a busy full-fill load and can still be pending
+    # at end-of-fill even though the file genuinely landed on the native
+    # input (el.files.length>=1) immediately. `resume_text` must be treated
+    # satisfied-by-sibling from that TRUTHFUL, immediate signal alone --
+    # never driven -- regardless of whether `resume`'s own render-confirmed
+    # promotion (a SEPARATE gate, `filled_keys`/`uploads`) ever lands within
+    # this fill. `rendered_confirmed=False` models the render never
+    # appearing for the whole (now-extended, FIX 2) poll window.
+    fieldmap = FieldMap(vendor="greenhouse", posting_id="7701099",
+                        captured_at=_PINNED, fields=[
+        Field(key="resume", label="Resume/CV", type="input_file",
+             required=True, options=[], source="questions",
+             locator=Locator(role="button", name="Resume/CV")),
+        Field(key="resume_text", label="Resume/CV", type="textarea",
+             required=True, options=[], source="questions",
+             locator=Locator(role="textbox", name="Resume/CV")),
+    ])
+    ssot = SSOT({
+        "identity": {"name": "Test Candidate",
+                     "email": "test.candidate@example.invalid"},
+        "canned_answers": {
+            "resume_text": "Test Candidate, platform engineer.",
+        },
+    })
+    profile = profile_from_real_ssot(ssot)
+    assets = _assets(tmp_path)
+    values = greenhouse.resolve_values(fieldmap, ssot, profile, assets=assets)
+    page = _FakeGreenhousePage(
+        file_inputs=[_FakeFileInput(id="resume",
+                                    accept=".pdf,.doc,.docx,.txt,.rtf",
+                                    rendered_confirmed=False)],
+        sweep_required_labels=("Resume/CV",))
+
+    report = greenhouse.fill(page, fieldmap, values)
+
+    # Never driven: resume_text's own (textbox, "Resume/CV") control was
+    # never looked up, satisfied purely by the file genuinely being on the
+    # sibling input -- NOT by Greenhouse's (still-pending) render.
+    assert ("role", "textbox", "Resume/CV") not in page.requested
+    assert dict(report.skipped)["resume_text"] == (
+        "satisfied by sibling file upload: resume")
+    assert not any(g["key"] == "resume_text"
+                  for g in report.required_unfilled)
+    # resume itself: the render never confirmed within this fill, so it
+    # HONESTLY stays a required gap (never falsely promoted) -- proving this
+    # fix never unconditionally marks anything filled.
+    assert not any(u["key"] == "resume" for u in report.uploads)
+    assert any(g["key"] == "resume" for g in report.required_unfilled)
+
+
+def test_fill_resume_text_not_satisfied_when_sibling_file_genuinely_absent(
+        tmp_path):
+    # Negative case (truthfulness half of FIX 1): the native FileList
+    # genuinely NEVER holds the file (el.files.length stays 0 despite the
+    # upload attempt, e.g. a widget that swallows it before it reaches the
+    # input) -- resume_text must NOT be treated satisfied-by-sibling, and is
+    # driven normally like any other required text field.
+    fieldmap = FieldMap(vendor="greenhouse", posting_id="7701099",
+                        captured_at=_PINNED, fields=[
+        Field(key="resume", label="Resume/CV", type="input_file",
+             required=True, options=[], source="questions",
+             locator=Locator(role="button", name="Resume/CV")),
+        Field(key="resume_text", label="Resume/CV", type="textarea",
+             required=True, options=[], source="questions",
+             locator=Locator(role="textbox", name="Resume/CV")),
+    ])
+    ssot = SSOT({
+        "identity": {"name": "Test Candidate",
+                     "email": "test.candidate@example.invalid"},
+        "canned_answers": {
+            "resume_text": "Test Candidate, platform engineer.",
+        },
+    })
+    profile = profile_from_real_ssot(ssot)
+    assets = _assets(tmp_path)
+    values = greenhouse.resolve_values(fieldmap, ssot, profile, assets=assets)
+    page = _FakeGreenhousePage(
+        file_inputs=[_FakeFileInput(id="resume",
+                                    accept=".pdf,.doc,.docx,.txt,.rtf",
+                                    attach_succeeds=False)],
+        sweep_required_labels=("Resume/CV",))
+    page.controls[("textbox", "Resume/CV")] = _FakeTextLocator()
+
+    report = greenhouse.fill(page, fieldmap, values)
+
+    # Driven normally: the sibling file genuinely never attached
+    # (el.files.length==0), so resume_text is NOT satisfied-by-sibling.
+    assert ("role", "textbox", "Resume/CV") in page.requested
+    assert page.controls[("textbox", "Resume/CV")].input_value() == (
+        "Test Candidate, platform engineer.")
+    assert "resume_text" not in dict(report.skipped)
+    assert not any(g["key"] == "resume_text"
+                  for g in report.required_unfilled)
+    # resume itself: genuinely never attached -> an honest required gap.
+    assert any(g["key"] == "resume" for g in report.required_unfilled)
 
 
 def test_fill_missing_required_ssot_answer_forces_not_complete(tmp_path):

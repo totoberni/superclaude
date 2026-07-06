@@ -676,28 +676,64 @@ def _wait_timeout(page, ms: int) -> None:
 _REMOVE_CONTROL_NAME_RE = re.compile(r"remove|delete|clear", re.I)
 
 
-def poll_upload_confirmed(page, control, filename: str, *,
-                          poll_ms: tuple[int, ...] = (500, 1500, 3000, 5000, 7500)) -> bool:
+def poll_upload_confirmed(
+        page, control, filename: str, *,
+        poll_ms: tuple[int, ...] = (500, 1500, 3000, 5000, 7500, 10000,
+                                    12500, 15000)) -> bool:
     """Poll `_upload_widget_confirmed` at the given cumulative offsets
     (mirrors `_poll_single_value`'s pattern): True as soon as it confirms, up
-    to ~7.5s total. LIVE-DOM finding (2026-07-06 gitlab full-fill): greenhouse's
+    to ~15s total. LIVE-DOM finding (2026-07-06 gitlab full-fill): greenhouse's
     React re-render of the attached-file widget completes within ~1s when the
     page is IDLE (an isolated upload) but takes several seconds MID-FILL (the
-    React queue is busy processing the other field updates), so a ~1.5s window
-    reported a structural FALSE NEGATIVE -- the CV was genuinely attached and
-    rendered by end-of-fill (get_by_text(stem) count 1) yet the too-short poll
-    missed it, reporting the required upload as unfilled. Returns as soon as it
-    confirms, so the longer tail only costs time on a genuine non-attach. Never
-    raises: any DOM-query failure along the way reads as NOT confirmed
-    (never-attached bias, mirroring `_upload_attached`'s own philosophy)."""
+    React queue is busy processing the other field updates), so the original
+    ~7.5s window still reported a structural FALSE NEGATIVE under a busy
+    full-fill load -- the CV was genuinely attached and rendered by end-of-fill
+    (get_by_text(stem) count 1) yet the too-short poll missed it, reporting
+    the required upload as unfilled. The window is extended to ~15s
+    cumulative (FIX 2, same finding) AND `_settle_event_loop` is given a
+    chance to nudge the page's own event loop / render queue BETWEEN every
+    poll, so a genuinely-attached file's render is caught rather than missed
+    even when React is busy driving the rest of a full fill. Returns as soon
+    as it confirms, so the longer tail only costs time on a genuine
+    non-attach. Never raises: any DOM-query failure along the way reads as
+    NOT confirmed (never-attached bias, mirroring `_upload_attached`'s own
+    philosophy) -- `_settle_event_loop` can only help a positive confirm land
+    sooner, it can never manufacture one, so a genuinely non-attached file
+    still exhausts the full window and returns False."""
     elapsed = 0
     raw_stem = Path(filename).stem if filename else ""
     for mark in poll_ms:
         _wait_timeout(page, mark - elapsed)
         elapsed = mark
+        _settle_event_loop(page)
         if _upload_widget_confirmed(control, filename) or _page_shows_filename(page, raw_stem):
             return True
     return False
+
+
+def _settle_event_loop(page) -> None:
+    """Best-effort nudge for the page's own JS event loop / React render
+    queue to flush BETWEEN polls (FIX 2, 2026-07-06 gitlab/8503792002
+    full-fill run): tries `page.wait_for_load_state("networkidle")` first
+    (Playwright's own idle signal -- yields until no in-flight network
+    activity), falling back to a cheap `page.evaluate("1")` round-trip
+    (forces a JS event-loop tick) when networkidle is unavailable or raises.
+    Never raises and never blocks the poll on a genuinely non-attached file:
+    any failure here is swallowed and the poll simply proceeds to its own DOM
+    check on schedule."""
+    waiter = getattr(page, "wait_for_load_state", None)
+    if callable(waiter):
+        try:
+            waiter("networkidle")
+            return
+        except Exception:
+            pass
+    evaluator = getattr(page, "evaluate", None)
+    if callable(evaluator):
+        try:
+            evaluator("1")
+        except Exception:
+            pass
 
 
 def _page_shows_filename(page, raw_stem: str) -> bool:

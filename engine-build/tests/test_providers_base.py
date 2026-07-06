@@ -727,6 +727,128 @@ def test_select_react_combobox_reports_not_landed_on_readback_miss():
     assert page.combo.pressed == ["Enter", "Escape"]  # still dismissed cleanly
 
 
+# -- poll_upload_confirmed: extended window + between-poll event-loop settle ---
+# (FIX 2, 2026-07-06 gitlab/8503792002 racy-render hole-fix)
+
+
+class _FakeUploadRoleQuery:
+    def __init__(self, present: bool):
+        self._present = present
+
+    def count(self):
+        return 1 if self._present else 0
+
+
+class _FakeUploadContainer:
+    """The file input's own immediate container (`xpath=..`): models
+    Greenhouse's rendered attach-confirmation (filename text) becoming
+    visible only once `reveal_at_call` polls have happened (never, when
+    `reveal_at_call` is None) -- mirrors test_providers_greenhouse.py's
+    `_FakeUploadWidgetContainer`, but with the reveal TIMING under direct
+    test control instead of a fixed True/False."""
+
+    def __init__(self, stem: str, *, reveal_at_call=None):
+        self._stem = stem
+        self._reveal_at_call = reveal_at_call
+        self._calls = 0
+
+    def _revealed(self) -> bool:
+        self._calls += 1
+        return (self._reveal_at_call is not None
+                and self._calls >= self._reveal_at_call)
+
+    def inner_text(self):
+        return self._stem if self._revealed() else ""
+
+    def get_by_role(self, role, name=None):
+        return _FakeUploadRoleQuery(False)  # text alone confirms in this fake
+
+
+class _FakeUploadControl:
+    def __init__(self, container):
+        self._container = container
+
+    def locator(self, css):
+        assert css == "xpath=.."
+        return self._container
+
+
+class _FakeUploadPage:
+    def __init__(self):
+        self.timeouts = []
+
+    def wait_for_timeout(self, ms):
+        self.timeouts.append(ms)
+
+
+def test_poll_upload_confirmed_true_once_render_appears_within_extended_window():
+    # LIVE-DOM finding (2026-07-06 gitlab full-fill): the render can lag well
+    # past the OLD ~7.5s cumulative window under a busy full-fill load.
+    # reveal_at_call=6 means the widget only renders on the 6th poll --
+    # PAST where the old (5-mark, ~7.5s) window would already have given up.
+    container = _FakeUploadContainer("cv-ats", reveal_at_call=6)
+    control = _FakeUploadControl(container)
+    page = _FakeUploadPage()
+
+    confirmed = base.poll_upload_confirmed(page, control, "cv-ats.pdf")
+
+    assert confirmed is True
+    assert sum(page.timeouts) > 7500       # window is genuinely extended
+    assert sum(page.timeouts) <= 15000      # and still bounded (~15s cap)
+
+
+def test_poll_upload_confirmed_false_when_render_never_appears():
+    # Never-attached bias preserved: a genuinely non-attached (or never-
+    # rendered) file exhausts the WHOLE extended window and still reports
+    # False, never a false positive.
+    container = _FakeUploadContainer("cv-ats", reveal_at_call=None)
+    control = _FakeUploadControl(container)
+    page = _FakeUploadPage()
+
+    confirmed = base.poll_upload_confirmed(page, control, "cv-ats.pdf")
+
+    assert confirmed is False
+    assert sum(page.timeouts) == 15000
+
+
+class _FakeSettlePageNetworkIdle:
+    def __init__(self):
+        self.calls = []
+
+    def wait_for_load_state(self, state):
+        self.calls.append(state)
+
+
+class _FakeSettlePageRaisingNetworkIdle:
+    def __init__(self):
+        self.load_state_calls = []
+        self.evaluate_calls = []
+
+    def wait_for_load_state(self, state):
+        self.load_state_calls.append(state)
+        raise RuntimeError("no such wait")
+
+    def evaluate(self, script):
+        self.evaluate_calls.append(script)
+
+
+def test_settle_event_loop_prefers_networkidle_when_available():
+    page = _FakeSettlePageNetworkIdle()
+    base._settle_event_loop(page)
+    assert page.calls == ["networkidle"]
+
+
+def test_settle_event_loop_falls_back_to_evaluate_when_networkidle_raises():
+    page = _FakeSettlePageRaisingNetworkIdle()
+    base._settle_event_loop(page)
+    assert page.load_state_calls == ["networkidle"]
+    assert page.evaluate_calls == ["1"]
+
+
+def test_settle_event_loop_never_raises_with_neither_method():
+    base._settle_event_loop(object())  # no wait_for_load_state, no evaluate
+
+
 # -- fill-primitive re-export: call-time lookup preserves the monkeypatch seam --
 
 
