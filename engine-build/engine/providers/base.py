@@ -338,12 +338,36 @@ def type_human(locator, text, *, min_delay: float = 60, max_delay: float = 180):
     delay in `[min_delay, max_delay]` ms per character. NEVER `locator.fill()` and
     NEVER any JS injection: reCAPTCHA v3 scores an instant value-set as bot-like,
     so the whole point is a human keystroke cadence. `locator` is injected by the
-    caller (a real Playwright locator live; a fake in tests)."""
+    caller (a real Playwright locator live; a fake in tests).
+
+    A live Greenhouse run showed the FIRST character silently dropped
+    (`first_name` "Federico" landed as "ederico" in the post-fill DOM): typing
+    started before the control was focus-ready, so the leading keydown raced
+    the control's own focus-in handling and never registered. `_settle_focus`
+    clicks the control first (a real Playwright click already waits for
+    actionability), so every text field -- not just first_name -- is focused
+    and settled before any keystroke is sent."""
     if not text:
         return
+    _settle_focus(locator)
     for char in str(text):
         delay = random.uniform(min_delay, max_delay)
         locator.press_sequentially(char, delay=delay)
+
+
+def _settle_focus(locator) -> None:
+    """Click `locator` to force focus to land and settle before typing.
+
+    Never raises: a fake/partial locator with no `.click()` (or one whose
+    click fails) still falls through to typing rather than crashing the
+    fill -- this is a best-effort settle, not a hard precondition."""
+    clicker = getattr(locator, "click", None)
+    if not callable(clicker):
+        return
+    try:
+        clicker()
+    except Exception:
+        pass
 
 
 # -- DOM-sweep completeness (HOLE-FIX d) ---------------------------------------
@@ -465,6 +489,30 @@ def _locator_text(locator) -> str:
 
 
 # -- react-select combobox driver (Greenhouse; W4-deferred) --------------------
+# LIVE-DOM FIX (2026-07-06, gitlab/8503792002 acceptance run): the driver used
+# to click `#react-select-{field_id}-input` to open the widget -- that id DOES
+# NOT EXIST on Greenhouse's react-select v5 markup, so every combobox timed out
+# before a single option could be picked. The ids Greenhouse's live DOM DOES
+# confirm are prefixed `react-select-{field_id}-` (e.g. `-placeholder`,
+# `-live-region`); the control itself is `div.select__control` (a build-hashed
+# class suffix, e.g. `remix-css-13cymwt-control`, so never matched by a full
+# class-string equality), containing `div.select__value-container` >
+# `div.select__placeholder` (the confirmed `-placeholder` id) and
+# `div.select__input-container` > the control's own `<input>`. The open menu is
+# `div.select__menu` > `div.select__option` children (option text = the visible
+# label). The driver below anchors on the CONFIRMED placeholder id (via
+# Playwright's `:has()` CSS extension) to reach the control, types into the
+# control's own input to filter, and clicks the `div.select__option` whose
+# NORMALIZED text (case/space-insensitive, `_normalize_name`) equals the wanted
+# value -- never a positional/first-match guess, so a partially-filtered list
+# with more than one row can never pick the wrong one.
+
+
+def _combobox_control_selector(field_id: str) -> str:
+    """CSS for the field's react-select control div, scoped by the ONE
+    per-field id Greenhouse's live DOM confirms exists (`-placeholder`),
+    never by the build-hashed control class alone."""
+    return f'div.select__control:has([id="react-select-{field_id}-placeholder"])'
 
 
 def select_react_combobox(page, field_id: str, option_text: str, *,
@@ -474,51 +522,83 @@ def select_react_combobox(page, field_id: str, option_text: str, *,
     """Drive one react-select combobox: open, filter, pick, and confirm the choice.
 
     Sequence (fresh locators at every step; react-select recycles nodes):
-      1. Click the combobox input to open it.
-      2. `type_human` the option text to filter the menu (never fill()).
-      3. Wait for a visible option in `#react-select-{field_id}-listbox`, click it.
-      4. Poll `.select__single-value` at +200/+500 ms to confirm the value landed.
-      5. Dismiss with Escape -- NEVER blur (a blur can re-open / clear the widget).
+      1. Click the field's control (scoped via `_combobox_control_selector`,
+         anchored on the confirmed `-placeholder` id) to open the menu.
+      2. `type_human` the option text into the control's own input to filter
+         the menu (never fill()) -- also the long-country-list path.
+      3. Find the OPEN menu's `div.select__option` whose normalized text
+         equals `option_text`; click it. No matching option renders -> skip
+         the click (never crash), landed reads False.
+      4. Poll `.select__single-value` (scoped to the field's control) at
+         +200/+500 ms to confirm the value landed.
+      5. Dismiss with Escape -- NEVER blur (a blur can re-open / clear the
+         widget).
 
-    Returns True iff the readback confirms the selection landed. The live-DOM
-    behaviour is fixture-validated in W5.2; the sequencing logic is unit-tested
-    now against a mocked page.
+    Returns True iff the readback confirms the selection landed.
     """
-    listbox_selector = f"#react-select-{field_id}-listbox"
+    control = _combobox_control(page, field_id)
+    control.click()
+    combo_input = _combobox_input(page, field_id)
+    type_human(combo_input, option_text, min_delay=min_delay, max_delay=max_delay)
 
-    _combobox_input(page, field_id).click()
-    type_human(_combobox_input(page, field_id), option_text,
-               min_delay=min_delay, max_delay=max_delay)
-
-    option = _visible_option(page, listbox_selector, option_text)
-    _wait_visible(option, wait_timeout)
-    option.click()
+    option = _visible_option(page, option_text, wait_timeout)
+    if option is not None:
+        option.click()
 
     landed = _poll_single_value(page, field_id, option_text, poll_ms)
     # Escape dismisses the still-open menu without a blur.
-    _combobox_input(page, field_id).press("Escape")
+    combo_input.press("Escape")
     return landed
 
 
+def _combobox_control(page, field_id: str):
+    """A FRESH locator for the field's react-select control div."""
+    return page.locator(_combobox_control_selector(field_id))
+
+
 def _combobox_input(page, field_id: str):
-    """A FRESH locator for the combobox text input (react-select recycles it)."""
-    return page.locator(f"#react-select-{field_id}-input")
+    """A FRESH locator for the control's own text input (there is exactly one
+    per control; react-select recycles the node, so this is re-resolved on
+    every call rather than cached)."""
+    return _combobox_control(page, field_id).locator("input")
 
 
-def _visible_option(page, listbox_selector: str, option_text: str):
-    """A FRESH locator for the matching option inside the open listbox."""
-    options = page.locator(f"{listbox_selector} [role='option']")
-    filterer = getattr(options, "filter", None)
-    if callable(filterer):
-        options = filterer(has_text=option_text)
-    first = getattr(options, "first", None)
-    return first if first is not None else options
+def _visible_option(page, option_text: str, wait_timeout: int):
+    """The OPEN menu's `div.select__option` whose normalized text equals
+    `option_text` (case/space-insensitive, `_normalize_name`), or None when
+    nothing matches -- never a positional fallback (picking the wrong option
+    silently would be worse than a clean miss). React-select renders the menu
+    page-wide (not necessarily nested under the control), so options are
+    matched page-wide; only one field's menu is open at a time in this
+    sequential driver. Waits up to `wait_timeout` for at least one option to
+    render (the filtered menu can take a render tick to appear) before
+    scanning; never raises on a timeout, so a value with no matching option
+    is skipped, not crashed on."""
+    want = _normalize_name(option_text)
+    if not want:
+        return None
+    options = page.locator("div.select__menu div.select__option")
+    _wait_visible(_first(options), wait_timeout)
+    lister = getattr(options, "all", None)
+    for item in (lister() if callable(lister) else []):
+        if _normalize_name(_locator_text(item)) == want:
+            return item
+    return None
+
+
+def _first(locator):
+    first = getattr(locator, "first", None)
+    return first if first is not None else locator
 
 
 def _wait_visible(locator, timeout: int) -> None:
     waiter = getattr(locator, "wait_for", None)
-    if callable(waiter):
+    if not callable(waiter):
+        return
+    try:
         waiter(state="visible", timeout=timeout)
+    except Exception:
+        pass
 
 
 def _poll_single_value(page, field_id: str, option_text: str,
@@ -541,12 +621,22 @@ def _poll_single_value(page, field_id: str, option_text: str,
 
 
 def _single_value_text(page, field_id: str) -> str:
+    """The field's currently-shown `.select__single-value` text, scoped to
+    its own control. A control that no longer matches the `-placeholder`-
+    anchored scope (e.g. the placeholder unmounts once a value is selected --
+    UNVERIFIED live, flagged for the owner's live iteration) degrades to a
+    fast empty read via `.count()` rather than hanging on Playwright's
+    default actionability wait for a selector that will never resolve."""
     locator_fn = getattr(page, "locator", None)
     if locator_fn is None:
         return ""
     try:
-        return _locator_text(locator_fn(
-            f"#react-select-{field_id}-container .select__single-value"))
+        single_value = _combobox_control(page, field_id).locator(
+            ".select__single-value")
+        counter = getattr(single_value, "count", None)
+        if callable(counter) and counter() == 0:
+            return ""
+        return _locator_text(single_value)
     except Exception:
         return ""
 

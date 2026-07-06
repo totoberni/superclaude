@@ -1043,7 +1043,8 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
         # as before the fix -- there is no `f.required` to gate it on.
         fillable_total = filled + len(skip_reason)
         justified = sum(1 for reason in skip_reason.values()
-                        if _is_eeo_reason(reason) or _is_upload_skip(reason))
+                        if _is_eeo_reason(reason) or _is_upload_skip(reason)
+                        or _is_satisfied_by_sibling_upload(reason))
         return fillable_total, [], justified
 
     non_hidden = [f for f in fieldmap.fields if not _is_hidden_field(f)]
@@ -1054,6 +1055,8 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
             continue
         reason = skip_reason.get(f.key, "not filled")
         if _is_justified_eeo_skip(f, reason):
+            justified += 1
+        elif _is_satisfied_by_sibling_upload(reason):
             justified += 1
         elif _is_upload_skip(reason) and not f.required:
             justified += 1
@@ -1107,6 +1110,19 @@ def _is_justified_eeo_skip(f, reason: str) -> bool:
     return (_is_eeo_reason(reason)
             and (f.decline_allowed
                  or getattr(f, "section", "") in _DECLINE_SECTIONS))
+
+
+def _is_satisfied_by_sibling_upload(reason: str) -> bool:
+    """True iff the skip reason names a satisfied-by-sibling-file-upload
+    justification (Greenhouse's `resume_text`/`cover_letter_text` paste
+    textarea: the schema exposes it even when the LIVE form is configured
+    for file-upload instead of paste-text, so the textarea is simply ABSENT
+    from the DOM and never attempted -- the sibling `resume`/`cover_letter`
+    file field already carries the same document). Unlike `_is_upload_skip`,
+    this is justified REGARDLESS of requiredness: the requirement genuinely
+    IS satisfied by the equivalent uploaded artifact, not merely excused
+    because the field happens to be optional."""
+    return (reason or "").lower().startswith("satisfied by sibling file upload")
 
 
 def _is_upload_skip(reason: str) -> bool:

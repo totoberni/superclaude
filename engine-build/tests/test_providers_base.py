@@ -412,6 +412,10 @@ def test_never_send_handler_survives_request_without_post_data():
 class _FakeTypeLocator:
     def __init__(self):
         self.keys = []
+        self.clicked = 0
+
+    def click(self):
+        self.clicked += 1
 
     def press_sequentially(self, text, delay=None):
         self.keys.append((text, delay))
@@ -436,6 +440,80 @@ def test_type_human_empty_text_is_a_noop():
     loc = _FakeTypeLocator()
     base.type_human(loc, "")
     assert loc.keys == []
+    assert loc.clicked == 0
+
+
+def test_type_human_clicks_to_settle_focus_before_first_keystroke():
+    # BUG 2 fix: the control must be focused/settled BEFORE any keystroke is
+    # sent, so the first character is never dropped.
+    loc = _FakeTypeLocator()
+    base.type_human(loc, "Ab9")
+    assert loc.clicked == 1
+    assert [k[0] for k in loc.keys] == ["A", "b", "9"]
+
+
+class _FakeFocusSensitiveLocator:
+    """Simulates the LIVE BUG 2 DOM: the control's own implicit focus-on-
+    keystroke races the first keydown and drops it -- exactly the observed
+    symptom (`first_name` "Federico" landed as "ederico"). An explicit
+    `.click()` before typing (the fix) settles focus first, so every
+    keystroke after it lands."""
+
+    def __init__(self):
+        self.focused = False
+        self.value = ""
+
+    def click(self):
+        self.focused = True
+
+    def press_sequentially(self, ch, delay=None):
+        if not self.focused:
+            self.focused = True  # the live control focuses on first keydown
+            return               # ... but that very keydown itself is lost
+        self.value += ch
+
+    def input_value(self):
+        return self.value
+
+    def fill(self, *args, **kwargs):
+        raise AssertionError("type_human must never call fill()")
+
+
+def test_type_human_no_char_dropped_when_control_needed_focus_settle():
+    # Regression for the live acceptance-run bug: without the click-to-settle
+    # fix, this fake would land "ederico" (the "A" silently dropped).
+    loc = _FakeFocusSensitiveLocator()
+    base.type_human(loc, "Federico")
+    assert loc.input_value() == "Federico"
+
+
+def test_type_human_settle_focus_never_crashes_on_a_locator_with_no_click():
+    class _NoClickLocator:
+        def __init__(self):
+            self.keys = []
+
+        def press_sequentially(self, text, delay=None):
+            self.keys.append(text)
+
+    loc = _NoClickLocator()
+    base.type_human(loc, "Ab")
+    assert loc.keys == ["A", "b"]
+
+
+def test_type_human_settle_focus_swallows_a_raising_click():
+    class _RaisingClickLocator:
+        def __init__(self):
+            self.keys = []
+
+        def click(self):
+            raise RuntimeError("click failed")
+
+        def press_sequentially(self, text, delay=None):
+            self.keys.append(text)
+
+    loc = _RaisingClickLocator()
+    base.type_human(loc, "Ab")
+    assert loc.keys == ["A", "b"]
 
 
 # -- completeness diff + normalization -----------------------------------------
@@ -542,13 +620,51 @@ class _FakeComboInput:
         raise AssertionError("react-select driver must never blur (Escape only)")
 
 
-class _FakeOption:
-    def __init__(self):
-        self.waited = None
+class _FakeComboControl:
+    """The field's `div.select__control:has([id="react-select-<id>-
+    placeholder"])` container: `.click()` opens the menu; `.locator("input")`
+    reaches the control's own filter input; `.locator(".select__single-
+    value")` reaches the post-selection readback node. Mirrors
+    test_providers_greenhouse.py's `_FakeComboControl`."""
+
+    def __init__(self, combo_input, single_value):
+        self.clicked = 0
+        self._combo_input = combo_input
+        self._single_value = single_value
+
+    def click(self):
+        self.clicked += 1
+
+    def locator(self, css):
+        if css == "input":
+            return self._combo_input
+        if css.endswith(".select__single-value"):
+            return self._single_value
+        raise AssertionError(f"unexpected control-scoped locator: {css!r}")
+
+
+class _FakeReactOption:
+    """One `div.select__option` row: its visible text plus a click counter."""
+
+    def __init__(self, text):
+        self.text = text
         self.clicked = 0
 
-    def filter(self, **kwargs):
-        return self
+    def inner_text(self):
+        return self.text
+
+    def click(self):
+        self.clicked += 1
+
+
+class _FakeOptionMenu:
+    """The open menu's `div.select__menu div.select__option` locator SET:
+    `.first` backs the visibility wait, `.all()` backs the by-text scan the
+    driver performs to find the option matching the intended value."""
+
+    def __init__(self, options):
+        self._options = list(options)
+        self.waited = None
 
     @property
     def first(self):
@@ -557,8 +673,8 @@ class _FakeOption:
     def wait_for(self, **kwargs):
         self.waited = kwargs
 
-    def click(self):
-        self.clicked += 1
+    def all(self):
+        return self._options
 
 
 class _FakeSingleValue:
@@ -575,20 +691,20 @@ class _FakeSingleValue:
 
 
 class _FakeComboPage:
-    def __init__(self, *, field_id, single_value_reads):
+    def __init__(self, *, field_id, single_value_reads, option_texts=("Italy",)):
         self._field_id = field_id
         self.combo = _FakeComboInput()
-        self.option = _FakeOption()
         self._single_value = _FakeSingleValue(single_value_reads)
+        self.control = _FakeComboControl(self.combo, self._single_value)
+        self.options = [_FakeReactOption(text) for text in option_texts]
+        self.option_menu = _FakeOptionMenu(self.options)
         self.timeouts = []
 
     def locator(self, css):
-        if css == f"#react-select-{self._field_id}-input":
-            return self.combo
-        if css.startswith(f"#react-select-{self._field_id}-listbox"):
-            return self.option
-        if css.endswith(".select__single-value"):
-            return self._single_value
+        if css == base._combobox_control_selector(self._field_id):
+            return self.control
+        if css == "div.select__menu div.select__option":
+            return self.option_menu
         raise AssertionError(f"unexpected selector {css!r}")
 
     def wait_for_timeout(self, ms):
@@ -597,14 +713,19 @@ class _FakeComboPage:
 
 def test_select_react_combobox_happy_path_confirms_and_escapes():
     # Value rendered by the +200 ms read -> lands on the first poll mark.
-    page = _FakeComboPage(field_id="country", single_value_reads=["Italy"])
+    page = _FakeComboPage(field_id="country", single_value_reads=["Italy"],
+                          option_texts=("Italy", "France"))
     landed = base.select_react_combobox(page, "country", "Italy")
 
     assert landed is True
-    assert page.combo.clicked == 1                 # opened once
+    assert page.control.clicked == 1               # opened once
+    assert page.combo.clicked == 1                 # _settle_focus click
     assert page.combo.keys == ["I", "t", "a", "l", "y"]  # human-typed filter
-    assert page.option.waited == {"state": "visible", "timeout": 5000}
-    assert page.option.clicked == 1                # option chosen
+    assert page.option_menu.waited == {"state": "visible", "timeout": 5000}
+    picked = next(o for o in page.options if o.text == "Italy")
+    other = next(o for o in page.options if o.text != "Italy")
+    assert picked.clicked == 1                     # option chosen
+    assert other.clicked == 0                      # never a positional guess
     assert page.combo.pressed == ["Escape"]        # dismissed via Escape, no blur
     assert page.timeouts == [200]                  # confirmed at +200 ms
 

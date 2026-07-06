@@ -27,7 +27,7 @@ import engine.fill  # noqa: F401
 from engine.fieldmap import Field, FieldMap, Locator, parse_greenhouse
 from engine.fill import FillAssets, FillSafetyError
 from engine.profile_map import profile_from_real_ssot
-from engine.providers import greenhouse, protocol, registry
+from engine.providers import base, greenhouse, protocol, registry
 from engine.providers.registry import PROVIDERS
 from engine.ssot import SSOT
 
@@ -114,6 +114,11 @@ class _FakeTextLocator:
 
 
 class _FakeComboInput:
+    """The react-select control's OWN filter input: `_settle_focus` clicks it
+    once before typing (first-char-focus fix), `type_human` then types the
+    option text one keystroke at a time, and the driver finally dismisses the
+    still-open menu with Escape (never blur)."""
+
     def __init__(self):
         self.clicked = 0
         self.keys = []
@@ -135,13 +140,52 @@ class _FakeComboInput:
         raise AssertionError("react-select driver must never blur")
 
 
-class _FakeOption:
-    def __init__(self):
-        self.waited = None
+class _FakeComboControl:
+    """The field's `div.select__control:has([id="react-select-<id>-
+    placeholder"])` container: `.click()` opens the menu; `.locator("input")`
+    reaches the control's own filter input; `.locator(".select__single-
+    value")` reaches the post-selection readback node. One instance persists
+    for the field's whole lifetime (react-select recycles the node; a fresh
+    `page.locator(...)` call still resolves to this same fake element)."""
+
+    def __init__(self, combo_input, single_value):
+        self.clicked = 0
+        self._combo_input = combo_input
+        self._single_value = single_value
+
+    def click(self):
+        self.clicked += 1
+
+    def locator(self, css):
+        if css == "input":
+            return self._combo_input
+        if css.endswith(".select__single-value"):
+            return self._single_value
+        raise AssertionError(f"unexpected control-scoped locator: {css!r}")
+
+
+class _FakeReactOption:
+    """One `div.select__option` row: its visible text plus a click counter."""
+
+    def __init__(self, text):
+        self.text = text
         self.clicked = 0
 
-    def filter(self, **kwargs):
-        return self
+    def inner_text(self):
+        return self.text
+
+    def click(self):
+        self.clicked += 1
+
+
+class _FakeOptionMenu:
+    """The open menu's `div.select__menu div.select__option` locator SET:
+    `.first` backs the visibility wait, `.all()` backs the by-text scan the
+    driver performs to find the option matching the intended value."""
+
+    def __init__(self, options):
+        self._options = list(options)
+        self.waited = None
 
     @property
     def first(self):
@@ -150,8 +194,8 @@ class _FakeOption:
     def wait_for(self, **kwargs):
         self.waited = kwargs
 
-    def click(self):
-        self.clicked += 1
+    def all(self):
+        return self._options
 
 
 class _FakeSingleValue:
@@ -244,6 +288,7 @@ class _FakeGreenhousePage:
 
     def __init__(self, *, url="https://boards.greenhouse.io/fakeco/jobs/7701001",
                 combo_field_id="question_50001", combo_reads=("No",),
+                combo_options=("Yes", "No"),
                 file_inputs=None, sweep_required_labels=_REQUIRED_LABELS):
         self._url = url
         self.controls = {
@@ -251,9 +296,12 @@ class _FakeGreenhousePage:
             ("textbox", "Email"): _FakeTextLocator(),
         }
         self.combo_field_id = combo_field_id
-        self.combo = _FakeComboInput()
-        self.option = _FakeOption()
+        self.combo_input = _FakeComboInput()
         self.single_value = _FakeSingleValue(combo_reads)
+        self.combo_control = _FakeComboControl(self.combo_input,
+                                               self.single_value)
+        self.options = [_FakeReactOption(text) for text in combo_options]
+        self.option_menu = _FakeOptionMenu(self.options)
         self.timeouts = []
         self.file_inputs = (list(file_inputs) if file_inputs is not None else
                             [_FakeFileInput(id="resume",
@@ -291,13 +339,10 @@ class _FakeGreenhousePage:
         self.timeouts.append(ms)
 
     def locator(self, css):
-        if css == f"#react-select-{self.combo_field_id}-input":
-            return self.combo
-        if css.startswith(f"#react-select-{self.combo_field_id}-listbox"):
-            return self.option
-        if css.endswith(".select__single-value"):
-            return self.single_value
-        from engine.providers import base
+        if css == base._combobox_control_selector(self.combo_field_id):
+            return self.combo_control
+        if css == "div.select__menu div.select__option":
+            return self.option_menu
         if css == base._REQUIRED_CSS:
             return _FakeLocatorSet(self._sweep_required)
         if css == base._ASTERISK_CSS:
@@ -418,9 +463,19 @@ def test_fill_happy_path_all_required_land_is_complete(tmp_path):
         "Test"
     assert page.controls[("textbox", "Email")].input_value() == \
         "test.candidate@example.invalid"
-    assert page.combo.clicked == 1
-    assert page.option.clicked == 1
-    assert page.combo.pressed == ["Escape"]
+    # The react-select driver: click the control to open the menu, type_human
+    # the option text into the control's OWN input (settle-focus click first,
+    # per the first-char-drop fix), click the matching `select__option` row,
+    # then dismiss with Escape -- never the stale #react-select-<id>-input /
+    # -listbox ids the old driver used.
+    assert page.combo_control.clicked == 1
+    assert page.combo_input.clicked == 1              # _settle_focus click
+    assert "".join(page.combo_input.keys) == "No"
+    assert page.combo_input.pressed == ["Escape"]
+    picked = next(o for o in page.options if o.text == "No")
+    other = next(o for o in page.options if o.text != "No")
+    assert picked.clicked == 1
+    assert other.clicked == 0
     resume_input = page.file_inputs[0]
     headshot_input = page.file_inputs[1]
     assert resume_input.set_input_files_calls == 1
@@ -465,6 +520,62 @@ def test_fill_dom_sweep_extra_required_field_forces_not_complete(tmp_path):
     assert report.complete is False
     reasons = [g["reason"] for g in report.required_unfilled]
     assert any("absent from the schema" in r for r in reasons)
+
+
+def test_fill_resume_text_satisfied_by_sibling_upload_is_complete(tmp_path):
+    # BUG 3: Greenhouse's schema exposes a `resume_text` paste-textarea
+    # question ALONGSIDE the `resume` file-upload question (same label,
+    # "Resume/CV") even when the live form is configured for file-upload
+    # mode, where the textarea is simply ABSENT from the DOM. Once `resume`
+    # uploads, `resume_text` must be treated SATISFIED by the sibling upload:
+    # never driven (no fill attempt, no fill-error), never a required gap,
+    # and never a dom-sweep mismatch -- the form must read COMPLETE.
+    fieldmap = FieldMap(vendor="greenhouse", posting_id="7701099",
+                        captured_at=_PINNED, fields=[
+        Field(key="resume", label="Resume/CV", type="input_file",
+             required=True, options=[], source="questions",
+             locator=Locator(role="button", name="Resume/CV")),
+        Field(key="resume_text", label="Resume/CV", type="textarea",
+             required=True, options=[], source="questions",
+             locator=Locator(role="textbox", name="Resume/CV")),
+    ])
+    ssot = SSOT({
+        "identity": {"name": "Test Candidate",
+                     "email": "test.candidate@example.invalid"},
+        "canned_answers": {
+            "resume_text": "Test Candidate, platform engineer.",
+        },
+    })
+    profile = profile_from_real_ssot(ssot)
+    assets = _assets(tmp_path)
+    values = greenhouse.resolve_values(fieldmap, ssot, profile, assets=assets)
+    # resume_text resolved to real content (never skipped as missing), and
+    # resume resolved to an upload -- both land in values.fields, so the
+    # sibling-skip branch in greenhouse.fill() is the thing under test, not
+    # an upstream resolve_values skip.
+    assert values.values["resume_text"] == "Test Candidate, platform engineer."
+    by_key = {fv.key: fv for fv in values.fields}
+    assert "resume" in by_key and "resume_text" in by_key
+
+    page = _FakeGreenhousePage(
+        file_inputs=[_FakeFileInput(id="resume",
+                                    accept=".pdf,.doc,.docx,.txt,.rtf")],
+        sweep_required_labels=("Resume/CV",))
+
+    report = greenhouse.fill(page, fieldmap, values)
+
+    # Never driven: resume_text's own (textbox, "Resume/CV") control was
+    # never looked up, and it is satisfied via the documented skip reason,
+    # not a fill-error.
+    assert ("role", "textbox", "Resume/CV") not in page.requested
+    assert dict(report.skipped)["resume_text"] == (
+        "satisfied by sibling file upload: resume")
+    assert not any(g["key"] == "resume_text" for g in report.required_unfilled)
+    assert not any(str(g["key"]).startswith("dom-sweep:")
+                  for g in report.required_unfilled)
+    assert report.required_unfilled == []
+    assert report.complete is True
+    assert report.caption().endswith("COMPLETE")
 
 
 def test_fill_missing_required_ssot_answer_forces_not_complete(tmp_path):

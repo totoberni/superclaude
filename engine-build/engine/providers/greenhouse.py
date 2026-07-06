@@ -60,6 +60,15 @@ from engine.providers import base, registry
 
 vendor = "greenhouse"
 
+# Greenhouse's schema exposes a `<name>_text` paste-textarea question even
+# when the LIVE form is configured for file-upload mode (the textarea is then
+# simply ABSENT from the DOM, e.g. `resume_text:TEXTAREA:req=True` alongside
+# `resume:input_file:req=True` on the same posting): the sibling `<name>` file
+# field already carries the same document, so the textarea is satisfied, never
+# driven. Keys mirror `fieldmap._KEY_TEXT_PATHS`'s exact key set.
+_TEXT_UPLOAD_SIBLINGS = {"resume_text": "resume",
+                        "cover_letter_text": "cover_letter"}
+
 
 # -- capture / apply_url: thin delegation to the registry wiring ---------------
 
@@ -161,11 +170,31 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     extra_skips: list[tuple[str, str]] = []
     uploads: list[dict] = []
     filled_keys: set[str] = set()
+    satisfied_by_sibling: set[str] = set()
 
-    # (2) + (3) drive + readback-gate every resolved field.
-    for fv in values.fields:
-        if _is_upload(fv):
-            _fill_upload(page, fv, uploads, extra_skips, filled_keys)
+    # Uploads FIRST, order-independent of the schema's own field ordering: a
+    # `<name>_text` paste textarea's sibling `<name>` file field (hole-fix,
+    # BUG 3) must already be in `filled_keys` by the time the text-field pass
+    # below checks it, regardless of which one the schema lists first.
+    upload_fields = [fv for fv in values.fields if _is_upload(fv)]
+    other_fields = [fv for fv in values.fields if not _is_upload(fv)]
+
+    for fv in upload_fields:
+        _fill_upload(page, fv, uploads, extra_skips, filled_keys)
+
+    # (2) + (3) drive + readback-gate every resolved non-upload field.
+    for fv in other_fields:
+        sibling_key = _TEXT_UPLOAD_SIBLINGS.get(fv.key)
+        if sibling_key is not None and sibling_key in filled_keys:
+            # Greenhouse's schema exposes BOTH the file field and its
+            # paste-text alternative even though the LIVE form renders only
+            # one (whichever input mode the org configured); the textarea
+            # is simply ABSENT from the DOM when file mode is active, so
+            # driving it always times out. The sibling file already carries
+            # the same document -- satisfied, never attempted.
+            extra_skips.append(
+                (fv.key, f"satisfied by sibling file upload: {sibling_key}"))
+            satisfied_by_sibling.add(fv.key)
             continue
         try:
             ok, actual = _fill_field(page, fv)
@@ -195,11 +224,17 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
 
     # (4) DOM-sweep completeness cross-check (hole-fix d): a schema/DOM
     # required-field mismatch forces NOT_COMPLETE regardless of what the
-    # per-field fill loop achieved.
+    # per-field fill loop achieved. A field satisfied by a sibling upload
+    # (BUG 3) is excluded from `schema_required` -- the DOM genuinely never
+    # renders it, so it must never be swept as a schema/DOM disagreement --
+    # and an uploaded field's OWN label is reconciled against the filename
+    # Greenhouse appends to it post-upload (`_reconcile_uploaded_labels`).
     from engine import fill as _fill
 
-    schema_required = {f.label for f in fieldmap.required_fields()}
-    dom_required = base.sweep_required(page)
+    schema_required = {f.label for f in fieldmap.required_fields()
+                       if f.key not in satisfied_by_sibling}
+    dom_required = _reconcile_uploaded_labels(
+        base.sweep_required(page), uploads, fieldmap)
     mismatch = base.completeness_mismatch(schema_required, dom_required)
 
     filled = len(filled_keys)
@@ -244,6 +279,37 @@ def _sweep_gaps(mismatch: dict) -> list[dict]:
             "reason": "schema marks this field required but the DOM sweep "
                       "did not find it required"})
     return gaps
+
+
+def _reconcile_uploaded_labels(dom_required: set[str], uploads: list[dict],
+                               fieldmap: FieldMap) -> set[str]:
+    """Fold a successfully-uploaded file field's POST-FILL DOM-sweep label
+    back to its bare schema label before the completeness diff runs (BUG 3).
+
+    Once a resume/cover-letter FILE is attached, Greenhouse appends the
+    chosen filename to the control's own accessible label (observed live:
+    "Resume/CV" becomes "resume/cv cv-ats.pdf" post-upload), so
+    `base.sweep_required`'s POST-FILL scan reads a label the schema's
+    PRE-FILL label no longer matches -- a pure upload-confirmation artefact,
+    never a genuine schema/DOM disagreement. For every field this run
+    actually uploaded, any DOM label that equals or starts with (on a word
+    boundary) its normalized schema label is folded back to the bare label,
+    so the two sides compare equal again."""
+    labels_by_key = {f.key: f.label for f in fieldmap.fields}
+    bare_labels = {base._normalize_name(labels_by_key[u["key"]])
+                  for u in uploads if u.get("key") in labels_by_key}
+    bare_labels.discard("")
+    if not bare_labels:
+        return dom_required
+    reconciled: set[str] = set()
+    for dom_label in dom_required:
+        folded = dom_label
+        for bare in bare_labels:
+            if dom_label == bare or dom_label.startswith(bare + " "):
+                folded = bare
+                break
+        reconciled.add(folded)
+    return reconciled
 
 
 # -- per-field driving: text/email/phone via type_human, react-select via -----
