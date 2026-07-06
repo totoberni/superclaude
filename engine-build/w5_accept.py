@@ -72,6 +72,15 @@ try:
 
         result["stage"] = "goto"
         page.goto(APPLY_URL, wait_until="domcontentloaded", timeout=45000)
+        # Let the vendor SPA hydrate (React wires its field + upload change
+        # handlers) before driving fields: filling right after domcontentloaded
+        # can leave a file upload in the input's FileList but unprocessed by the
+        # vendor's own component state (no rendered confirmation).
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        page.wait_for_timeout(2500)
         result["stage"] = "fill"
         report = PROV.fill(page, fieldmap, values)
         try:

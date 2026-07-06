@@ -447,6 +447,26 @@ def _fill_upload(page, fv, uploads: list[dict],
                     "path": str(fv.value), "reason": fv.upload_reason})
 
 
+def _settle_page(page) -> None:
+    """Best-effort: wait for the page to reach networkidle then a short fixed
+    settle, so React flushes any pending re-render (e.g. an attached-file
+    confirmation) before a readback runs. Never raises: a page/fake missing
+    either method, or a networkidle timeout under a still-chatty page, simply
+    falls through (the subsequent poll is still gated on a real confirmation)."""
+    waiter = getattr(page, "wait_for_load_state", None)
+    if callable(waiter):
+        try:
+            waiter("networkidle", timeout=8000)
+        except Exception:
+            pass
+    tw = getattr(page, "wait_for_timeout", None)
+    if callable(tw):
+        try:
+            tw(2000)
+        except Exception:
+            pass
+
+
 def _reconfirm_late_uploads(page, fieldmap: FieldMap, values: ResolvedValues,
                             filled_keys: set[str], uploads: list[dict],
                             extra_skips: list[tuple[str, str]],
@@ -481,6 +501,14 @@ def _reconfirm_late_uploads(page, fieldmap: FieldMap, values: ResolvedValues,
     _is_satisfied_by_sibling_upload` recognizes, so completeness stays
     single-sourced with the inline sibling-skip branch above."""
     from engine import fill as _fill
+
+    # Under a busy acceptance harness (per-request audit callbacks on the
+    # context keep the event loop churning), Greenhouse's attached-file React
+    # render lags PAST even the inline poll and does not flush until the page
+    # actually goes quiet. Wait for networkidle plus a short settle HERE, so
+    # React has flushed the filename/remove confirmation before this
+    # second-chance re-poll runs. Best-effort, never raises.
+    _settle_page(page)
 
     required_keys = {f.key for f in fieldmap.required_fields()}
     text_sibling_of = {upload_key: text_key
