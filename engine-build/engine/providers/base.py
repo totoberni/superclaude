@@ -677,19 +677,48 @@ _REMOVE_CONTROL_NAME_RE = re.compile(r"remove|delete|clear", re.I)
 
 
 def poll_upload_confirmed(page, control, filename: str, *,
-                          poll_ms: tuple[int, ...] = (300, 700, 1500)) -> bool:
+                          poll_ms: tuple[int, ...] = (500, 1500, 3000, 5000, 7500)) -> bool:
     """Poll `_upload_widget_confirmed` at the given cumulative offsets
     (mirrors `_poll_single_value`'s pattern): True as soon as it confirms, up
-    to ~1.5s total, generous enough for React's post-attach re-render. Never
+    to ~7.5s total. LIVE-DOM finding (2026-07-06 gitlab full-fill): greenhouse's
+    React re-render of the attached-file widget completes within ~1s when the
+    page is IDLE (an isolated upload) but takes several seconds MID-FILL (the
+    React queue is busy processing the other field updates), so a ~1.5s window
+    reported a structural FALSE NEGATIVE -- the CV was genuinely attached and
+    rendered by end-of-fill (get_by_text(stem) count 1) yet the too-short poll
+    missed it, reporting the required upload as unfilled. Returns as soon as it
+    confirms, so the longer tail only costs time on a genuine non-attach. Never
     raises: any DOM-query failure along the way reads as NOT confirmed
     (never-attached bias, mirroring `_upload_attached`'s own philosophy)."""
     elapsed = 0
+    raw_stem = Path(filename).stem if filename else ""
     for mark in poll_ms:
         _wait_timeout(page, mark - elapsed)
         elapsed = mark
-        if _upload_widget_confirmed(control, filename):
+        if _upload_widget_confirmed(control, filename) or _page_shows_filename(page, raw_stem):
             return True
     return False
+
+
+def _page_shows_filename(page, raw_stem: str) -> bool:
+    """Positive page-scoped confirmation the vendor RENDERED the attached
+    file's name. Greenhouse renders the filename / remove control OUTSIDE the
+    input's immediate parent (a sibling widget node), so the container-only
+    `_upload_widget_confirmed` (xpath=.. one level up) misses it. The file stem
+    is a distinctive name (never job-posting prose), so a page-wide text match
+    is a reliable positive signal. Live-verified 2026-07-06 gitlab/8503792002:
+    a genuine attach makes `get_by_text(stem)` count>0; a non-attach does not."""
+    if not raw_stem:
+        return False
+    getter = getattr(page, "get_by_text", None)
+    if not callable(getter):
+        return False
+    try:
+        loc = getter(raw_stem, exact=False)
+        counter = getattr(loc, "count", None)
+        return bool(callable(counter) and counter() > 0)
+    except Exception:
+        return False
 
 
 def _upload_widget_confirmed(control, filename: str) -> bool:
