@@ -75,6 +75,11 @@ try:
         result["stage"] = "fill"
         report = PROV.fill(page, fieldmap, values)
         try:
+            page.screenshot(path=f"/tmp/w5-{VENDOR}-filled.png", full_page=True)
+            result["screenshot_path"] = f"/tmp/w5-{VENDOR}-filled.png"
+        except Exception as exc:
+            result["screenshot_error"] = f"{type(exc).__name__}: {exc}"
+        try:
             open(f"/tmp/w5-dom-{VENDOR}.html", "w").write(page.content())
         except Exception:
             pass
