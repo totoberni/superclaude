@@ -39,6 +39,15 @@ class Posting:
     description: str = ""
     listed: bool = True
     unverified: bool = False
+    # ToS-readable greenhouse fields (jobs/{id}?questions=true shape); safe
+    # defaults so every existing construction site and the other adapters
+    # (Lever/Ashby/Workable) keep working unchanged. Only GreenhouseAdapter
+    # populates these today.
+    departments: list[str] = field(default_factory=list)
+    offices: list[str] = field(default_factory=list)
+    requisition_id: str | None = None
+    application_deadline: str | None = None
+    company_name: str | None = None
 
     def identity_key(self) -> str:
         """`company|role|url` per 7.4 (papers would key on DOI/arXiv instead)."""
@@ -74,6 +83,11 @@ class GreenhouseAdapter:
             updated_ts=job.get("updated_at"),
             url=job.get("absolute_url", ""),
             description=_plain(job.get("content", "")),
+            departments=_names(job.get("departments")),
+            offices=_names(job.get("offices")),
+            requisition_id=job.get("requisition_id"),
+            application_deadline=job.get("application_deadline"),
+            company_name=job.get("company_name"),
         )
 
 
@@ -190,6 +204,13 @@ def _lever_comp(salary_range) -> str | None:
         return None
     parts = [amount, salary_range.get("currency"), salary_range.get("interval")]
     return " ".join(p for p in parts if p)
+
+
+def _names(entries: list[dict] | None) -> list[str]:
+    """Extract `name` from a list of {id, name, ...} entries (greenhouse's
+    `departments`/`offices` shape). Null-safe: missing key or empty/None list
+    both yield []."""
+    return [e["name"] for e in (entries or []) if e.get("name")]
 
 
 def _looks_remote(location: str | None) -> bool:

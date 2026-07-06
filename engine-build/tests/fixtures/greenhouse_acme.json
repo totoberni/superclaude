@@ -10,6 +10,14 @@
       "location": { "name": "London, UK" },
       "absolute_url": "https://boards.greenhouse.io/acme/jobs/5501001",
       "metadata": [],
+      "departments": [
+        { "id": 4001, "name": "Engineering", "child_ids": [], "parent_id": null }
+      ],
+      "offices": [
+        { "id": 6001, "name": "London", "location": null }
+      ],
+      "application_deadline": null,
+      "company_name": "Acme Corp",
       "content": "&lt;p&gt;We are hiring a backend engineer with strong Python and SQLite experience. Remote-friendly within the EU. You will own data services end to end.&lt;/p&gt;"
     },
     {
@@ -22,6 +30,12 @@
       "location": { "name": "London, UK" },
       "absolute_url": "https://boards.greenhouse.io/acme/jobs/5501002",
       "metadata": [],
+      "departments": [],
+      "offices": [
+        { "id": 6001, "name": "London", "location": null }
+      ],
+      "application_deadline": "2026-08-01",
+      "company_name": "Acme Corp",
       "content": "&lt;p&gt;This role requires active security clearance. Python is a plus but the clearance is mandatory.&lt;/p&gt;"
     }
   ],

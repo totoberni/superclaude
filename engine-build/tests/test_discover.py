@@ -18,6 +18,28 @@ def test_greenhouse_adapter_parses_and_unescapes(greenhouse_raw):
     assert "SQLite" in backend.description
 
 
+def test_greenhouse_adapter_parses_tos_readable_fields(greenhouse_raw):
+    # W-WT-8-ext: departments/offices/requisition_id/application_deadline/
+    # company_name are ToS-readable greenhouse fields that must persist onto
+    # Posting. First job exercises a populated department + a null deadline;
+    # second job exercises an empty department list + a populated deadline
+    # (both are legitimate live shapes, so both must be null-safe).
+    postings = GreenhouseAdapter().parse(greenhouse_raw, "acme")
+    backend, security = postings[0], postings[1]
+
+    assert backend.departments == ["Engineering"]
+    assert backend.offices == ["London"]
+    assert backend.requisition_id == "REQ-1001"
+    assert backend.application_deadline is None
+    assert backend.company_name == "Acme Corp"
+
+    assert security.departments == []
+    assert security.offices == ["London"]
+    assert security.requisition_id == "REQ-1002"
+    assert security.application_deadline == "2026-08-01"
+    assert security.company_name == "Acme Corp"
+
+
 def test_lever_adapter_maps_workplace_and_timestamp(lever_raw):
     posting = LeverAdapter().parse(lever_raw, "globex")[0]
     assert posting.vendor == "lever"
