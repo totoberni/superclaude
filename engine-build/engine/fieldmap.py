@@ -179,6 +179,18 @@ _DEMOGRAPHIC_KEYWORDS = (
 _LOCATION_WIDGET_KEY = "location"
 _PORTAL_WIDGET_KEYS = {"longitude", "latitude"}
 
+# Greenhouse's paste-in resume/cover-letter textareas (`resume_text`,
+# `cover_letter_text`) share their label ("Resume"/"Resume/CV") with the
+# sibling FILE upload field, so label keyword matching alone cannot
+# distinguish them: they are matched by KEY, ahead of the generic label
+# matchers, same as `_LOCATION_WIDGET_KEY` above. Each maps to the ordered
+# SSOT dotted paths tried in turn; the first that resolves in the SSOT wins.
+_KEY_TEXT_PATHS = {
+    "resume_text": ("canned_answers.resume_text", "documents.cv_text"),
+    "cover_letter_text": ("canned_answers.cover_letter_text",
+                          "canned_answers.cover_letter"),
+}
+
 # A required "how much X experience do you have" question is answerable
 # in principle: the SSOT's skills bucket can decide yes/no for any named
 # technology, even if the honest answer is "no" (answerability is about
@@ -616,10 +628,17 @@ def _classify_field(fld: Field, ssot: SSOT, profile: dict) -> FieldCoverage:
 
 
 def _manual_only_reason(fld: Field) -> str:
+    """"file-upload" ONLY for a genuine file control: a native file type, or a
+    label carrying an explicit upload/attach verb (mirrors `engine.fill`'s
+    `_is_upload_field`). A bare "resume"/"cv" label keyword is NOT enough --
+    Greenhouse's paste-in `resume_text`/`cover_letter_text` textareas share
+    their label with the sibling file-upload field ("Resume"/"Resume/CV"),
+    so tagging on the label alone would wrongly classify a fillable free-text
+    field as manual-only file-upload (never resolved, never fillable)."""
     if "file" in fld.type.lower():
         return "file-upload"
     label = fld.label.lower()
-    if any(word in label for word in ("upload", "attach", "resume", "cv")):
+    if any(word in label for word in ("upload", "attach")):
         return "file-upload"
     if fld.source in ("demographic", "eeo", "eeoc", "compliance"):
         return "demographic/EEO"
@@ -634,6 +653,9 @@ def _answerable_path(fld: Field, ssot: SSOT, profile: dict) -> str | None:
     location_path = _location_widget_path(fld, ssot)
     if location_path is not None:
         return location_path
+    key_text_path = _key_text_widget_path(fld, ssot)
+    if key_text_path is not None:
+        return key_text_path
     low = fld.label.lower()
     if _SKILLS_EXPERIENCE_RE.search(low) and ssot.get("skills") is not MISSING:
         return "skills"
@@ -660,6 +682,22 @@ def _location_widget_path(fld: Field, ssot: SSOT) -> str | None:
     # The real seeded SSOT (v1.4) keys this as identity.current_location;
     # identity.address is kept as a legacy fallback for schema drift.
     for candidate in ("identity.current_location", "identity.address"):
+        if ssot.get(candidate) is not MISSING:
+            return candidate
+    return None
+
+
+def _key_text_widget_path(fld: Field, ssot: SSOT) -> str | None:
+    """The Greenhouse `resume_text`/`cover_letter_text` paste textareas' label
+    ("Resume"/"Resume/CV") is shared with the sibling FILE upload field, so
+    label keyword matching alone cannot distinguish them: resolve by KEY
+    instead, same pattern as `_location_widget_path`. Returns None (MISSING)
+    when the SSOT carries neither candidate path -- never fabricated; the
+    owner seeds `canned_answers` then re-runs."""
+    candidates = _KEY_TEXT_PATHS.get(fld.key.lower())
+    if candidates is None:
+        return None
+    for candidate in candidates:
         if ssot.get(candidate) is not MISSING:
             return candidate
     return None

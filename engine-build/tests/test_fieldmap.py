@@ -266,6 +266,74 @@ def test_coverage_location_widget_is_answerable_and_lat_long_are_manual_only(
     assert by_key["latitude"].reason == "portal-widget"
 
 
+
+# -- Greenhouse resume_text / cover_letter_text paste textareas (gap #1) -----
+# These required textareas share their LABEL ("Resume"/"Resume/CV") with the
+# sibling FILE upload field, so a label-keyword match on "resume"/"cv" alone
+# cannot distinguish them; they must resolve by KEY (mirrors the
+# location-widget pattern above), never classify as manual-only file-upload.
+
+def test_resume_text_textarea_is_not_manual_only_file_upload():
+    fld = _field("resume_text", "Resume/CV", type_="textarea")
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[fld])
+    report = coverage(
+        fm, SSOT({"canned_answers": {"resume_text": "Some resume text."}}), {})
+    assert report.fields[0].status != MANUAL_ONLY
+
+
+def test_resume_text_resolves_by_key_to_canned_answers_resume_text():
+    fld = _field("resume_text", "Resume/CV", type_="textarea")
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[fld])
+    report = coverage(
+        fm, SSOT({"canned_answers": {"resume_text": "Some resume text."}}), {})
+    assert report.fields[0].status == ANSWERABLE
+    assert report.fields[0].path == "canned_answers.resume_text"
+
+
+def test_cover_letter_text_resolves_by_key_to_canned_answers_cover_letter_text():
+    fld = _field("cover_letter_text", "Cover Letter", type_="textarea")
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[fld])
+    report = coverage(
+        fm, SSOT({"canned_answers": {"cover_letter_text": "Dear team..."}}), {})
+    assert report.fields[0].status == ANSWERABLE
+    assert report.fields[0].path == "canned_answers.cover_letter_text"
+
+
+def test_cover_letter_text_falls_back_to_canned_answers_cover_letter():
+    fld = _field("cover_letter_text", "Cover Letter", type_="textarea")
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[fld])
+    report = coverage(
+        fm, SSOT({"canned_answers": {"cover_letter": "Dear team..."}}), {})
+    assert report.fields[0].status == ANSWERABLE
+    assert report.fields[0].path == "canned_answers.cover_letter"
+
+
+def test_resume_text_missing_when_ssot_lacks_the_value():
+    # Never fabricated: with neither candidate path in the SSOT, resume_text
+    # resolves MISSING (a questionnaire item), never auto-answered from the
+    # shared label.
+    fld = _field("resume_text", "Resume/CV", type_="textarea")
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[fld])
+    report = coverage(fm, SSOT({}), {})
+    assert report.fields[0].status == MISSING_STATUS
+
+
+def test_resume_file_field_is_still_manual_only_file_upload():
+    # Unchanged: the sibling FILE control (not the textarea) stays manual-only
+    # file-upload after narrowing `_manual_only_reason`.
+    fld = _field("resume", "Resume/CV", type_="input_file")
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[fld])
+    report = coverage(fm, SSOT({}), {})
+    assert report.fields[0].status == MANUAL_ONLY
+    assert report.fields[0].reason == "file-upload"
+
+
 def test_coverage_identity_location_patterns_are_answerable(real_ssot_path):
     fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
                   fields=[

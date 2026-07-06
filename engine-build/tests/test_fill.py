@@ -642,6 +642,58 @@ def test_resolve_then_fill_end_to_end(tmp_path, real_ssot_path):
     assert report.readback_mismatches == []
 
 
+def test_resume_text_and_cover_letter_text_fill_and_form_completes(tmp_path):
+    # BUG FIX (gap #1): resume_text/cover_letter_text textareas share their
+    # LABEL with the sibling FILE upload field ("Resume"/"Resume/CV"), so a
+    # label-keyword match on "resume"/"cv" alone previously tagged them
+    # manual-only file-upload -- the required resume_text was skipped and the
+    # PDF-uploading form was forced NOT COMPLETE. They must resolve by KEY,
+    # render as free text, and let the form read COMPLETE.
+    ssot = SSOT({
+        "identity": {"name": "Ada Lovelace"},
+        "canned_answers": {
+            "resume_text": "Ada Lovelace, mathematician and writer.",
+            "cover_letter_text": "Dear hiring manager, ...",
+        },
+    })
+    fm = _fieldmap(
+        _field("first_name", "First Name"),
+        _field("resume", "Resume/CV", type_="input_file", role="button"),
+        _field("resume_text", "Resume/CV", type_="textarea"),
+        _field("cover_letter_text", "Cover Letter", type_="textarea",
+               required=False),
+    )
+    assets = _make_assets(tmp_path)
+    values = resolve_values(fm, ssot, {}, assets=assets)
+
+    assert values.values["resume_text"] == (
+        "Ada Lovelace, mathematician and writer.")
+    assert values.values["cover_letter_text"] == "Dear hiring manager, ..."
+    assert "resume_text" not in dict(values.skipped)
+
+    build = _control_page(values.fields,
+                          url="https://boards.greenhouse.io/acme/jobs/1")
+    report = fill_form("greenhouse", "acme", "1", values,
+                       browser_factory=_factory_for(build()),
+                       artifacts_dir=tmp_path, fieldmap=fm, assets=assets,
+                       now=lambda: _PINNED)
+
+    assert report.required_unfilled == []
+    assert report.complete is True
+    assert report.uploads[0]["key"] == "resume"
+
+
+def test_resume_text_skipped_missing_when_ssot_lacks_the_value():
+    # Never fabricated: with no canned_answers value the field is skipped as
+    # MISSING, not filled from the shared "Resume/CV" label.
+    ssot = SSOT({"identity": {"name": "Ada Lovelace"}})
+    fm = _fieldmap(_field("resume_text", "Resume/CV", type_="textarea"))
+    values = resolve_values(fm, ssot, {})
+
+    assert "resume_text" not in values.values
+    assert dict(values.skipped)["resume_text"].startswith("missing:")
+
+
 def _fv(key, label, type_, value, *, role="textbox"):
     from engine.fill import FieldValue
     return FieldValue(key=key, label=label, type=type_,
