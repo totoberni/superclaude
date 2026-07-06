@@ -602,6 +602,72 @@ def test_fill_resume_text_satisfied_by_sibling_upload_is_complete(tmp_path):
     assert report.caption().endswith("COMPLETE")
 
 
+def test_fill_reconfirms_late_rendered_upload_at_end_of_fill(
+        tmp_path, monkeypatch):
+    # Late-render hole-fix (2026-07-06 gitlab/8503792002 full-fill run):
+    # Greenhouse's React queue can still be busy driving the OTHER fields
+    # when `_fill_upload`'s OWN inline `base.poll_upload_confirmed` check
+    # runs, so it can return a FALSE NEGATIVE for a resume that DOES attach
+    # and IS eventually rendered by end-of-fill. `base.poll_upload_confirmed`
+    # is monkeypatched to model exactly that: False on the first (inline,
+    # mid-fill) call, True on the second (this fix's end-of-fill
+    # re-confirmation) call -- proving greenhouse.fill's OWN orchestration
+    # recovers the false negative, not re-testing base.py's real polling
+    # algorithm (out of this module's scope).
+    fieldmap = FieldMap(vendor="greenhouse", posting_id="7701099",
+                        captured_at=_PINNED, fields=[
+        Field(key="resume", label="Resume/CV", type="input_file",
+             required=True, options=[], source="questions",
+             locator=Locator(role="button", name="Resume/CV")),
+        Field(key="resume_text", label="Resume/CV", type="textarea",
+             required=True, options=[], source="questions",
+             locator=Locator(role="textbox", name="Resume/CV")),
+    ])
+    ssot = SSOT({
+        "identity": {"name": "Test Candidate",
+                     "email": "test.candidate@example.invalid"},
+        "canned_answers": {
+            "resume_text": "Test Candidate, platform engineer.",
+        },
+    })
+    profile = profile_from_real_ssot(ssot)
+    assets = _assets(tmp_path)
+    values = greenhouse.resolve_values(fieldmap, ssot, profile, assets=assets)
+    page = _FakeGreenhousePage(
+        file_inputs=[_FakeFileInput(id="resume",
+                                    accept=".pdf,.doc,.docx,.txt,.rtf")],
+        sweep_required_labels=("Resume/CV",))
+
+    calls = []
+
+    def fake_poll_upload_confirmed(page_arg, control, filename, **kwargs):
+        calls.append(filename)
+        return len(calls) > 1  # False mid-fill (inline), True end-of-fill
+
+    monkeypatch.setattr(base, "poll_upload_confirmed",
+                        fake_poll_upload_confirmed)
+
+    report = greenhouse.fill(page, fieldmap, values)
+
+    # The inline confirm (mid-fill) and the final re-confirmation (end-of-
+    # fill) each called base.poll_upload_confirmed exactly once.
+    assert len(calls) == 2
+    # resume: a genuine end-of-fill confirm -> filled + uploaded, never a
+    # required gap.
+    assert any(u["key"] == "resume" for u in report.uploads)
+    # resume_text: re-evaluated satisfied-by-sibling once resume confirmed,
+    # not a fill-error / required gap.
+    assert dict(report.skipped)["resume_text"] == (
+        "satisfied by sibling file upload: resume")
+    assert not any(g["key"] in ("resume", "resume_text")
+                  for g in report.required_unfilled)
+    assert not any(str(g["key"]).startswith("dom-sweep:")
+                  for g in report.required_unfilled)
+    assert report.required_unfilled == []
+    assert report.complete is True
+    assert report.caption().endswith("COMPLETE")
+
+
 def test_fill_missing_required_ssot_answer_forces_not_complete(tmp_path):
     # The SSOT carries no sponsorship answer at all: resolve_values skips
     # the required combobox field, and it must surface as a genuine gap.

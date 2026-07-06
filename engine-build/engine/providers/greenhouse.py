@@ -222,6 +222,18 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
             f"page navigated during fill ({pre_url!r} -> {post_url!r}); a "
             "navigation may indicate a submission or redirect")
 
+    # (3b) FINAL upload re-confirmation (late-render hole-fix, 2026-07-06
+    # gitlab/8503792002 full-fill run): a REQUIRED upload's INLINE confirm
+    # (above, in `_fill_upload`) can be a FALSE NEGATIVE while Greenhouse's
+    # React queue is still busy driving the OTHER fields; by now every field
+    # has been driven, React has settled, and a fresh confirm gets a genuine
+    # positive where the mid-fill one timed out. Must run BEFORE the
+    # completeness/DOM-sweep computation below, so a late confirmation is
+    # reflected in `filled_keys`/`uploads`/`satisfied_by_sibling` in time.
+    _reconfirm_late_uploads(page, fieldmap, values, filled_keys, uploads,
+                           extra_skips, readback_mismatches,
+                           satisfied_by_sibling)
+
     # (4) DOM-sweep completeness cross-check (hole-fix d): a schema/DOM
     # required-field mismatch forces NOT_COMPLETE regardless of what the
     # per-field fill loop achieved. A field satisfied by a sibling upload
@@ -401,6 +413,83 @@ def _fill_upload(page, fv, uploads: list[dict],
     filled_keys.add(fv.key)
     uploads.append({"key": fv.key, "asset": fv.asset,
                     "path": str(fv.value), "reason": fv.upload_reason})
+
+
+def _reconfirm_late_uploads(page, fieldmap: FieldMap, values: ResolvedValues,
+                            filled_keys: set[str], uploads: list[dict],
+                            extra_skips: list[tuple[str, str]],
+                            readback_mismatches: list[dict],
+                            satisfied_by_sibling: set[str]) -> None:
+    """End-of-fill second chance for a REQUIRED upload whose inline
+    `_fill_upload` confirmation was a FALSE NEGATIVE (late-render hole-fix,
+    2026-07-06 gitlab/8503792002 full-fill run).
+
+    A live probe proved the resume file GENUINELY attaches and Greenhouse
+    EVENTUALLY renders the filename confirmation, but not always within
+    `_fill_upload`'s own poll window while its React queue is still busy
+    driving the REST of the form's fields (an isolated single-field fill
+    confirms quickly; a full multi-field fill can take until every other
+    field is done). By this function's call site -- after every field has
+    been driven -- React has settled, so a FRESH `base.poll_upload_
+    confirmed` re-check is a cheap, high-signal second chance. It is gated
+    on the exact same real vendor-rendered confirmation `_fill_upload`
+    already required: never an unconditional mark-filled.
+
+    Restricted to REQUIRED upload fields still missing from `filled_keys`:
+    an optional upload's false negative already resolves to a justified
+    skip (`_fill._is_upload_skip`), so re-polling it would spend time
+    without changing the report's verdict.
+
+    On a genuine re-confirm: the key joins `filled_keys`/`uploads` (mirrors
+    `_fill_upload`'s own success bookkeeping exactly) and its earlier
+    "did not attach" skip is dropped. Its paste-text sibling (`_TEXT_
+    UPLOAD_SIBLINGS`, e.g. `resume_text` for `resume`), if it was driven and
+    marked unsatisfied while the sibling upload still looked unfilled, is
+    re-marked satisfied-by-sibling -- the SAME skip-reason string `fill.
+    _is_satisfied_by_sibling_upload` recognizes, so completeness stays
+    single-sourced with the inline sibling-skip branch above."""
+    from engine import fill as _fill
+
+    required_keys = {f.key for f in fieldmap.required_fields()}
+    text_sibling_of = {upload_key: text_key
+                       for text_key, upload_key in _TEXT_UPLOAD_SIBLINGS.items()}
+    for fv in values.fields:
+        if (not _is_upload(fv) or fv.key in filled_keys
+                or fv.key not in required_keys):
+            continue
+        control = _fill._locate_file_input(page, fv)
+        if control is None:
+            continue
+        if not base.poll_upload_confirmed(page, control, str(fv.value)):
+            continue
+        filled_keys.add(fv.key)
+        uploads.append({"key": fv.key, "asset": fv.asset,
+                        "path": str(fv.value), "reason": fv.upload_reason})
+        _drop_extra_skip(extra_skips, fv.key)
+        _drop_readback_mismatch(readback_mismatches, fv.key)
+        text_key = text_sibling_of.get(fv.key)
+        if text_key is not None and text_key not in filled_keys:
+            _drop_extra_skip(extra_skips, text_key)
+            _drop_readback_mismatch(readback_mismatches, text_key)
+            extra_skips.append(
+                (text_key, f"satisfied by sibling file upload: {fv.key}"))
+            satisfied_by_sibling.add(text_key)
+
+
+def _drop_extra_skip(extra_skips: list[tuple[str, str]], key: str) -> None:
+    """Remove any existing `extra_skips` entries for `key` IN PLACE: the late
+    re-confirmation above supersedes an earlier "did not attach"/fill-error
+    entry for the same key with a genuine fill (or a satisfied-by-sibling
+    justification), so the stale entry must not linger and double-count."""
+    extra_skips[:] = [(k, r) for k, r in extra_skips if k != key]
+
+
+def _drop_readback_mismatch(readback_mismatches: list[dict], key: str) -> None:
+    """Remove any existing `readback_mismatches` entries for `key` IN PLACE
+    (mirrors `_drop_extra_skip`; a field the late re-confirmation now counts
+    as filled/satisfied must not also be reported as a readback mismatch)."""
+    readback_mismatches[:] = [m for m in readback_mismatches
+                              if m.get("key") != key]
 
 
 def _current_assets(fv):
