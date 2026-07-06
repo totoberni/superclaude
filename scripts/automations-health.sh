@@ -365,20 +365,34 @@ if [ -n "${W5_DEPLOYED:-}" ] || [ -f "$W5_MARKER" ]; then
   # phase writes; never hardcode machine-specific values here.
   W5_ENV="$HOME/automations/engine-build/.w5-deployed.env"
   [ -f "$W5_ENV" ] && . "$W5_ENV" 2>/dev/null || true
-  RT_PY="$HOME/automations/engine-build/.venv/bin/python"   # deploy-confirm: runtime venv path
+  # Runtime venv path comes from the env file (W5_RT_PY); the fallback matches
+  # the original spec layout. Reconciled 2026-07-06: the actual toto runtime
+  # venv is ~/automations/.venv, declared via W5_RT_PY in .w5-deployed.env.
+  RT_PY="${W5_RT_PY:-$HOME/automations/engine-build/.venv/bin/python}"
   RT_ROOT="$HOME/automations/engine-build"
 
-  # bw serve daemon reachable. deploy-confirm: port/endpoint of `bw serve`.
-  if curl -s --max-time 4 "${W5_BW_SERVE_URL:-http://127.0.0.1:8087/status}" 2>/dev/null | grep -q '"'; then
+  # Sub-service gating (2026-07-06): W5 deploys incrementally. A sub-service
+  # whose env var is ABSENT from .w5-deployed.env is not yet stood up on this
+  # box: its check emits `skip` (dormant, exactly like the pre-marker state)
+  # rather than `bad`, so the score reflects only what is actually deployed.
+  # When the vault / dedicated inbox deploy phases land, they ADD their vars
+  # to the env file and the checks go live. No deployed-but-broken service is
+  # ever hidden: a var that IS set always yields ok or bad, never skip.
+
+  # bw serve daemon reachable. Gated on W5_BW_SERVE_URL (vault deploy phase).
+  if [ -z "${W5_BW_SERVE_URL:-}" ]; then
+    skip w5_bw_serve
+  elif curl -s --max-time 4 "$W5_BW_SERVE_URL" 2>/dev/null | grep -q '"'; then
     ok w5_bw_serve
   else
     bad w5_bw_serve
   fi
 
   # dedicated-inbox IMAP reachable (plain TCP connect, no auth, no secrets).
-  # deploy-confirm: W5_IMAP_HOST/PORT come from the W5 env file above.
-  if [ -n "${W5_IMAP_HOST:-}" ] \
-      && timeout 5 bash -c "exec 3<>/dev/tcp/${W5_IMAP_HOST}/${W5_IMAP_PORT:-993}" 2>/dev/null; then
+  # Gated on W5_IMAP_HOST (dedicated-inbox deploy phase).
+  if [ -z "${W5_IMAP_HOST:-}" ]; then
+    skip w5_inbox_imap
+  elif timeout 5 bash -c "exec 3<>/dev/tcp/${W5_IMAP_HOST}/${W5_IMAP_PORT:-993}" 2>/dev/null; then
     ok w5_inbox_imap
   else
     bad w5_inbox_imap
@@ -391,10 +405,13 @@ if [ -n "${W5_DEPLOYED:-}" ] || [ -f "$W5_MARKER" ]; then
     bad w5_patchright_chrome
   fi
 
-  # provider-contract pytest against the deployed engine.
-  # deploy-confirm: the contract test module/marker for the provider layer.
+  # provider-contract pytest against the deployed engine. Includes the
+  # never-send guard module (test_providers_base.py) so the guard's health is
+  # scored per-feature, not just the registry wiring (2026-07-06 guard wave).
   if [ -x "$RT_PY" ] && ( cd "$RT_ROOT" \
-        && "$RT_PY" -m pytest -q -p no:cacheprovider tests/test_providers_registry.py >/dev/null 2>&1 ); then
+        && "$RT_PY" -m pytest -q -p no:cacheprovider \
+             tests/test_providers_registry.py tests/test_providers_base.py \
+             >/dev/null 2>&1 ); then
     ok w5_provider_contract
   else
     bad w5_provider_contract
