@@ -481,7 +481,7 @@ class _FakeFocusSensitiveLocator:
 
 def test_type_human_no_char_dropped_when_control_needed_focus_settle():
     # Regression for the live acceptance-run bug: without the click-to-settle
-    # fix, this fake would land "ederico" (the "A" silently dropped).
+    # fix, this fake would land "ederico" (the "F" silently dropped).
     loc = _FakeFocusSensitiveLocator()
     base.type_human(loc, "Federico")
     assert loc.input_value() == "Federico"
