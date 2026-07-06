@@ -210,7 +210,11 @@ _LAST_NAME_KEYWORDS = ("last name", "surname", "family name")
 # discrete first_name/last_name key leads each list so a form with BOTH a First
 # Name and a Last Name field never has the full name typed into both; the
 # full-name paths remain as a fallback (split at render time in engine.fill)
-# for an SSOT that only carries a combined name. Order is load-bearing.
+# for an SSOT that only carries a combined name. Order is load-bearing: the
+# country-of-residence matcher MUST precede the generic current-location
+# matcher (below) so a "country of residence" question resolves the discrete
+# `identity.country` rather than the full postal address, which matches no
+# country-name option.
 _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
     (_FIRST_NAME_KEYWORDS,
      ["identity.first_name", "identity.name", "identity.full_name"]),
@@ -227,8 +231,17 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
      ["links.site", "links.website", "links.portfolio"]),
     (("notice period", "notice",),
      ["canned_answers.notice_period"]),
+    (("employment agreement", "post-employment", "post employment",
+      "non-compete", "noncompete", "restrictive covenant"),
+     ["canned_answers.post_employment_restrictions"]),
+    (("previously worked", "previously consulted", "worked at or consulted",
+      "previously employed at", "previously interned"),
+     ["canned_answers.previously_worked_at_company",
+      "canned_answers.previously_applied_default"]),
     (("sponsorship", "sponsor", "visa"),
-     ["canned_answers.visa_sponsorship_required", "work_authorization"]),
+     ["canned_answers.sponsorship_answer_by_region",
+      "canned_answers.visa_sponsorship_required",
+      "canned_answers.us_visa_sponsorship_required"]),
     (("authorized to work", "authorised to work", "right to work",
       "eligible to work", "work authorization", "work authorisation",
       "legally authorized", "legally authorised", "work permit"),
@@ -237,7 +250,10 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
      ["canned_answers.relocation", "canned_answers.willing_to_relocate"]),
     (("salary", "compensation expectation", "expected", "desired compensation"),
      ["preferences.comp_floor", "canned_answers.salary_expectation"]),
-    (("country of residence", "currently located in",
+    (("country of residence", "current country", "country you reside",
+      "country you are located"),
+     ["identity.country"]),
+    (("currently located in",
       "where are you currently located", "where are you located",
       "current location", "location"),
      ["identity.current_location", "identity.address", "identity.country"]),

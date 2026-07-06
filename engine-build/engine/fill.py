@@ -549,14 +549,21 @@ def _render_value(fld, path: str, ssot: SSOT):
 def _render_dict_value(fld, path: str, raw: dict):
     """A dotted path that resolved to an SSOT sub-tree (dict) rather than a
     scalar. A select field may still be answerable from one of the dict's
-    scalar values matching an option; a text field (or a select with no
-    matching scalar) is honestly skipped rather than typing/matching the
-    mapping itself."""
+    scalar values matching an option (exact match first, then the leading-
+    Yes/No-token fallback, `_extract_yesno_option` -- e.g. a region-keyed
+    `sponsorship_answer_by_region` dict whose EU sub-value is a full sentence
+    "No, I have the right to work..." maps onto a bare "No" option); a text
+    field (or a select with no matching scalar) is honestly skipped rather
+    than typing/matching the mapping itself."""
     if fld.type in _SELECT_TYPES:
         for value in raw.values():
             match = _match_option(fld.options, value)
             if match is not None:
                 return match, None
+        for value in raw.values():
+            extracted = _extract_yesno_option(fld.options, value)
+            if extracted is not None:
+                return extracted, None
     return None, f"{path} resolved to a mapping with no usable scalar"
 
 
@@ -601,7 +608,35 @@ def _render_select(fld, raw, ssot: SSOT):
     match = _match_option(fld.options, raw)
     if match is not None:
         return match, None
+    extracted = _extract_yesno_option(fld.options, raw)
+    if extracted is not None:
+        return extracted, None
     return None, f"no option matches SSOT value {_short(raw)!r}"
+
+
+def _extract_yesno_option(options, raw):
+    """Fallback for a Yes/No select whose SSOT value is a full sentence
+    carrying a leading Yes/No token ("No. I have no non-compete.", "Yes, I
+    would relocate."): map it onto the option that reads EXACTLY "Yes" or
+    "No" (case-insensitively strip/first-word), when one exists. Applied only
+    AFTER an exact option match has already failed (`_match_option`), never
+    as a replacement for it.
+
+    Never guesses a specific "Yes, <detail>" variant from a bare Yes token:
+    an option set carrying only "Yes, X" phrasing (no BARE "Yes" option, e.g.
+    a sponsorship select enumerating regions) has no single right answer to
+    pick, so this returns None and the caller's existing "no option matches"
+    skip stays honest rather than fabricating a choice among several
+    plausible variants. A leading "No" mapping onto a bare "No" option always
+    wins, since a bare negative reads the same regardless of enumeration."""
+    verdict = _yesno(raw)
+    if verdict is None:
+        return None
+    target = "yes" if verdict else "no"
+    for option in options or []:
+        if str(option).strip().lower() == target:
+            return option
+    return None
 
 
 # -- yes/no select normalization (criterion: right-to-work / sponsorship) ------

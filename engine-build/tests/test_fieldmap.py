@@ -335,9 +335,11 @@ def test_resume_file_field_is_still_manual_only_file_upload():
 
 
 def test_coverage_identity_location_patterns_are_answerable(real_ssot_path):
+    # NOTE: "country of residence" is deliberately NOT in this list -- gap #4
+    # split it out to its own dedicated `identity.country` matcher (below),
+    # never the full-address `identity.current_location`.
     fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
                   fields=[
-                      _field("q1", "What is your country of residence?"),
                       _field("q2", "Are you currently located in the EU?"),
                       _field("q3", "Where are you currently located?"),
                       _field("q4", "Where are you located?"),
@@ -352,6 +354,54 @@ def test_coverage_identity_location_patterns_are_answerable(real_ssot_path):
     for fld in report.fields:
         assert fld.status == ANSWERABLE, fld.label
         assert fld.path == "identity.current_location"
+
+
+# -- Gap #4: country-of-residence matcher resolves the discrete identity.country
+# path, never the full-address identity.current_location (which matches no
+# country-name option). Fake SSOT only (no PII); real_ssot_v14.yaml carries no
+# identity.country key so this is exercised against a hand-built SSOT.
+
+def test_country_of_residence_resolves_to_identity_country():
+    ssot = SSOT({"identity": {
+        "country": "Italy",
+        "current_location": "12 Example Street, Testville, Italy"}})
+    for label in ("What is your country of residence?",
+                  "What is your current country?",
+                  "Please state the country you reside in currently.",
+                  "Please state the country you are located in."):
+        fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                      fields=[_field("q_country", label)])
+        report = coverage(fm, ssot, {})
+        assert report.fields[0].status == ANSWERABLE, label
+        assert report.fields[0].path == "identity.country", label
+
+
+def test_country_of_residence_never_resolves_the_full_address():
+    # Even though identity.current_location also resolves in the SSOT (and
+    # would have won under the pre-fix matcher order), the country-of-
+    # residence question must resolve identity.country, never the address.
+    ssot = SSOT({"identity": {
+        "country": "Italy",
+        "current_location": "12 Example Street, Testville, Italy"}})
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field("q_country",
+                                "What is your country of residence?")])
+    report = coverage(fm, ssot, {})
+    assert report.fields[0].path != "identity.current_location"
+    assert report.fields[0].path == "identity.country"
+
+
+def test_country_of_residence_missing_when_ssot_lacks_identity_country():
+    # identity.current_location alone is NOT a fallback for this matcher: a
+    # posting that only carries the address never gets typed into a country
+    # dropdown (never fabricated).
+    ssot = SSOT({"identity": {
+        "current_location": "12 Example Street, Testville, Italy"}})
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field("q_country",
+                                "What is your country of residence?")])
+    report = coverage(fm, ssot, {})
+    assert report.fields[0].status == MISSING_STATUS
 
 
 def test_coverage_skills_experience_pattern_is_answerable(real_ssot_path):
@@ -392,6 +442,94 @@ def test_coverage_consent_pattern_is_answerable(real_ssot_path):
     for fld in report.fields:
         assert fld.status == ANSWERABLE, fld.label
         assert fld.path == "canned_answers.optional_consents"
+
+
+# -- Gap #1: employment-agreement / post-employment-restriction matcher -----
+
+def test_employment_restrictions_matcher_resolves_to_canned_answers():
+    ssot = SSOT({"canned_answers": {
+        "post_employment_restrictions": "No. I have no non-compete."}})
+    for label in (
+            "Are you subject to any employment agreements and/or "
+            "post-employment restrictions that would affect your ability "
+            "to work for us?",
+            "Do you have a non-compete clause?",
+            "Are you bound by any restrictive covenant?"):
+        fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                      fields=[_field("q_restrict", label)])
+        report = coverage(fm, ssot, {})
+        assert report.fields[0].status == ANSWERABLE, label
+        assert (report.fields[0].path ==
+               "canned_answers.post_employment_restrictions"), label
+
+
+def test_employment_restrictions_missing_without_ssot_answer():
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field(
+                      "q_restrict",
+                      "Are you subject to any post-employment restrictions?")])
+    report = coverage(fm, SSOT({}), {})
+    assert report.fields[0].status == MISSING_STATUS
+
+
+# -- Gap #2: previously-worked-at/consulted-for matcher ----------------------
+
+def test_previously_worked_matcher_resolves_to_canned_answers():
+    ssot = SSOT({"canned_answers": {
+        "previously_worked_at_company": "No. I have never worked here."}})
+    for label in ("Have you previously worked at or consulted for Acme?",
+                  "Have you previously worked at this company?",
+                  "Were you previously employed at Acme?"):
+        fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                      fields=[_field("q_prev", label)])
+        report = coverage(fm, ssot, {})
+        assert report.fields[0].status == ANSWERABLE, label
+        assert (report.fields[0].path ==
+               "canned_answers.previously_worked_at_company"), label
+
+
+def test_previously_worked_falls_back_to_previously_applied_default():
+    ssot = SSOT({"canned_answers": {
+        "previously_applied_default": "No, this is my first application."}})
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field(
+                      "q_prev",
+                      "Have you previously worked at or consulted for Acme?")])
+    report = coverage(fm, ssot, {})
+    assert report.fields[0].status == ANSWERABLE
+    assert report.fields[0].path == "canned_answers.previously_applied_default"
+
+
+# -- Gap #3: sponsorship matcher prefers the region-keyed dict over the -----
+# legacy scalar, and still falls back to the legacy scalar for an SSOT that
+# only carries it (backward compat with the pre-migration schema).
+
+def test_sponsorship_matcher_prefers_region_dict_over_legacy_scalar():
+    ssot = SSOT({"canned_answers": {
+        "sponsorship_answer_by_region": {"eu": "No, I have EU work rights."},
+        "visa_sponsorship_required": "no"}})
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field(
+                      "q_visa",
+                      "Will you now or in the future require sponsorship "
+                      "for a visa to remain in your current location?")])
+    report = coverage(fm, ssot, {})
+    assert report.fields[0].status == ANSWERABLE
+    assert report.fields[0].path == "canned_answers.sponsorship_answer_by_region"
+
+
+def test_sponsorship_matcher_falls_back_to_legacy_scalar_key():
+    # Backward compat: an SSOT that only carries the pre-migration scalar key
+    # (no sponsorship_answer_by_region dict) still resolves answerable.
+    ssot = SSOT({"canned_answers": {"visa_sponsorship_required": "no"}})
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field(
+                      "q_visa",
+                      "Will you now or in the future require visa "
+                      "sponsorship for employment?")])
+    report = coverage(fm, ssot, {})
+    assert report.fields[0].status == ANSWERABLE
+    assert report.fields[0].path == "canned_answers.visa_sponsorship_required"
 
 
 # -- W5 additive schema extension (schema_version 2) -------------------------

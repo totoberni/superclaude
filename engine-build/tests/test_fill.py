@@ -1742,3 +1742,128 @@ def test_yesno_us_sponsorship_is_skipped_not_guessed(real_ssot_path):
     resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
     assert "q_visa_us" not in resolved.values
     assert "region-ambiguous" in dict(resolved.skipped)["q_visa_us"]
+
+
+# --- (4) leading-yes/no-token extraction fallback (live acceptance gaps) -----
+# Many canned answers are full sentences ("No. I have no non-compete.",
+# "Yes, I would relocate.") that must still map onto a bare Yes/No select
+# option: `_render_select`/`_render_dict_value` extract the leading token as a
+# FALLBACK after an exact option match fails. FAKE SSOT only, no owner PII.
+
+def test_leading_no_sentence_fills_bare_no_option():
+    # Gap #1 shape: employment-agreement/post-employment-restriction question,
+    # answer is a full sentence starting "No.".
+    ssot = SSOT({"canned_answers": {
+        "post_employment_restrictions": "No. I have no non-compete."}})
+    fm = _fieldmap(_field(
+        "q_restrict",
+        "Are you subject to any employment agreements and/or "
+        "post-employment restrictions?",
+        type_="multi_value_single_select", options=["Yes", "No"],
+        role="combobox"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_restrict"] == "No"
+    assert resolved.skipped == []
+
+
+def test_leading_no_sentence_fills_bare_no_option_previously_worked():
+    # Gap #2 shape: previously-worked-at-company question, same sentence shape.
+    ssot = SSOT({"canned_answers": {
+        "previously_worked_at_company": "No. I have never worked there."}})
+    fm = _fieldmap(_field(
+        "q_prev", "Have you previously worked at or consulted for Acme?",
+        type_="multi_value_single_select", options=["Yes", "No"],
+        role="combobox"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_prev"] == "No"
+    assert resolved.skipped == []
+
+
+def test_leading_yes_sentence_fills_bare_yes_option():
+    ssot = SSOT({"canned_answers": {
+        "post_employment_restrictions": "Yes, I would need to check my prior "
+                                        "employment contract."}})
+    fm = _fieldmap(_field(
+        "q_restrict", "Are you subject to any post-employment restrictions?",
+        type_="multi_value_single_select", options=["Yes", "No"],
+        role="combobox"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_restrict"] == "Yes"
+
+
+def test_leading_yes_sentence_is_skipped_when_only_specific_variants_exist():
+    # No BARE "Yes" option -- only "Yes, <region>" variants -- so a leading
+    # "Yes" sentence must never guess a specific variant; it stays honestly
+    # skipped rather than fabricate a choice.
+    ssot = SSOT({"canned_answers": {
+        "post_employment_restrictions": "Yes, I would need to check my prior "
+                                        "employment contract."}})
+    fm = _fieldmap(_field(
+        "q_restrict", "Are you subject to any post-employment restrictions?",
+        type_="multi_value_single_select",
+        options=["No", "Yes, in the EU", "Yes, in the UK"], role="combobox"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert "q_restrict" not in resolved.values
+    reason = dict(resolved.skipped)["q_restrict"]
+    assert "no option matches" in reason
+
+
+def test_leading_no_sentence_still_fills_no_variant_option_when_bare_no_exists():
+    # A leading "No" always wins even when the OTHER polarity only has
+    # specific variants, since a bare negative reads the same regardless of
+    # how the affirmative side is enumerated.
+    ssot = SSOT({"canned_answers": {
+        "post_employment_restrictions": "No. I have no non-compete."}})
+    fm = _fieldmap(_field(
+        "q_restrict", "Are you subject to any post-employment restrictions?",
+        type_="multi_value_single_select",
+        options=["No", "Yes, in the EU", "Yes, in the UK"], role="combobox"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_restrict"] == "No"
+
+
+def test_sponsorship_region_dict_resolves_via_leading_token_extraction():
+    # Gap #3 end to end: canned_answers.sponsorship_answer_by_region is a
+    # DICT keyed by region; none of its sentence values exact-match an
+    # enumerated option, but the EU sub-value's leading "No" token maps onto
+    # the bare "No" option.
+    ssot = SSOT({"canned_answers": {"sponsorship_answer_by_region": {
+        "eu": "No, I have the right to work in the EU/EEA without sponsorship.",
+        "uk": "Yes, I would require a Skilled Worker visa.",
+        "us": "Yes, I would require an H-1B visa.",
+    }}})
+    fm = _fieldmap(_field(
+        "q_visa",
+        "Will you now or in the future require sponsorship for a visa to "
+        "remain in your current location?",
+        type_="multi_value_single_select",
+        options=["No", "Yes, Netherlands (Highly Skilled Migrant)",
+                "Yes, Ireland (Critical Skills)", "Yes, EU Blue Card"],
+        role="combobox"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_visa"] == "No"
+    assert resolved.skipped == []
+
+
+def test_country_of_residence_fills_country_option_from_long_list():
+    # Gap #4 end to end: identity.country resolves against a long
+    # country-name option list; the full-address identity.current_location
+    # (which matches no option in the list) is never consulted.
+    ssot = SSOT({"identity": {
+        "country": "Italy",
+        "current_location": "12 Example Street, Testville, Italy"}})
+    fm = _fieldmap(_field(
+        "q_country", "What is your country of residence?",
+        type_="multi_value_single_select",
+        options=["France", "Germany", "Italy", "Spain", "Portugal"],
+        role="combobox"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_country"] == "Italy"
+    assert resolved.skipped == []
