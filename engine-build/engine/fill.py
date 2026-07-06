@@ -977,9 +977,10 @@ def _fill_upload(page, fv: FieldValue, assets: FillAssets | None,
                     "path": str(fv.value), "reason": fv.upload_reason})
 
 
-def _upload_attached(control) -> bool:
+def _upload_attached(control, *, confirm: Callable[[], bool] | None = None) -> bool:
     """True iff the file input genuinely holds an attached file after
-    `set_input_files`.
+    `set_input_files` AND (when `confirm` is supplied) the vendor's own UI
+    rendered it.
 
     PREFERS the input's own `files` FileList, read via `evaluate` (`el.files
     .length >= 1`): a live-DOM probe of Greenhouse's resume/CV widget proved
@@ -995,6 +996,21 @@ def _upload_attached(control) -> bool:
     no such ambiguity: it is >=1 iff a file object is actually on the input,
     independent of anything a vendor's JS does to `.value` afterwards.
 
+    BUT `el.files.length >= 1` alone is STILL NOT SUFFICIENT (2026-07-06
+    gitlab/8503792002 acceptance run, HOSTILE REVIEW #1): a live probe showed
+    the native input can genuinely hold the file while Greenhouse's own
+    React-driven widget never rendered it (no filename, no remove control --
+    still the empty "Attach"/"Enter manually" placeholder), because Greenhouse
+    reads the change through its OWN component state, not merely the native
+    FileList. `confirm`, when supplied, is an ADDITIONAL required check
+    (called with no args, any exception treated as NOT confirmed): a
+    vendor-specific callable that polls the vendor's own rendered
+    confirmation UI (see `engine.providers.base.poll_upload_confirmed`).
+    Greenhouse's `_fill_upload` supplies one; a caller that omits `confirm`
+    (lever/workable/ashby, and this module's own generic `_fill_upload`) keeps
+    the pre-existing FileList-only signal unchanged -- `confirm` is additive,
+    never a behavior change for a caller that does not opt in.
+
     Falls back to `input_value()` only when the control exposes no
     `evaluate` at all (a vendor/fixture not yet carrying the file-count
     signal); that fallback is UNCONFIRMED for Greenhouse and must never be
@@ -1004,7 +1020,10 @@ def _upload_attached(control) -> bool:
     `evaluate`, no `input_value`, or either one raising or returning
     something that is not a genuine count -- is treated as NOT attached, so
     an unreadable readback can never silently pass a required upload as
-    filled."""
+    filled. Same bias for `confirm`: it must return truthy to count; a
+    missing/raising/falsy confirm means NOT attached, so a non-functional
+    attach is always honestly reported as a required gap, never a silent
+    false-COMPLETE."""
     evaluator = getattr(control, "evaluate", None)
     if callable(evaluator):
         try:
@@ -1012,17 +1031,24 @@ def _upload_attached(control) -> bool:
         except Exception:
             return False
         try:
-            return int(count) >= 1
+            attached = int(count) >= 1
         except (TypeError, ValueError):
             return False
-    getter = getattr(control, "input_value", None)
-    if not callable(getter):
-        return False
+    else:
+        getter = getattr(control, "input_value", None)
+        if not callable(getter):
+            return False
+        try:
+            value = getter()
+        except Exception:
+            return False
+        attached = bool(value)
+    if not attached or confirm is None:
+        return attached
     try:
-        value = getter()
+        return bool(confirm())
     except Exception:
         return False
-    return bool(value)
 
 
 def _locate_file_input(page, fv: FieldValue):
@@ -1031,24 +1057,60 @@ def _locate_file_input(page, fv: FieldValue):
     Preference (per the live probe of Greenhouse/Lever/Ashby): an input whose
     id or name contains a meaningful token of the field key (e.g. "resume");
     else, by `accept` MIME family: an image input for a photo field, a document
-    input (or an input with no `accept`) for a CV field. None if none matches."""
+    input (or an input with no `accept`) for a CV field. None if none matches.
+
+    LIVE-DOM ROOT CAUSE (2026-07-06 gitlab/8503792002 acceptance run, HOSTILE
+    REVIEW #1): `_file_inputs` enumerates candidates via `query_selector_all`,
+    which returns Playwright ElementHandles -- a snapshot reference resolved
+    ONCE, at scan time. Driving `set_input_files` directly on that handle put
+    the file genuinely into the input's own `files` FileList (so the OLD
+    `el.files.length`-only readback reported success), but Greenhouse's
+    React-driven widget never rendered the attach (no filename, no remove
+    control): a live probe proved a plain `page.locator('input[type=file]
+    #resume').set_input_files(cv)` on the SAME input DOES make the widget
+    render it. A `Locator` re-resolves its selector fresh at the exact moment
+    the action runs, so it always drives whichever node is CURRENTLY mounted
+    and wired to Greenhouse's own change handling; an ElementHandle captured
+    earlier can silently end up acting on a stale/detached reference instead.
+    `_file_input_control` returns `page.locator("input[type=file]").nth(index)`
+    (the SAME positional match `_file_inputs` inspected -- no id/name CSS
+    construction needed, dodging attribute-escaping edge cases entirely) so
+    every caller's `set_input_files` now goes through a live Locator by
+    default. Falls back to the raw handle only when `page` exposes no
+    `.locator` at all (an older fixture/fake not yet carrying it)."""
     inputs = _file_inputs(page)
     if not inputs:
         return None
     tokens = _field_key_tokens(fv.key)
-    for inp in inputs:
+    for index, inp in enumerate(inputs):
         idname = _input_idname(inp)
         if idname and any(token in idname for token in tokens):
-            return inp
+            return _file_input_control(page, index, inp)
     want_image = fv.asset == "photo"
-    for inp in inputs:
+    for index, inp in enumerate(inputs):
         accept = _input_accept(inp)
         if want_image:
             if _accept_has_image(accept):
-                return inp
+                return _file_input_control(page, index, inp)
         elif not accept or _accept_has_doc(accept):
-            return inp
+            return _file_input_control(page, index, inp)
     return None
+
+
+def _file_input_control(page, index: int, handle):
+    """The control to DRIVE the file input at `index` (same document order
+    `_file_inputs` enumerated): a fresh `page.locator("input[type=file]")
+    .nth(index)` when `page` supports it (re-resolves live at action time --
+    see `_locate_file_input`'s docstring for why this matters), else the raw
+    `handle` `_file_inputs` already inspected (a fixture/fake with no
+    `.locator`, or one whose locator does not model file inputs)."""
+    locator_fn = getattr(page, "locator", None)
+    if not callable(locator_fn):
+        return handle
+    try:
+        return locator_fn("input[type=file]").nth(index)
+    except Exception:
+        return handle
 
 
 def _file_inputs(page):

@@ -371,9 +371,14 @@ def _fill_upload(page, fv, uploads: list[dict],
     """Attach a whitelisted asset via the reused `base._safe_upload` /
     `engine.fill._locate_file_input` (the real `<input type=file>` locator;
     the fieldmap's best-effort role=button hint never reaches it). A
-    successful upload counts as filled ONLY once the input's own readback
-    confirms a file actually attached, mirroring `fill._fill_upload`'s
-    contract exactly (this module drives the SAME primitives, not a
+    successful upload counts as filled ONLY once BOTH the input's own
+    readback confirms a file actually attached AND Greenhouse's own rendered
+    widget shows it (`confirm=`, see `base.poll_upload_confirmed`): a live
+    probe proved the native FileList alone can be non-empty while
+    Greenhouse's React-driven widget never rendered the attach (HOSTILE
+    REVIEW #1, 2026-07-06 gitlab/8503792002 run), so `el.files.length` on its
+    own is a structural false positive here. This mirrors `fill._fill_upload`'s
+    contract otherwise exactly (this module drives the SAME primitives, not a
     reimplementation of the attach-confirmation logic)."""
     from engine import fill as _fill
 
@@ -389,7 +394,8 @@ def _fill_upload(page, fv, uploads: list[dict],
     except Exception as exc:  # per-field upload error is fail-soft
         extra_skips.append((fv.key, f"upload-error: {exc}"))
         return
-    if not _fill._upload_attached(control):
+    confirm = lambda: base.poll_upload_confirmed(page, control, str(fv.value))
+    if not _fill._upload_attached(control, confirm=confirm):
         extra_skips.append((fv.key, "upload did not attach (readback)"))
         return
     filled_keys.add(fv.key)

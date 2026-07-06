@@ -196,10 +196,20 @@ _NO_OVERRIDE = object()
 
 
 class _FakeFileInput:
+    """`rendered_confirmed` models whether GREENHOUSE'S OWN widget renders the
+    attach (filename text + a remove control), independently of the native
+    `input_value()` readback: the live probe (HOSTILE REVIEW #1, 2026-07-06
+    gitlab/8503792002 run) proved the native FileList can be genuinely
+    non-empty while the widget NEVER renders it, so these two signals are
+    modelled as INDEPENDENT here on purpose. Defaults True (the widget
+    confirms once uploaded) -- pass `rendered_confirmed=False` to reproduce
+    the false-positive bug (file attached, widget never shows it)."""
+
     def __init__(self, *, id=None, name=None, accept=None,
-                 readback=_NO_OVERRIDE):
+                 readback=_NO_OVERRIDE, rendered_confirmed=True):
         self._attrs = {"id": id, "name": name, "accept": accept}
         self._readback_override = readback
+        self._rendered_confirmed = rendered_confirmed
         self.set_input_files_calls = 0
         self.uploaded = None
         self.clicks = 0
@@ -218,6 +228,42 @@ class _FakeFileInput:
         if self._readback_override is not _NO_OVERRIDE:
             return self._readback_override
         return self.uploaded or ""
+
+    def locator(self, css):
+        """The widget's own immediate container (`xpath=..`, mirroring
+        `engine.providers.base._upload_widget_container`)."""
+        if css == "xpath=..":
+            return _FakeUploadWidgetContainer(self)
+        raise AssertionError(f"unexpected selector {css!r}")
+
+
+class _FakeUploadWidgetContainer:
+    """The rendered widget container `base.poll_upload_confirmed` polls:
+    shows the uploaded file's stem as text, and a Remove control, ONLY once
+    a file landed AND the fake models Greenhouse actually confirming it
+    (`_rendered_confirmed`)."""
+
+    def __init__(self, file_input: _FakeFileInput):
+        self._file_input = file_input
+
+    def _shows_confirmation(self) -> bool:
+        return bool(self._file_input.uploaded) and self._file_input._rendered_confirmed
+
+    def inner_text(self):
+        if not self._shows_confirmation():
+            return ""
+        return Path(self._file_input.uploaded).stem
+
+    def get_by_role(self, role, name=None):
+        return _FakeRoleQuery(self._shows_confirmation())
+
+
+class _FakeRoleQuery:
+    def __init__(self, present: bool):
+        self._present = present
+
+    def count(self):
+        return 1 if self._present else 0
 
 
 class _FakeSweepLocator:

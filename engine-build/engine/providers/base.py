@@ -41,6 +41,7 @@ import random
 import re
 import time
 import urllib.parse
+from pathlib import Path
 
 # -- re-exported fill primitives (call-time lookup preserves the patch seam) ----
 
@@ -646,3 +647,90 @@ def _wait_timeout(page, ms: int) -> None:
         waiter(ms)
     else:
         time.sleep(ms / 1000.0)
+
+
+# -- upload rendered-confirmation poll (Greenhouse resume-upload false ---------
+# positive fix, 2026-07-06 gitlab/8503792002 acceptance run, HOSTILE REVIEW #1)
+#
+# `engine.fill._upload_attached`'s `el.files.length >= 1` check is NECESSARY
+# but NOT SUFFICIENT for Greenhouse: a live probe showed the engine's own
+# upload path (an ElementHandle captured once via `query_selector_all`,
+# fixed in `engine.fill._locate_file_input`/`_file_input_control`) left the
+# file genuinely sitting in the native input's FileList while Greenhouse's
+# React-driven widget never rendered it -- still the empty "Attach"/"Enter
+# manually" placeholder, no filename, no remove control. A DIRECT
+# `page.locator('input[type=file]#resume').set_input_files(cv)` on the SAME
+# input DID make the widget render the uploaded filename AND a remove
+# control, proving Greenhouse keys its own confirmed-attached UI off actually
+# receiving the change through React, never off the native FileList alone.
+#
+# `poll_upload_confirmed` is the truthful signal this gap needs: it polls the
+# file input's own immediate container (its parent element -- Greenhouse
+# renders the filename text and the remove control as SIBLINGS of the native
+# input inside that shared parent in every layout observed so far) for
+# EITHER the uploaded file's basename appearing in the container's text, OR a
+# visible remove/delete control. Best-effort selector, UNVERIFIED against
+# every possible Greenhouse theme -- same caveat as `_single_value_text`
+# above, flagged for the owner's live iteration.
+
+_REMOVE_CONTROL_NAME_RE = re.compile(r"remove|delete|clear", re.I)
+
+
+def poll_upload_confirmed(page, control, filename: str, *,
+                          poll_ms: tuple[int, ...] = (300, 700, 1500)) -> bool:
+    """Poll `_upload_widget_confirmed` at the given cumulative offsets
+    (mirrors `_poll_single_value`'s pattern): True as soon as it confirms, up
+    to ~1.5s total, generous enough for React's post-attach re-render. Never
+    raises: any DOM-query failure along the way reads as NOT confirmed
+    (never-attached bias, mirroring `_upload_attached`'s own philosophy)."""
+    elapsed = 0
+    for mark in poll_ms:
+        _wait_timeout(page, mark - elapsed)
+        elapsed = mark
+        if _upload_widget_confirmed(control, filename):
+            return True
+    return False
+
+
+def _upload_widget_confirmed(control, filename: str) -> bool:
+    """One-shot DOM check: True iff the file input's own widget container
+    shows the uploaded file's name and/or a remove/delete control. Never
+    raises: a control/container missing a probed method, or any DOM query
+    failing, reads as NOT confirmed."""
+    container = _upload_widget_container(control)
+    if container is None:
+        return False
+    stem = _normalize_name(Path(filename).stem) if filename else ""
+    text = _normalize_name(_locator_text(container))
+    if stem and stem in text:
+        return True
+    return _has_remove_control(container)
+
+
+def _upload_widget_container(control):
+    """The file input's own immediate container (its parent element), scoped
+    via `xpath=..`. None when the control exposes no `.locator` (a fixture/
+    fake not modelling one, or a bare ElementHandle fallback with no
+    container reachable this way)."""
+    locator_fn = getattr(control, "locator", None)
+    if not callable(locator_fn):
+        return None
+    try:
+        return locator_fn("xpath=..")
+    except Exception:
+        return None
+
+
+def _has_remove_control(container) -> bool:
+    getter = getattr(container, "get_by_role", None)
+    if not callable(getter):
+        return False
+    for role in ("button", "link"):
+        try:
+            candidate = getter(role, name=_REMOVE_CONTROL_NAME_RE)
+            counter = getattr(candidate, "count", None)
+            if callable(counter) and counter() > 0:
+                return True
+        except Exception:
+            continue
+    return False
