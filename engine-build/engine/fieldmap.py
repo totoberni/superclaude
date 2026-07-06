@@ -259,6 +259,9 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
      ["identity.current_location", "identity.address", "identity.country"]),
     (("please confirm", "privacy policy", "consent to", "i agree"),
      ["canned_answers.optional_consents"]),
+    (("accommodation", "accommodations", "accessible and inclusive",
+      "reasonable adjustment", "accessibility need"),
+     ["canned_answers.accommodations"]),
     (("name",), ["identity.name", "identity.full_name"]),
 ]
 

@@ -444,6 +444,61 @@ def test_coverage_consent_pattern_is_answerable(real_ssot_path):
         assert fld.path == "canned_answers.optional_consents"
 
 
+# -- Accommodations/accessibility matcher: a Greenhouse optional text question
+# ("It is important to us to create an accessible and inclusive... please let
+# us know if you require any accommodations...") previously had no matcher and
+# fell through to `_missing_path_guess`'s long slug. -----------------------
+
+def test_accommodations_matcher_resolves_to_canned_answers():
+    ssot = SSOT({"canned_answers": {
+        "accommodations": "No accommodations required."}})
+    for label in (
+            "It is important to us to create an accessible and inclusive "
+            "environment. Please let us know if you require any "
+            "accommodations during our interview process.",
+            "Do you require any accommodations for your interview?",
+            "Please describe any reasonable adjustment you may need.",
+            "Let us know if you have an accessibility need."):
+        fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                      fields=[_field("q_accommodation", label)])
+        report = coverage(fm, ssot, {})
+        assert report.fields[0].status == ANSWERABLE, label
+        assert report.fields[0].path == "canned_answers.accommodations", label
+
+
+def test_accommodations_missing_without_ssot_answer():
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field(
+                      "q_accommodation",
+                      "Please let us know if you require any "
+                      "accommodations.")])
+    report = coverage(fm, SSOT({}), {})
+    assert report.fields[0].status == MISSING_STATUS
+
+
+def test_accommodations_matcher_does_not_shadow_unrelated_consent_question(
+        real_ssot_path):
+    # The new matcher must not intercept a question intended for an existing
+    # matcher earlier in `_ANSWER_MATCHERS` (here: the consent pattern).
+    ssot = SSOT.load(real_ssot_path)
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[
+                      _field("q_consent",
+                            "Please confirm you have read our recruiting "
+                            "policy."),
+                      _field("q_accommodation",
+                            "Please let us know if you require any "
+                            "accommodations."),
+                  ])
+    report = coverage(fm, ssot, {})
+    by_key = {f.key: f for f in report.fields}
+    assert by_key["q_consent"].path == "canned_answers.optional_consents"
+    # accommodations is MISSING here (real_ssot fixture carries no
+    # canned_answers.accommodations key) but must not resolve to the
+    # unrelated consent path either.
+    assert by_key["q_accommodation"].path != "canned_answers.optional_consents"
+
+
 # -- Gap #1: employment-agreement / post-employment-restriction matcher -----
 
 def test_employment_restrictions_matcher_resolves_to_canned_answers():
