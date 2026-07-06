@@ -34,10 +34,14 @@ try:
     fieldmap = PROV.capture(SLUG, JOB_ID, opener)
     result["stage"] = "resolve"
     # Whitelisted upload assets (verified() drops any path missing on disk):
-    # a full fill needs the CV pdf; photo stays None until a posting needs it.
+    # a full fill needs the CV pdf; photo stays None until a posting needs
+    # it. cover_letter is likewise optional: verified() drops it to None when
+    # the file is absent, so a run with no cover-letter document still works.
     assets = FillAssets(
         cv_ats=Path(os.path.expanduser("~/automations/documents/cv-ats.pdf")),
         cv_atsi=Path(os.path.expanduser("~/automations/documents/cv-atsi.pdf")),
+        cover_letter=Path(os.path.expanduser(
+            "~/automations/documents/cover_letter.pdf")),
     ).verified()
     values = PROV.resolve_values(fieldmap, ssot, profile, assets=assets)
 

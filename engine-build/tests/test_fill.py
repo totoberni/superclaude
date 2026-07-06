@@ -709,9 +709,15 @@ def _fv(key, label, type_, value, *, role="textbox"):
 # W4 4c owner refinements: CV upload (2) + profile picture (3)
 # =============================================================================
 
-def _make_assets(tmp_path, *, ats=True, atsi=True, photo=True):
+def _make_assets(tmp_path, *, ats=True, atsi=True, photo=True,
+                 cover_letter=False):
     """Build a FillAssets over real temp files; absent legs point at a
-    non-existent path so `verified()` collapses them to None."""
+    non-existent path so `verified()` collapses them to None.
+
+    `cover_letter` defaults False (unlike the other legs): most existing
+    callers rely on the cover-letter asset being ABSENT to exercise the
+    justified-skip path, so a caller must opt in explicitly to get a real
+    cover-letter document."""
     def make(name, present):
         p = tmp_path / name
         if present:
@@ -719,7 +725,8 @@ def _make_assets(tmp_path, *, ats=True, atsi=True, photo=True):
         return p
     return FillAssets(cv_ats=make("cv-ats.pdf", ats),
                       cv_atsi=make("cv-atsi.pdf", atsi),
-                      photo=make("Me.png", photo))
+                      photo=make("Me.png", photo),
+                      cover_letter=make("cover-letter.pdf", cover_letter))
 
 
 def test_cv_default_is_ats(tmp_path, real_ssot_path):
@@ -802,6 +809,52 @@ def test_cover_letter_file_field_is_skipped_never_gets_the_cv(
     skip_reason = dict(values.skipped)["cover_letter"]
     assert "cv-ats" not in skip_reason
     assert skip_reason == (
+        "optional cover-letter upload; no cover-letter document asset (cover "
+        "letter is drafted per-posting in the manual flow)")
+
+
+def test_cover_letter_file_field_uploads_the_cover_letter_asset_when_present(
+        tmp_path, real_ssot_path):
+    # This task: a real cover-letter document asset now exists, so a
+    # `cover_letter` file field must upload it (tagged "cover-letter"),
+    # never the CV and never a skip.
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(
+        _field("resume", "Resume", type_="input_file", role="button",
+              required=True),
+        _field("cover_letter", "Cover Letter", type_="input_file",
+               role="button", required=False),
+    )
+    assets = _make_assets(tmp_path, cover_letter=True)
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot),
+                            assets=assets)
+
+    by_key = {fv.key: fv for fv in values.fields}
+    assert "cover_letter" not in dict(values.skipped)
+    assert "cover_letter" in by_key
+    fv = by_key["cover_letter"]
+    assert fv.asset == "cover-letter"
+    assert Path(fv.value).name == "cover-letter.pdf"
+    assert "cover-letter document asset" in fv.upload_reason
+    # The sibling resume field is unaffected: still the CV, never the
+    # cover-letter document.
+    assert by_key["resume"].asset == "cv-ats"
+
+
+def test_cover_letter_file_field_asset_missing_on_disk_is_skipped(
+        tmp_path, real_ssot_path):
+    # A cover_letter asset PATH is supplied but does not exist on disk:
+    # verified() collapses it to None, so the field is skipped for the same
+    # justified reason as the no-asset case.
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(_field("cover_letter", "Cover Letter", type_="input_file",
+                          role="button", required=False))
+    assets = FillAssets(cover_letter=tmp_path / "does-not-exist.pdf")
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot),
+                            assets=assets)
+
+    assert values.fields == []
+    assert dict(values.skipped)["cover_letter"] == (
         "optional cover-letter upload; no cover-letter document asset (cover "
         "letter is drafted per-posting in the manual flow)")
 

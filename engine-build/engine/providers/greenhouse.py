@@ -559,9 +559,10 @@ def _current_assets(fv):
     keyed to whichever asset slot `fv.asset` names reconstructs an
     equivalent whitelist without threading the original object through the
     Provider contract's `fill(page, fieldmap, values)` signature."""
-    kwargs = {"cv_ats": None, "cv_atsi": None, "photo": None}
-    slot = {"cv-ats": "cv_ats", "cv-atsi": "cv_atsi",
-           "photo": "photo"}.get(fv.asset)
+    kwargs = {"cv_ats": None, "cv_atsi": None, "photo": None,
+             "cover_letter": None}
+    slot = {"cv-ats": "cv_ats", "cv-atsi": "cv_atsi", "photo": "photo",
+           "cover-letter": "cover_letter"}.get(fv.asset)
     if slot is not None:
         kwargs[slot] = fv.value
     return FillAssets(**kwargs)

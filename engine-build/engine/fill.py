@@ -22,9 +22,10 @@ SAFETY INVARIANTS (load-bearing; enforced in code AND tests):
   navigation is treated as a possible submission/redirect and raises
   `FillSafetyError`.
 - File uploads are WHITELISTED, never arbitrary (owner override of the W5
-  deferral, 2026-07-03): the dry run now attaches the CV / profile photo on file
-  fields, but ONLY the paths carried by `FillAssets` (the documents/ CVs and the
-  profile-pics photo) may be uploaded. `_safe_upload` refuses any other path
+  deferral, 2026-07-03): the dry run now attaches the CV / profile photo /
+  cover-letter document on file fields, but ONLY the paths carried by
+  `FillAssets` (the documents/ CVs, the profile-pics photo, and the optional
+  cover-letter document) may be uploaded. `_safe_upload` refuses any other path
   (`FillSafetyError`) and never clicks to open a chooser unless the trigger name
   clears both the submit denylist AND the attach/upload/browse allowlist. The
   owner accepts transmit-on-select for field-level uploads; submission stays
@@ -152,11 +153,12 @@ _PHOTO_LABEL_RE = re.compile(
     r"photo|picture|headshot|profile image|foto|immagine", re.I)
 
 # A cover-letter file-upload control: key or label names "cover letter" (also
-# matches the underscore/hyphen key form cover_letter, cover-letter-text).
-# There is no cover-letter DOCUMENT asset (the cover letter is drafted
-# per-posting in the manual flow), so a match here must never fall through to
-# the CV-selection branch -- see the live-run bug where a `cover_letter` file
-# field silently received `cv-ats.pdf`. Deliberately narrow (requires "cover"
+# matches the underscore/hyphen key form cover_letter, cover-letter-text). A
+# match here resolves to the dedicated `FillAssets.cover_letter` document
+# asset when one is present, and must NEVER fall through to the CV-selection
+# branch -- see the live-run bug where a `cover_letter` file field silently
+# received `cv-ats.pdf`. With no cover-letter asset it is honestly skipped
+# (there is nothing to upload). Deliberately narrow (requires "cover"
 # immediately followed by "letter") so it never misfires on `resume` or
 # `avatar`/`photo` keys that merely share a stray token.
 _COVER_LETTER_RE = re.compile(r"cover[\s_-]*letter", re.I)
@@ -183,7 +185,8 @@ class FillSafetyError(RuntimeError):
 
 @dataclass
 class FillAssets:
-    """The whitelisted upload assets: the two CVs and the profile photo.
+    """The whitelisted upload assets: the two CVs, the profile photo, and an
+    optional cover-letter document.
 
     Every path is optional and runtime-verified: `verified()` drops any path
     that does not exist on disk to None, so an absent asset becomes a skip
@@ -194,12 +197,14 @@ class FillAssets:
     cv_ats: Path | None = None
     cv_atsi: Path | None = None
     photo: Path | None = None
+    cover_letter: Path | None = None
 
     def verified(self) -> "FillAssets":
         """A copy whose non-existent asset paths are collapsed to None."""
         return FillAssets(cv_ats=_existing(self.cv_ats),
                           cv_atsi=_existing(self.cv_atsi),
-                          photo=_existing(self.photo))
+                          photo=_existing(self.photo),
+                          cover_letter=_existing(self.cover_letter))
 
     def is_whitelisted(self, path) -> bool:
         """True iff `path` resolves to one of the (existing) asset paths."""
@@ -207,7 +212,8 @@ class FillAssets:
         if target is None:
             return False
         return any(_resolved(asset) == target
-                   for asset in (self.cv_ats, self.cv_atsi, self.photo)
+                   for asset in (self.cv_ats, self.cv_atsi, self.photo,
+                                 self.cover_letter)
                    if asset is not None)
 
 
@@ -356,13 +362,14 @@ def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
 
     File-upload fields resolve to a whitelisted asset (owner override): a
     candidate-photo field gets the profile photo, a cover-letter file field
-    (key/label matching "cover letter", e.g. `cover_letter`) is SKIPPED rather
-    than filled -- there is no cover-letter document asset, so it must never
-    receive the CV -- and every OTHER file field gets a CV picked by the
-    deterministic rule (cv-ats by default; cv-atsi ONLY when the form has no
-    photo field AND `posting_lang` is Italian). With no `assets` (the
-    pre-override default) file fields keep the old "file-upload" skip, so the
-    existing contract holds.
+    (key/label matching "cover letter", e.g. `cover_letter`) gets the
+    dedicated cover-letter document asset when one is present in `FillAssets`
+    -- it must NEVER receive the CV instead -- and is otherwise honestly
+    SKIPPED (no cover-letter document asset), and every OTHER file field gets
+    a CV picked by the deterministic rule (cv-ats by default; cv-atsi ONLY
+    when the form has no photo field AND `posting_lang` is Italian). With no
+    `assets` (the pre-override default) file fields keep the old
+    "file-upload" skip, so the existing contract holds.
 
     A checkbox (boolean) is resolved by its label intent (`_resolve_boolean`): a
     consent/confirmation box ticks True when the SSOT ratifies consent, a
@@ -437,10 +444,12 @@ def _is_cover_letter_field(fld) -> bool:
                 or _COVER_LETTER_RE.search(fld.label or ""))
 
 
-# The cover-letter file field is left unfilled on purpose: there is no
-# cover-letter DOCUMENT asset in `FillAssets` (only the two CVs and the
-# photo), and the field is optional, so it is honestly skipped rather than
-# silently receiving the CV (the live-confirmed bug this fixes).
+# The cover-letter file field is skipped with this reason ONLY when
+# `FillAssets.cover_letter` is absent: the field is optional and there is
+# nothing to upload, so it is honestly skipped rather than silently
+# receiving the CV (the live-confirmed bug this guards against). When a real
+# cover-letter document asset IS present, `_resolve_upload` uploads it
+# instead -- see the cover-letter branch below.
 _COVER_LETTER_SKIP_REASON = (
     "optional cover-letter upload; no cover-letter document asset (cover "
     "letter is drafted per-posting in the manual flow)")
@@ -456,10 +465,14 @@ def _resolve_upload(fld, resolved: ResolvedValues, assets: FillAssets | None,
         asset_name, path, reason = ("photo", assets.photo,
                                     "candidate photo/portrait field")
     elif _is_cover_letter_field(fld):
-        # Never resolve a cover-letter file field to the CV asset: there is no
-        # cover-letter document to upload, and the field is optional.
-        resolved.skipped.append((fld.key, _COVER_LETTER_SKIP_REASON))
-        return
+        if assets.cover_letter is None:
+            # Never resolve a cover-letter file field to the CV asset: with
+            # no cover-letter document asset there is nothing to upload, and
+            # the field is optional, so it is honestly skipped.
+            resolved.skipped.append((fld.key, _COVER_LETTER_SKIP_REASON))
+            return
+        asset_name, path, reason = ("cover-letter", assets.cover_letter,
+                                    "cover-letter document asset")
     else:
         asset_name, path, reason = _select_cv(assets, posting_lang, has_photo_field)
     if path is None:

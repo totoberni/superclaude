@@ -61,7 +61,10 @@ def _fake_ssot() -> SSOT:
     })
 
 
-def _assets(tmp_path, *, ats=True, atsi=True, photo=True) -> FillAssets:
+def _assets(tmp_path, *, ats=True, atsi=True, photo=True,
+           cover_letter=False) -> FillAssets:
+    """`cover_letter` defaults False: no fixture field carries that key, and
+    a caller must opt in explicitly to exercise the cover-letter upload."""
     def make(name, present):
         p = tmp_path / name
         if present:
@@ -69,7 +72,8 @@ def _assets(tmp_path, *, ats=True, atsi=True, photo=True) -> FillAssets:
         return p
     return FillAssets(cv_ats=make("cv-ats.pdf", ats),
                       cv_atsi=make("cv-atsi.pdf", atsi),
-                      photo=make("Me.png", photo))
+                      photo=make("Me.png", photo),
+                      cover_letter=make("cover-letter.pdf", cover_letter))
 
 
 # -- fake DOM harness (mirrors dom.html) ------------------------------------
@@ -616,6 +620,65 @@ def test_fill_resume_text_satisfied_by_sibling_upload_is_complete(tmp_path):
     assert dict(report.skipped)["resume_text"] == (
         "satisfied by sibling file upload: resume")
     assert not any(g["key"] == "resume_text" for g in report.required_unfilled)
+    assert not any(str(g["key"]).startswith("dom-sweep:")
+                  for g in report.required_unfilled)
+    assert report.required_unfilled == []
+    assert report.complete is True
+    assert report.caption().endswith("COMPLETE")
+
+
+def test_fill_cover_letter_text_satisfied_by_sibling_upload_is_complete(
+        tmp_path):
+    # This task: mirrors test_fill_resume_text_satisfied_by_sibling_upload_
+    # is_complete for the cover_letter/cover_letter_text sibling pair. Once a
+    # real cover-letter document asset uploads to the `cover_letter` file
+    # field, `cover_letter_text` must be treated SATISFIED by the sibling
+    # upload: never driven, never a required gap -- the form reads COMPLETE.
+    fieldmap = FieldMap(vendor="greenhouse", posting_id="7701099",
+                        captured_at=_PINNED, fields=[
+        Field(key="cover_letter", label="Cover Letter", type="input_file",
+             required=True, options=[], source="questions",
+             locator=Locator(role="button", name="Cover Letter")),
+        Field(key="cover_letter_text", label="Cover Letter", type="textarea",
+             required=True, options=[], source="questions",
+             locator=Locator(role="textbox", name="Cover Letter")),
+    ])
+    ssot = SSOT({
+        "identity": {"name": "Test Candidate",
+                     "email": "test.candidate@example.invalid"},
+        "canned_answers": {
+            "cover_letter_text": "Dear hiring manager, I am excited to apply.",
+        },
+    })
+    profile = profile_from_real_ssot(ssot)
+    assets = _assets(tmp_path, cover_letter=True)
+    values = greenhouse.resolve_values(fieldmap, ssot, profile, assets=assets)
+    # cover_letter_text resolved to real content (never skipped as missing),
+    # and cover_letter resolved to an upload of the cover-letter asset (never
+    # the CV) -- both land in values.fields, so the sibling-skip branch in
+    # greenhouse.fill() is the thing under test, not an upstream resolve_
+    # values skip.
+    assert values.values["cover_letter_text"] == (
+        "Dear hiring manager, I am excited to apply.")
+    by_key = {fv.key: fv for fv in values.fields}
+    assert "cover_letter" in by_key and "cover_letter_text" in by_key
+    assert by_key["cover_letter"].asset == "cover-letter"
+
+    page = _FakeGreenhousePage(
+        file_inputs=[_FakeFileInput(id="cover_letter",
+                                    accept=".pdf,.doc,.docx,.txt,.rtf")],
+        sweep_required_labels=("Cover Letter",))
+
+    report = greenhouse.fill(page, fieldmap, values)
+
+    # Never driven: cover_letter_text's own (textbox, "Cover Letter") control
+    # was never looked up, and it is satisfied via the documented skip
+    # reason, not a fill-error.
+    assert ("role", "textbox", "Cover Letter") not in page.requested
+    assert dict(report.skipped)["cover_letter_text"] == (
+        "satisfied by sibling file upload: cover_letter")
+    assert not any(g["key"] == "cover_letter_text"
+                  for g in report.required_unfilled)
     assert not any(str(g["key"]).startswith("dom-sweep:")
                   for g in report.required_unfilled)
     assert report.required_unfilled == []
