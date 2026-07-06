@@ -6,7 +6,10 @@ from engine.match import (
     TokenOverlapSimilarity,
     Vec0Similarity,
     _max_amount,
+    owner_band_from_years,
+    parse_required_band,
     profile_from_ssot,
+    skills_overlap_sub,
 )
 from engine.ssot import SSOT
 
@@ -32,16 +35,21 @@ def test_vec0_similarity_is_a_stub():
         Vec0Similarity().score("a", "b")
 
 
-def test_backend_scores_above_threshold_with_breakdown(jobhunt_config,
-                                                      job_ssot_path,
-                                                      greenhouse_raw):
+def test_senior_backend_no_overlap_drops_below_threshold(jobhunt_config,
+                                                        job_ssot_path,
+                                                        greenhouse_raw):
+    # AUDIT REGRESSION (was 77 under the old additive matcher): a Senior role
+    # far above the owner's entry level must now collapse via the seniority
+    # GATE (gap 2 -> 0.15 multiplier) and land well below threshold, even with
+    # strong skill overlap and a good location. This is the whole point of the
+    # gated-multiplicative redesign: a fatal seniority mismatch can no longer be
+    # averaged away by role_fit + location.
     scorer = Scorer(jobhunt_config, _profile(job_ssot_path))
     backend = _greenhouse_postings(greenhouse_raw)["Senior Backend Engineer"]
     breakdown = scorer.score(backend)
-    assert breakdown.total == 77
-    assert breakdown.total >= jobhunt_config.threshold
-    assert breakdown.matched  # top matched criteria present (7.3)
-    assert any("comp unknown" in w for w in breakdown.weak)
+    assert breakdown.total < jobhunt_config.threshold
+    assert breakdown.matched  # top matched criteria still present (7.3)
+    assert any("over-level" in w for w in breakdown.weak)
 
 
 def test_ats_precheck_warns_but_does_not_hide(jobhunt_config, job_ssot_path,
@@ -56,15 +64,19 @@ def test_ats_precheck_warns_but_does_not_hide(jobhunt_config, job_ssot_path,
 def test_high_scorer_that_trips_ats_is_not_suppressed(jobhunt_config,
                                                      job_ssot_path):
     # D5 guarantee: a strong match failing a hard ATS filter is surfaced WITH a
-    # warning, never hidden or demoted. The warning must not touch the score.
+    # warning, never hidden or demoted. The ats_precheck warning is appended to
+    # ats_warnings and never subtracted from the total. Under the gated model a
+    # "strong match" must be ENTRY-level and in-family (a Senior title would now
+    # collapse via the seniority gate), so the posting is an entry AI/ML role
+    # with real skill overlap that still clears threshold despite the ATS flag.
     scorer = Scorer(jobhunt_config, _profile(job_ssot_path))
     strong = Posting(
         vendor="greenhouse", company_slug="acme", job_id="99",
-        title="Senior Backend Engineer",
-        locations=["Remote"], remote_flag=True, comp="90000",
+        title="Machine Learning Engineer",
+        locations=["Remote - EU"], remote_flag=True, comp="90000",
         posted_ts=None, updated_ts=None, url="https://x/99",
-        description=("Senior backend role using python typescript sqlite pytorch "
-                     "sql. Requires an active security clearance."),
+        description=("Entry-level AI/ML role using python pytorch sql docker. "
+                     "Requires an active security clearance."),
     )
     breakdown = scorer.score(strong)
     assert breakdown.total >= jobhunt_config.threshold
@@ -97,7 +109,11 @@ def test_max_amount_handles_dict_shaped_comp():
 
 # -- location eligibility (calibration wave) -----------------------------------
 
-def _posting(locations, *, remote_flag=False, title="Engineer", description=""):
+def _posting(locations, *, remote_flag=False, title="Machine Learning Engineer",
+             description=""):
+    # Default title is in-family (tier 1 AI/ML) so the family gate does not
+    # discard: these helpers isolate the location / commute gates, and a bare
+    # "Engineer" title would now collapse the whole score via the family gate.
     return Posting(vendor="x", company_slug="c", job_id="1", title=title,
                    locations=locations, remote_flag=remote_flag, comp=None,
                    posted_ts=None, updated_ts=None, url="https://x/1",
@@ -150,39 +166,90 @@ def test_location_non_remote_non_matching_stays_low(jobhunt_config):
     assert breakdown.axis_scores["location_fit"] == 0.3
 
 
-# -- seniority word boundaries + title vs description --------------------------
+# -- seniority parser + gate (W4 redesign; replaces the old seniority_fit axis) -
+# The old model scored seniority as a soft_fit axis derived from the owner's OWN
+# target-role names (self-inflation). The redesign makes seniority a GATE: the
+# posting's required band (title + "N+ years") vs the owner's experience-derived
+# band; the gap drives an over-level multiplier and, when large, a discard.
 
-def test_seniority_title_match_is_full(jobhunt_config):
-    scorer = Scorer(jobhunt_config, {"seniority": ["senior", "mid"]})
-    breakdown = scorer.score(_posting(["Remote"], title="Senior Backend Engineer",
-                                      description="We build data services."))
-    assert breakdown.axis_scores["seniority_fit"] == 1.0
-    assert any("seniority: senior" in m for m in breakdown.matched)
+def _seniority_cfg(config):
+    return config.scoring["seniority"]
 
 
-def test_seniority_description_only_is_partial(jobhunt_config):
-    scorer = Scorer(jobhunt_config, {"seniority": ["senior"]})
+def _entry_owner_profile():
+    # ~1.7 yrs of experience anchors the owner at the entry band (0); NEVER
+    # derived from role names anymore.
+    return {"experience_years": 1.7,
+            "skill_tokens": ["python", "pytorch", "sql", "docker"]}
+
+
+def test_seniority_parser_reads_title_level_keywords(jobhunt_config):
+    cfg = _seniority_cfg(jobhunt_config)
+    assert parse_required_band("Machine Learning Engineer", "", cfg) == 0
+    assert parse_required_band("Junior Data Scientist", "", cfg) == 0
+    assert parse_required_band("Mid-level ML Engineer", "", cfg) == 1
+    assert parse_required_band("Senior Backend Engineer", "", cfg) == 2
+    assert parse_required_band("Staff Research Engineer", "", cfg) == 2
+    assert parse_required_band("Principal Engineer", "", cfg) == 3
+    assert parse_required_band("Director of AI", "", cfg) == 3
+
+
+def test_seniority_parser_reads_years_phrasing(jobhunt_config):
+    cfg = _seniority_cfg(jobhunt_config)
+    # "N+ years" / "N-M years" / "minimum N years" map through the same year
+    # thresholds (mid>=2, senior>=5, principal>=8) as the title keywords.
+    assert parse_required_band("Engineer", "1 year of experience", cfg) == 0
+    assert parse_required_band("Engineer", "3+ years of experience", cfg) == 1
+    assert parse_required_band("Engineer", "5+ years building systems", cfg) == 2
+    assert parse_required_band("Engineer", "3-5 years required", cfg) == 1
+    assert parse_required_band("Engineer", "minimum 8 years", cfg) == 3
+    # the max of the keyword band and the years band wins.
+    assert parse_required_band("Junior Engineer", "8+ years", cfg) == 3
+
+
+def test_owner_band_from_experience_years_is_entry(jobhunt_config):
+    cfg = _seniority_cfg(jobhunt_config)
+    assert owner_band_from_years(1.7, cfg) == 0     # the owner (~1.7 yrs)
+    assert owner_band_from_years(None, cfg) == 0    # unknown -> entry
+    assert owner_band_from_years(3.0, cfg) == 1
+    assert owner_band_from_years(6.0, cfg) == 2
+
+
+def test_seniority_gate_entry_role_fits_entry_owner(jobhunt_config):
+    scorer = Scorer(jobhunt_config, _entry_owner_profile())
     breakdown = scorer.score(_posting(
-        ["Remote"], title="Backend Engineer",
-        description="We are hiring a senior engineer for this team."))
-    assert breakdown.axis_scores["seniority_fit"] == 0.6
-    assert any("seniority only in description" in w for w in breakdown.weak)
+        ["Remote - EU"], remote_flag=True, title="Machine Learning Engineer",
+        description="Entry-level role building models in python and pytorch."))
+    assert breakdown.discard is False
+    assert any("level fits" in m for m in breakdown.matched)
 
 
-def test_seniority_word_boundary_avoids_substring_false_match(jobhunt_config):
-    # 'intern' must not fire inside 'internal'/'international' (live-run bug).
-    scorer = Scorer(jobhunt_config, {"seniority": ["intern"]})
+def test_seniority_gate_senior_role_penalized_and_warned(jobhunt_config):
+    # gap 2 (owner entry vs senior posting) -> steep 0.15 multiplier + warn,
+    # not a discard: it stays surfaced but scores far below threshold.
+    scorer = Scorer(jobhunt_config, _entry_owner_profile())
     breakdown = scorer.score(_posting(
-        ["Remote"], title="Backend Engineer",
-        description="Collaborate with international and internal teams."))
-    assert breakdown.axis_scores["seniority_fit"] == 0.5
-    assert any("seniority unclear" in w for w in breakdown.weak)
+        ["Remote - EU"], remote_flag=True, title="Senior ML Engineer",
+        description="Senior role building models in python and pytorch."))
+    assert breakdown.discard is False
+    assert breakdown.total < jobhunt_config.threshold
+    assert any("over-level" in w for w in breakdown.weak)
+
+
+def test_seniority_gate_principal_role_discards(jobhunt_config):
+    # gap 3 >= discard_gap -> a true removal with a reason.
+    scorer = Scorer(jobhunt_config, _entry_owner_profile())
+    breakdown = scorer.score(_posting(
+        ["Remote - EU"], remote_flag=True, title="Principal ML Engineer",
+        description="Principal role, minimum 8 years, in python and pytorch."))
+    assert breakdown.discard is True
+    assert "seniority" in breakdown.discard_reason
 
 
 # -- W4-COMMUTE-GATE (7.3 D5): hard discard for excessive on-site presence -----
 
 def _onsite_ssot(allowed_cities, week_cap, month_cap):
-    return SSOT({"preferences": {"onsite_policy": {
+    return SSOT({"preferences": {"location_policy": {
         "allowed_cities": allowed_cities,
         "max_onsite_days_per_week_europe": week_cap,
         "max_onsite_days_per_month_rest": month_cap,
@@ -197,14 +264,14 @@ def test_commute_gate_inactive_when_policy_missing(jobhunt_config):
     assert breakdown.discard is False
     assert breakdown.discard_reason == ""
 
-    # ssot passed but preferences.onsite_policy absent -> still off.
+    # ssot passed but preferences.location_policy absent -> still off.
     scorer_empty = Scorer(jobhunt_config, {}, ssot=SSOT({}))
     breakdown_empty = scorer_empty.score(_posting(
         ["Somewhere, Overthere"], description="5 days per week in office"))
     assert breakdown_empty.discard is False
 
     # ssot with a PARTIAL policy (missing a required key) -> still off.
-    partial = SSOT({"preferences": {"onsite_policy": {
+    partial = SSOT({"preferences": {"location_policy": {
         "allowed_cities": ["Testville"],
         "max_onsite_days_per_week_europe": 1,
     }}})
@@ -294,3 +361,112 @@ def test_commute_gate_italian_phrasing_detection(jobhunt_config):
         description="Richiediamo 3 giorni in ufficio a settimana."))
     assert breakdown.discard is True
     assert "3" in breakdown.discard_reason
+
+
+# -- skills canonical-token overlap + floor (W4 redesign; the detection fix) ----
+
+def test_skills_overlap_fraction_of_detected_required(jobhunt_config):
+    cfg = jobhunt_config.scoring["skills"]
+    # candidate holds python+pytorch; the posting names python, pytorch AND sql
+    # -> 2 of the 3 detected required skills -> 2/3, matched list is the overlap.
+    sub, matched = skills_overlap_sub(
+        ["python", "pytorch"], "We use Python, PyTorch and SQL daily.", cfg)
+    assert matched == ["python", "pytorch"]  # skills_overlap_sub returns sorted
+    assert abs(sub - 2 / 3) < 1e-9
+
+
+def test_skills_overlap_no_named_skill_is_neutral(jobhunt_config):
+    cfg = jobhunt_config.scoring["skills"]
+    sub, matched = skills_overlap_sub(
+        ["python"], "A generalist role with no named tools.", cfg)
+    assert matched == []
+    assert sub == cfg["no_required_neutral"]
+
+
+def test_skills_floor_caps_soft_fit_below_threshold(jobhunt_config):
+    # A role whose required skills the candidate lacks falls below the floor, so
+    # soft_fit is hard-capped: no other axis can lift it over threshold. This is
+    # the "no real overlap cannot clear threshold" guarantee.
+    floor = jobhunt_config.scoring["skills"]["floor"]
+    scorer = Scorer(jobhunt_config,
+                    {"experience_years": 1.7, "skill_tokens": ["java", "go"]})
+    breakdown = scorer.score(_posting(
+        ["Remote - EU"], remote_flag=True, title="Machine Learning Engineer",
+        description="Build ML systems in python, pytorch, cuda and sql."))
+    assert breakdown.axis_scores["skills_overlap"] < floor
+    assert any("below floor" in w for w in breakdown.weak)
+    assert breakdown.total < jobhunt_config.threshold
+
+
+# -- family tiering (W4 redesign; the gate that replaces naive role_fit) --------
+
+def test_family_tier1_ai_outscores_equivalent_tier2_swe(jobhunt_config):
+    # All else equal (same entry level, same skills, same location), an AI/ML
+    # role (tier 1, 1.0) must outscore an equivalent SWE role (tier 2, 0.75).
+    scorer = Scorer(jobhunt_config, _entry_owner_profile())
+    ai = scorer.score(_posting(
+        ["Remote - EU"], remote_flag=True, title="Machine Learning Engineer",
+        description="Build models in python and pytorch."))
+    swe = scorer.score(_posting(
+        ["Remote - EU"], remote_flag=True, title="Backend Software Engineer",
+        description="Build services in python and pytorch."))
+    assert ai.discard is False and swe.discard is False
+    assert ai.total > swe.total
+
+
+def test_out_of_family_role_is_discarded(jobhunt_config):
+    scorer = Scorer(jobhunt_config, _entry_owner_profile())
+    breakdown = scorer.score(_posting(
+        ["Milan, Italy"], title="Registered Nurse",
+        description="Provide bedside patient care on the hospital ward."))
+    assert breakdown.discard is True
+    assert "role family out of scope" in breakdown.discard_reason
+
+
+# -- audit regression cases (spec: these bad cases must now score correctly) ----
+
+def test_senior_ai_engineer_no_overlap_below_threshold(jobhunt_config):
+    # AUDIT case (was 72): a Senior AI role whose named skills the candidate
+    # lacks. BOTH gates bite: seniority gap 2 (0.15) and the skills floor.
+    scorer = Scorer(jobhunt_config,
+                    {"experience_years": 1.7, "skill_tokens": ["java"]})
+    breakdown = scorer.score(_posting(
+        ["Remote - EU"], remote_flag=True, title="Senior AI Engineer",
+        description="Senior AI role. Requires python, pytorch and cuda."))
+    assert breakdown.total < jobhunt_config.threshold
+
+
+def test_rome_five_days_onsite_is_discarded(jobhunt_config):
+    # AUDIT case: a non-allowed-city (Rome) role demanding 5 on-site days/week
+    # over the owner's 2-day Europe cap is a commute DISCARD, not a 66 score.
+    ssot = _onsite_ssot(["Milan", "Bologna"], 2, 4)
+    scorer = Scorer(jobhunt_config, _entry_owner_profile(), ssot=ssot)
+    breakdown = scorer.score(_posting(
+        ["Rome, Italy"], title="Machine Learning Engineer",
+        description="On-site 5 days per week in our Rome office."))
+    assert breakdown.discard is True
+    assert "commute" in breakdown.discard_reason
+
+
+def test_us_role_warns_on_sponsorship(jobhunt_config):
+    # AUDIT case: a US role the EU-only owner cannot take without sponsorship
+    # must WARN (the old region-dict truthiness bug asserted US rights falsely).
+    scorer = Scorer(jobhunt_config, _entry_owner_profile())
+    breakdown = scorer.score(_posting(
+        ["New York, NY"], remote_flag=False, title="Machine Learning Engineer",
+        description=("ML role. Must be authorized to work in the United States "
+                     "with python and pytorch.")))
+    assert any("visa sponsorship" in w for w in breakdown.weak)
+
+
+def test_entry_ml_remote_fixed_term_with_overlap_scores_high(jobhunt_config):
+    # POSITIVE case (spec): entry AI/ML, EU-remote, fixed-term, real overlap ->
+    # high. The gated model rewards exactly the bridge shape the owner wants.
+    scorer = Scorer(jobhunt_config, _entry_owner_profile())
+    breakdown = scorer.score(_posting(
+        ["Remote - EU"], remote_flag=True, title="Machine Learning Engineer",
+        description=("Entry-level ML engineer, 12-month fixed-term contract, "
+                     "EU-remote. Build models in python, pytorch and docker.")))
+    assert breakdown.discard is False
+    assert breakdown.total >= jobhunt_config.threshold
+    assert any("skills:" in m for m in breakdown.matched)

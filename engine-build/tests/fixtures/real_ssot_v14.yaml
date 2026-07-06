@@ -10,6 +10,10 @@ education:
   - degree: BSc Computer Science
     institution: Example University
     year: 2025
+# W4 matching redesign: the seniority gate anchors on this explicit experience
+# total (entry-level, ~1.7 yrs), NEVER on the target-role names (the old
+# self-inflation bug). Fake value only; the real number is seeded on toto.
+experience_years: 1.7
 experience:
   - "Built a synthetic backend service in Python for a demo project"
   - "Shipped a toy machine learning model with PyTorch for coursework"
@@ -30,9 +34,9 @@ preferences:
   excludes:
     - unpaid
     - commission only
-  # W4-COMMUTE-GATE (7.3 D5): placeholder onsite policy structure only. Real
+  # W4-COMMUTE-GATE (7.3 D5): placeholder location policy structure only. Real
   # values live in the toto-only, gitignored ssot/job.yaml, never here.
-  onsite_policy:
+  location_policy:
     allowed_cities:
       - Lisbon
       - London
@@ -52,6 +56,16 @@ skills:
   domains:
     - machine learning
     - backend
+  # W4 matching redesign: canonical short skill tags for the matcher (kept
+  # ALONGSIDE the verbose blocks above, which stay for cover-letter drafting).
+  skill_tokens:
+    - python
+    - typescript
+    - cpp
+    - pytorch
+    - react
+    - sqlite
+    - docker
 canned_answers:
   notice_period: "1 month"
   visa_sponsorship_required: "no"

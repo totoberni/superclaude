@@ -170,9 +170,12 @@ def test_run_end_to_end_one_push_and_telemetry(tmp_path, jobhunt_config,
     assert match
     ready = int(match.group(1))
 
-    # 2 greenhouse + 1 lever + 1 listed ashby = 4 live; unlisted ashby dropped
+    # 2 greenhouse + 1 lever + 1 listed ashby = 4 live; unlisted ashby dropped.
+    # New gated model: the out-of-family Security Engineer is DISCARDED (never
+    # enqueued), so 3 of the 4 live postings enter the queue.
     assert record["counts"]["new"] == 4
-    assert record["counts"]["enqueued"] == 4
+    assert record["counts"]["enqueued"] == 3
+    assert record["counts"]["discarded"] == 1
     assert record["counts"]["closed"] == 0
     assert record["counts"]["fetched_ok"] == 3
 
@@ -293,14 +296,18 @@ def test_validation_failed_draft_is_held_not_surfaced_ready(
     artifacts_dir = tmp_path / "artifacts"
     transport = FakeTransport()
     drafter = PartiallyPoisonedDrafter()
-    # Of the 4 live listed postings across the 3 sources, exactly 2 (Senior
-    # Backend Engineer @ 74, Machine Learning Engineer @ 77) clear the
-    # jobhunt threshold (70) and become visible pending_review draft
-    # candidates -- enough to exercise the held item next to a clean one.
+    # New gated model: with the threshold lowered to 60, exactly 2 in-family
+    # entry/adjacent postings clear it (Machine Learning Engineer @ 84 tier1,
+    # Product Engineer @ 65 tier2) and become visible pending_review draft
+    # candidates; the Senior Backend Engineer (10) and out-of-family Security
+    # Engineer (discarded) do not. The higher scorer (ML) is drafted first and
+    # is the one the PartiallyPoisonedDrafter poisons, so it is held; the clean
+    # Product Engineer flows through -- the held item next to a clean one.
+    config = dataclasses.replace(jobhunt_config, threshold=60)
     fetcher = _fetcher(store, greenhouse_raw, lever_raw, ashby_raw)
 
     record = run_pipeline(
-        jobhunt_config, _sources(), SSOT.load(real_ssot_path), store,
+        config, _sources(), SSOT.load(real_ssot_path), store,
         options=RunOptions(), drafter=drafter, transport=transport,
         fetcher=fetcher, runs_path=runs, artifacts_dir=artifacts_dir,
         runner=fake_pdflatex())
@@ -389,9 +396,13 @@ def test_failed_fetch_source_never_closes(tmp_path, jobhunt_config,
     ssot = SSOT.load(real_ssot_path)
     sources = [Source("greenhouse", "acme", "Acme")]
     runs = tmp_path / "runs.jsonl"
+    # threshold=0: this test exercises the failed-fetch close-absent mechanic, not
+    # scoring. The backend fixture is intentionally over-senior and now scores
+    # below the real threshold under the redesigned model, so admit it here.
+    config = dataclasses.replace(jobhunt_config, threshold=0)
 
-    # run 1: healthy fetch enqueues the backend role (scores >= threshold, visible)
-    run_pipeline(jobhunt_config, sources, ssot, store,
+    # run 1: healthy fetch enqueues the backend role (visible via threshold=0)
+    run_pipeline(config, sources, ssot, store,
                  options=RunOptions(no_draft=True), transport=FakeTransport(),
                  fetcher=_fetcher(store, greenhouse_raw), runs_path=runs,
                  artifacts_dir=tmp_path / "artifacts")
@@ -404,7 +415,7 @@ def test_failed_fetch_source_never_closes(tmp_path, jobhunt_config,
     clock = _Clock()
     fetcher = HttpFetcher(store, opener=_ErrorOpener(404), sleep=clock.sleep,
                           clock=clock)
-    run_pipeline(jobhunt_config, sources, ssot, store,
+    run_pipeline(config, sources, ssot, store,
                  options=RunOptions(no_draft=True), transport=FakeTransport(),
                  fetcher=fetcher, runs_path=runs,
                  artifacts_dir=tmp_path / "artifacts")
@@ -501,7 +512,7 @@ def test_discarded_posting_never_enqueued_and_ledger_records_discarded(
     }]}
     # FIXTURE policy values (never real owner values): a Europe cap of 1
     # day/week, no allowed cities, so the 5-days/week Milan role is discarded.
-    ssot = SSOT({"preferences": {"onsite_policy": {
+    ssot = SSOT({"preferences": {"location_policy": {
         "allowed_cities": ["Testville"],
         "max_onsite_days_per_week_europe": 1,
         "max_onsite_days_per_month_rest": 4,
@@ -550,8 +561,11 @@ def test_attach_mode_bundle_publishes_single_zip(tmp_path, jobhunt_config,
                                                 real_ssot_path, greenhouse_raw,
                                                 lever_raw, ashby_raw,
                                                 fake_pdflatex):
+    # threshold=0 so >=2 fixtures draft (the zip-bundle mechanic needs several
+    # PDFs); under the redesigned model the senior-backend fixture no longer
+    # clears the real threshold. This test exercises bundling, not scoring.
     record, transport = _run_with_attach_mode(
-        tmp_path, jobhunt_config, real_ssot_path,
+        tmp_path, dataclasses.replace(jobhunt_config, threshold=0), real_ssot_path,
         (greenhouse_raw, lever_raw, ashby_raw), fake_pdflatex(), "bundle")
     drafted = record["counts"]["drafted"]
     assert drafted >= 2  # a bundle is only meaningful with several PDFs
@@ -712,8 +726,11 @@ def test_capture_fieldmaps_captures_and_attaches_coverage(
     store = Store(tmp_path / "store.db")
     runs = tmp_path / "runs.jsonl"
     board = _backend_board(greenhouse_raw)
+    # threshold=0: exercises fieldmap capture + coverage-summary mechanics, not
+    # scoring; the over-senior backend fixture scores below the real threshold now.
     record = run_pipeline(
-        jobhunt_config, [Source("greenhouse", "acme", "Acme")],
+        dataclasses.replace(jobhunt_config, threshold=0),
+        [Source("greenhouse", "acme", "Acme")],
         SSOT.load(real_ssot_path), store,
         options=RunOptions(no_draft=True, capture_fieldmaps=5),
         transport=FakeTransport(), fetcher=_fetcher(store, board),
@@ -747,9 +764,11 @@ def test_capture_fieldmaps_reuses_cache_on_second_run(
     board = _backend_board(greenhouse_raw)
     ssot = SSOT.load(real_ssot_path)
     source = [Source("greenhouse", "acme", "Acme")]
+    # threshold=0: capture cache-reuse mechanic, not scoring (see sibling tests).
+    config = dataclasses.replace(jobhunt_config, threshold=0)
 
     first = run_pipeline(
-        jobhunt_config, source, ssot, store,
+        config, source, ssot, store,
         options=RunOptions(no_draft=True, capture_fieldmaps=5),
         transport=FakeTransport(), fetcher=_fetcher(store, board),
         capture_opener=_CaptureOpener(greenhouse_questions_raw),
@@ -759,7 +778,7 @@ def test_capture_fieldmaps_reuses_cache_on_second_run(
     # same board + same updated_at -> cache hit, no recapture
     opener = _CaptureOpener(greenhouse_questions_raw)
     second = run_pipeline(
-        jobhunt_config, source, ssot, store,
+        config, source, ssot, store,
         options=RunOptions(no_draft=True, capture_fieldmaps=5),
         transport=FakeTransport(), fetcher=_fetcher(store, board),
         capture_opener=opener, runs_path=runs,
@@ -774,8 +793,11 @@ def test_capture_fieldmaps_only_greenhouse(tmp_path, jobhunt_config,
                                            lever_raw, ashby_raw,
                                            greenhouse_questions_raw):
     store = Store(tmp_path / "store.db")
+    # threshold=0: capture-routing mechanic (only greenhouse is HTTP-captured;
+    # lever/ashby need a browser and so carry no summary), not scoring.
     record = run_pipeline(
-        jobhunt_config, _sources(), SSOT.load(real_ssot_path), store,
+        dataclasses.replace(jobhunt_config, threshold=0), _sources(),
+        SSOT.load(real_ssot_path), store,
         options=RunOptions(no_draft=True, capture_fieldmaps=10),
         transport=FakeTransport(),
         fetcher=_fetcher(store, greenhouse_raw, lever_raw, ashby_raw),
@@ -801,8 +823,11 @@ def test_capture_fieldmaps_is_fail_soft_per_item(tmp_path, jobhunt_config,
     # failures are counted, never fatal (W4 3.3 fail-soft).
     store = Store(tmp_path / "store.db")
     runs = tmp_path / "runs.jsonl"
+    # threshold=0: capture fail-soft mechanic (every capture GET raises), not
+    # scoring; all fixtures must be visible so a capture is attempted and fails.
     record = run_pipeline(
-        jobhunt_config, _sources(), SSOT.load(real_ssot_path), store,
+        dataclasses.replace(jobhunt_config, threshold=0), _sources(),
+        SSOT.load(real_ssot_path), store,
         options=RunOptions(no_draft=True, capture_fieldmaps=10),
         transport=FakeTransport(),
         fetcher=_fetcher(store, greenhouse_raw, lever_raw, ashby_raw),
@@ -812,8 +837,12 @@ def test_capture_fieldmaps_is_fail_soft_per_item(tmp_path, jobhunt_config,
     assert record["fieldmaps"]["captured"] == 0
     assert record["fieldmaps"]["cached"] == 0
     assert record["fieldmaps"]["failed"] >= 1
-    # the rest of the record is intact (the run did not abort)
-    assert record["counts"]["enqueued"] == 4
+    # the rest of the record is intact (the run did not abort). The unlisted
+    # draft fixture is filtered pre-scoring (liveness), so 4 postings reach the
+    # scorer; under the redesigned model 1 (Security Engineer, out of the
+    # acceptable AI/data/cloud/SWE families) hard-discards, so 3 enqueue.
+    assert record["counts"]["enqueued"] == 3
+    assert record["counts"]["discarded"] == 1
 
 
 def test_capture_fieldmaps_routes_ashby_to_browse_capture(

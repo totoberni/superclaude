@@ -13,10 +13,14 @@ Mapping (W4 spec 3.2):
 - remote_ok    <- preferences.remote (True iff the string mentions "remote")
 - comp_floor   <- first grouped integer parsed out of preferences.comp_floor
 - skills       <- flattened skills.{programming_languages, frameworks_libraries,
-                  tools_platforms, domains}
-- seniority    <- level tokens found inside the target roles
+                  tools_platforms, domains} (verbose, kept for cover-letter draft)
+- skill_tokens <- SSOT skill_tokens (canonical short tags, for matching)
+- experience_years <- SSOT experience_years / summed experience block (the
+                  seniority-gate anchor; the level comes from experience, NEVER
+                  from target-role names anymore, killing the self-inflation bug)
 - excludes     <- preferences.excludes (as-is)
-- capabilities <- only facts the SSOT states explicitly (e.g. EU work rights)
+- capabilities <- only real, affirmative work-auth facts the SSOT states (a
+                  region marked "no" is NOT asserted; truthiness bug fixed)
 """
 
 from __future__ import annotations
@@ -25,9 +29,16 @@ import re
 
 from engine.ssot import MISSING, SSOT
 
-_LEVEL_TOKENS = ("senior", "junior", "graduate", "intern", "entry")
 _SKILL_BLOCKS = ("programming_languages", "frameworks_libraries",
                  "tools_platforms", "domains")
+# Affirmative values that assert a work-authorization region. A dict-shaped
+# work_authorization (region -> value) is only asserted when the value is truly
+# affirmative: a string "no"/"false" is TRUTHY in Python, which is exactly the
+# bug that made US/UK regions falsely assert. Everything else is not asserted.
+_AFFIRMATIVE_WORDS = frozenset({
+    "yes", "true", "y", "authorized", "authorised", "citizen", "permanent",
+    "eligible", "granted", "1",
+})
 # Region words we are willing to assert as an explicit capability, matched on
 # word boundaries so "neutral" never reads as "eu". Kept conservative on purpose.
 _REGION_CAPABILITIES = (("eu", "work_authorization_eu"),
@@ -40,12 +51,20 @@ def profile_from_real_ssot(ssot: SSOT) -> dict:
     """Read-only v1.4 SSOT -> engine profile (same contract as profile_from_ssot)."""
     profile: dict = {}
 
+    # Roles feed role_title_fit only. Seniority is NO LONGER derived from these
+    # names (that self-inflation made "Senior X" targets score the owner as
+    # senior); the seniority gate anchors on experience_years instead.
     roles = _as_str_list(ssot.get("preferences.target_roles"))
     if roles:
         profile["roles"] = roles
-        seniority = _derive_seniority(roles)
-        if seniority:
-            profile["seniority"] = seniority
+
+    experience_years = ssot.experience_years()
+    if experience_years is not None:
+        profile["experience_years"] = experience_years
+
+    skill_tokens = ssot.skill_tokens()
+    if skill_tokens:
+        profile["skill_tokens"] = skill_tokens
 
     locations = _location_tokens(ssot.get("preferences.target_locations"))
     if locations:
@@ -80,15 +99,6 @@ def _as_str_list(value) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(v) for v in value]
     return [str(value)]
-
-
-def _derive_seniority(roles: list[str]) -> list[str]:
-    joined = " ".join(roles).lower()
-    found: list[str] = []
-    for token in _LEVEL_TOKENS:
-        if token in joined:
-            _add_unique(found, token)
-    return found
 
 
 def _location_tokens(values) -> list[str]:
@@ -150,10 +160,21 @@ def _authorization_text(auth) -> str:
     if isinstance(auth, str):
         return auth
     if isinstance(auth, dict):
-        # A v1.4 dict form (region -> truthy) is stated explicitly, so surface
-        # only the keys the SSOT marks true; never invent a region.
-        return " ".join(k for k, v in auth.items() if v)
+        # A v1.4 dict form (region -> value): surface only regions whose value is
+        # genuinely affirmative. NOT `if v` (a string "no" is truthy, which
+        # falsely asserted US/UK rights and stopped US roles warning).
+        return " ".join(k for k, v in auth.items() if _is_affirmative(v))
     return ""
+
+
+def _is_affirmative(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value > 0
+    if isinstance(value, str):
+        return value.strip().lower() in _AFFIRMATIVE_WORDS
+    return False
 
 
 def _add_unique(items: list[str], value: str) -> None:

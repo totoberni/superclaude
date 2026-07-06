@@ -64,7 +64,11 @@ def test_end_to_end_dry_run(store, jobhunt_config, job_ssot_path,
     message = publish_digest(transport, jobhunt_config.topic, sm.items(),
                             len(rerank.demoted_today))
     header = message.splitlines()[1]
-    assert header == "**3 ready** · 0 manual · 1 held · 0 demoted today"
+    # New gated model: of the 4 enqueued, only the entry-level Machine Learning
+    # Engineer (lever) clears threshold and is READY; the Senior Backend Engineer,
+    # the out-of-family Security Engineer, and the tier-2 Product Engineer all
+    # fall below threshold and are HELD (demoted, not visible).
+    assert header == "**1 ready** · 0 manual · 3 held · 0 demoted today"
     assert "**Match:**" in message  # breakdown reaches the report line
     assert transport.sent == [(jobhunt_config.topic, message)]
 

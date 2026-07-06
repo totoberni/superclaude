@@ -29,11 +29,21 @@ def test_location_tokens_include_bare_city_and_country(real_ssot_path):
         assert token in locations
 
 
-def test_seniority_derived_from_roles(real_ssot_path):
-    seniority = _profile(real_ssot_path)["seniority"]
-    assert "senior" in seniority
-    assert "graduate" in seniority
-    assert "intern" not in seniority
+def test_seniority_anchored_on_experience_not_roles(real_ssot_path):
+    # W4 redesign: the self-inflation bug is fixed. The profile no longer derives
+    # a seniority band from the owner's OWN target-role names ("Senior Backend
+    # Engineer" no longer makes the owner "senior"); the seniority gate anchors
+    # on an explicit experience_years instead.
+    profile = _profile(real_ssot_path)
+    assert "seniority" not in profile          # never derived from role names
+    assert profile["experience_years"] == 1.7  # the entry-level anchor
+
+
+def test_skill_tokens_mapped_for_matching(real_ssot_path):
+    # canonical short tags flow through ALONGSIDE the verbose skills.
+    tokens = _profile(real_ssot_path)["skill_tokens"]
+    for tag in ("python", "pytorch", "cpp", "docker"):
+        assert tag in tokens
 
 
 def test_skills_flatten_across_all_blocks(real_ssot_path):

@@ -6,6 +6,9 @@ identity:
 work_authorization: eu
 education:
   degree: bsc_computer_science
+# W4 matching redesign: the seniority gate anchors on this explicit experience
+# total (entry-level, ~1.7 yrs), NOT on the target-role names.
+experience_years: 1.7
 preferences:
   roles:
     - backend engineer
@@ -17,6 +20,16 @@ preferences:
     - sqlite
     - pytorch
     - sql
+  # W4 matching redesign: canonical short skill tags for the matcher, kept
+  # ALONGSIDE the verbose `skills` list above (which stays for drafting).
+  skill_tokens:
+    - python
+    - typescript
+    - sqlite
+    - pytorch
+    - sql
+    - cpp
+    - docker
   seniority:
     - mid
     - senior

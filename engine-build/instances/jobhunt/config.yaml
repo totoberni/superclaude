@@ -8,15 +8,311 @@ buffer_size: 50
 terminal_state: submitted
 ssot: job.yaml
 
+# W4 matching redesign (owner-ratified 2026-07-06). The old additive matcher let
+# role_fit+location swamp a fatal mismatch, so senior/no-overlap roles scored
+# 72-74. This model is gated-multiplicative:
+#   total = round(100 * family_mult * seniority_mult * soft_fit)
+# family and seniority are GATES (a wrong family or an over-senior role collapses
+# the whole score, a real discard); soft_fit is an additive quality score over
+# survivors. Owner goal: a 1-year ENTRY-level pre-PhD bridge job. Every number
+# below is tunable here without touching engine/match.py.
 scoring:
-  # Weights sum to 1.0. The jobs axis set is implemented in engine/match.py.
+  # -- soft_fit: additive quality over survivors; weights MUST sum to 1.0 --------
+  # Skills dominates (0.40) because a real tool overlap is the strongest signal a
+  # bridge role actually fits; role/location are secondary; term/comp/eligibility
+  # are the bridge-shape refinements.
   axes:
-    role_fit: 0.30
-    skills_overlap: 0.30
-    seniority_fit: 0.10
+    skills_overlap: 0.40
+    role_title_fit: 0.15
     location_fit: 0.15
+    term_length_fit: 0.10
     comp_fit: 0.10
-    exclusions: 0.05
+    eligibility_fit: 0.10
+
+  # -- family gate: classify the posting (title+JD) into a role family ----------
+  # Tier 1 (AI/ML) is the owner's preference and scores at full weight; tier 2
+  # (data/cloud/SWE, AI-or-large-data-adjacent) is acceptable at a discount; any
+  # other family is out of scope and DISCARDED. Flip `soften_out_of_family` to
+  # true to demote out-of-family to a show-and-warn at `out_of_family_multiplier`
+  # instead of discarding (owner override lever).
+  family:
+    tier1_multiplier: 1.0
+    tier2_multiplier: 0.75
+    out_of_family_multiplier: 0.35
+    soften_out_of_family: false
+    tier1_keywords:
+      - machine learning
+      - ml engineer
+      - ml scientist
+      - ai engineer
+      - ai/ml
+      - artificial intelligence
+      - deep learning
+      - neural network
+      - nlp
+      - natural language processing
+      - computer vision
+      - data scientist
+      - research scientist
+      - research engineer
+      - applied scientist
+      - llm
+      - large language model
+      - generative ai
+      - reinforcement learning
+    tier2_keywords:
+      - mlops
+      - ml ops
+      - devops
+      - dev ops
+      - sre
+      - site reliability
+      - cloud engineer
+      - cloud ops
+      - cloudops
+      - platform engineer
+      - infrastructure engineer
+      - data engineer
+      - data engineering
+      - data analyst
+      - data analysis
+      - analytics engineer
+      - business intelligence
+      - big data
+      - software engineer
+      - software developer
+      - backend engineer
+      - backend developer
+      - back-end
+      - back end
+      - frontend engineer
+      - front-end
+      - full stack
+      - full-stack
+      - fullstack
+      - web developer
+      - web engineer
+      - systems engineer
+      - solutions engineer
+      - swe
+
+  # -- seniority gate: anchored to the candidate's experience_years, NOT to the
+  # owner's own target-role names (the old self-inflation bug). Bands are entry(0)
+  # < mid(1) < senior(2) < principal(3). The candidate's band comes from
+  # experience_years via `year_bands`; the posting's required band comes from
+  # title+JD level keywords AND "N+ years" phrasing (same thresholds). The penalty
+  # is the GAP = required_band - candidate_band (clamped >= 0):
+  #   gap 0 -> full (level fits), gap 1 -> mild over-level, gap 2 -> steep +warn,
+  #   gap >= discard_gap -> DISCARD (role wants far more seniority than owner has).
+  # For the owner (~1.7 yrs -> entry) this reproduces the ratified table:
+  #   entry 1.0 / mid 0.7 / senior 0.15+warn / principal DISCARD.
+  seniority:
+    over_level_multipliers: [1.0, 0.7, 0.15]
+    warn_gap: 2
+    discard_gap: 3
+    # experience_years (candidate) and "N years" (posting) map to a band here.
+    year_bands:
+      mid_min: 2.0
+      senior_min: 5.0
+      principal_min: 8.0
+    keywords:
+      entry:
+        - intern
+        - internship
+        - graduate
+        - new grad
+        - new-grad
+        - new graduate
+        - junior
+        - entry level
+        - entry-level
+        - entry
+        - associate
+        - trainee
+        - apprentice
+        - working student
+        - early career
+        - early-career
+      mid:
+        - mid
+        - mid level
+        - mid-level
+        - intermediate
+      senior:
+        - senior
+        - sr
+        - staff
+        - lead
+        - team lead
+        - tech lead
+        - technical lead
+      principal:
+        - principal
+        - head
+        - head of
+        - manager
+        - director
+        - vp
+        - vice president
+        - chief
+
+  # -- skills overlap (soft_fit 0.40): canonical short-tag matching -------------
+  # The old matcher stored 49 verbose skill SENTENCES and diluted the token
+  # denominator so the match never fired. Now a curated canonical vocabulary is
+  # detected in the posting (title+JD); sub = fraction of the posting's detected
+  # skills the candidate has (with a Jaccard backstop). FLOOR: if that fraction is
+  # below `floor`, soft_fit is hard-capped at `floored_soft_fit_cap` (~0) so a
+  # role with no real overlap can NEVER clear threshold, whatever else it scores.
+  skills:
+    floor: 0.15
+    floored_soft_fit_cap: 0.05
+    no_required_neutral: 0.5
+    vocabulary:
+      - python
+      - pytorch
+      - tensorflow
+      - keras
+      - scikit-learn
+      - sklearn
+      - numpy
+      - pandas
+      - scipy
+      - cuda
+      - sql
+      - postgresql
+      - mysql
+      - sqlite
+      - mongodb
+      - redis
+      - spark
+      - hadoop
+      - kafka
+      - airflow
+      - docker
+      - kubernetes
+      - terraform
+      - ansible
+      - aws
+      - gcp
+      - azure
+      - linux
+      - bash
+      - git
+      - cpp
+      - java
+      - javascript
+      - typescript
+      - react
+      - node
+      - go
+      - rust
+      - scala
+      - r
+      - matlab
+      - fastapi
+      - flask
+      - django
+    # Surface forms that map to a canonical tag (posting text rarely uses the
+    # bare tag). Detection matches the tag OR any alias as a whole word/phrase.
+    aliases:
+      cpp: ["c++", "cplusplus"]
+      javascript: ["javascript", "js"]
+      typescript: ["typescript", "ts"]
+      postgresql: ["postgresql", "postgres", "psql"]
+      sklearn: ["scikit-learn", "sklearn", "scikit learn"]
+      kubernetes: ["kubernetes", "k8s"]
+      node: ["node.js", "nodejs", "node"]
+
+  # -- term-length (soft_fit 0.10): the bridge shape ---------------------------
+  # The owner wants a ~1-year bridge, so fixed-term/contract/internship and
+  # explicit durations of `min_months`..`max_bridge_months` score highest; a
+  # permanent/unspecified role is fine but not ideal; a multi-year track or a
+  # sub-`min_months` stint is a poor bridge shape.
+  term_length:
+    min_months: 3
+    max_bridge_months: 18
+    bridge_score: 1.0
+    permanent_score: 0.7
+    poor_score: 0.4
+    bridge_keywords:
+      - fixed-term
+      - fixed term
+      - contract
+      - contractor
+      - internship
+      - intern
+      - temporary
+      - temp
+      - maternity cover
+      - parental cover
+      - tempo determinato
+      - stage
+      - stagista
+      - tirocinio
+      - secondment
+    permanent_keywords:
+      - permanent
+      - full-time permanent
+      - tempo indeterminato
+      - open-ended
+    multi_year_keywords:
+      - multi-year
+      - multiyear
+      - multi year
+
+  # -- comp (soft_fit 0.10): keep the floor logic ------------------------------
+  # Uses the candidate's SSOT comp_floor when present, else `default_floor`
+  # (EUR 26000 RAL). Unknown posting comp is neutral, never a penalty.
+  comp:
+    default_floor: 26000
+    match_score: 1.0
+    below_floor_score: 0.3
+    unknown_score: 0.5
+
+  # -- eligibility (soft_fit 0.10): work-auth + degree reality -----------------
+  # EU/Italy work rights -> full. A role that needs US/non-EU sponsorship the
+  # owner lacks is penalised and warned. A degree-in-hand requirement is warned
+  # against (the owner's degree pending); set `degree_in_hand: true`
+  # once graduated.
+  eligibility:
+    eu_score: 1.0
+    us_sponsorship_score: 0.2
+    degree_pending_score: 0.8
+    degree_in_hand: false
+    degree_warn: "degree required; degree pending (not yet in hand)"
+    us_signal_keywords:
+      - us citizen
+      - u.s. citizen
+      - us citizenship
+      - must be authorized to work in the united states
+      - must be authorised to work in the united states
+      - authorized to work in the us
+      - us work authorization
+      - green card
+      - security clearance
+      - must be a us person
+    degree_required_keywords:
+      - degree required
+      - must hold a degree
+      - bachelor's degree required
+      - master's degree required
+      - phd required
+      - must have graduated
+      - degree in hand
+
+  # -- excludes: owner's explicit never-show terms -> DISCARD -------------------
+  # Preserves the owner's exclude list (e.g. unpaid, commission-only) as a hard
+  # filter in the discard channel. Set false to disable.
+  excludes:
+    discard_on_match: true
+
+  # -- commute gate behaviour --------------------------------------------------
+  # The operative commute policy VALUES (owner's allowed cities the allowed cities and
+  # the on-site day caps) are owner data and live in the toto-only SSOT at
+  # preferences.location_policy, never duplicated here (PII firewall + single
+  # source of truth). Only the calendar conversion constant is tuned here.
+  commute:
+    weeks_per_month: 4.33
 
 # ATS pre-check = show-and-warn (D5): a hard filter unmet by the profile
 # surfaces a warning, never hides the match. capability is checked against

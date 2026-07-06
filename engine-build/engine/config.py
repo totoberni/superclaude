@@ -31,6 +31,12 @@ class Config:
     terminal_state: str
     ssot: str
     axes: dict[str, float]
+    # Full raw `scoring` block. `axes` (above) is the validated soft_fit weight
+    # map extracted from it; `scoring` additionally carries the gated-multiplicative
+    # knobs (family, seniority, skills, term_length, comp, eligibility, excludes,
+    # commute) the Scorer reads. Kept as a plain dict so instances tune every
+    # number in config.yaml with zero code change (W4 matching redesign).
+    scoring: dict = field(default_factory=dict)
     ats_rules: list[dict] = field(default_factory=list)
     automatable_vendors: tuple[str, ...] = ()
     # W4 live-pipeline knobs. Defaults keep the phd/papers configs (which omit
@@ -54,7 +60,8 @@ def load_config(path: str | Path) -> Config:
     raw = yaml.safe_load(Path(path).read_text()) or {}
     _require(raw, ("name", "topic", "id_prefix", "threshold", "buffer_size",
                    "terminal_state", "ssot", "scoring"))
-    axes = _validated_axes(raw["scoring"])
+    scoring = raw["scoring"]
+    axes = _validated_axes(scoring)
     channels = raw.get("channels", {})
     return Config(
         name=raw["name"],
@@ -65,6 +72,7 @@ def load_config(path: str | Path) -> Config:
         terminal_state=raw["terminal_state"],
         ssot=raw["ssot"],
         axes=axes,
+        scoring=dict(scoring),
         ats_rules=list(raw.get("ats_rules", [])),
         automatable_vendors=tuple(channels.get("automatable", [])),
         draft_cap=int(raw.get("draft_cap", 10)),
