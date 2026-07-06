@@ -101,6 +101,15 @@ _SUBMIT_URL_PATTERNS = (
     re.compile(r"workable\.com/.*?/candidates?(?:[/?#]|$)", re.I),
     re.compile(
         r"workable\.com/(?:spi/v\d+/)?.*?/(?:apply|application)(?:[/?#]|$)", re.I),
+    # Workable defense-in-depth (W5.4, additive): the two workable patterns above
+    # are keyed on the literal `workable.com` host, which is all discovery ever
+    # emits (apply.workable.com). These two cover the paths that host match would
+    # miss, both still POST-gated by `_is_submit_request`:
+    #  (a) the apply POST on a CUSTOM-DOMAIN / redirect tenant (host-agnostic): the
+    #      shortcode-keyed submit path is distinctive enough to abort on any host.
+    re.compile(r"/api/v\d+/jobs/[A-Z0-9]{6,}/apply(?:[/?#]|$)", re.I),
+    #  (b) the post-submit EEOC send (a second application-data POST after apply).
+    re.compile(r"workable\.com/api/v\d+/eeoc/", re.I),
 )
 
 # Graphql endpoints carry BOTH read queries and submit mutations on ONE URL, so a

@@ -1181,7 +1181,7 @@ def _apply_url(vendor: str, slug: str, job_id: str) -> str:
     spec = registry.PROVIDERS.get(vendor)
     if spec is None or not spec.supported or spec.apply_url_fn is None:
         raise ValueError(
-            f"unknown vendor {vendor!r} (expected greenhouse/lever/ashby)")
+            f"unknown vendor {vendor!r} (expected greenhouse/lever/ashby/workable)")
     return spec.apply_url_fn(slug, job_id)
 
 

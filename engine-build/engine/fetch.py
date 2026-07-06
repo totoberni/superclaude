@@ -39,8 +39,9 @@ UA = "abe-automations-jobhunt/0.1 (personal job-search; polite reader)"
 # per-vendor wiring). Kept as module-level names for import-compat: other code and
 # tests import them from engine.fetch. Deriving them keeps the fetchable-vendor list
 # in exactly one place while these shims retain their original type and their
-# KeyError-on-unknown behaviour. The workable stub (supported=False, adapter=None) is
-# excluded from both, so both stay exactly ("greenhouse", "lever", "ashby").
+# KeyError-on-unknown behaviour. Any registered stub (supported=False or
+# adapter=None) is excluded from both; with workable un-stubbed (W5.4) the four
+# supported vendors are ("greenhouse", "lever", "ashby", "workable").
 _VENDORS: tuple[str, ...] = tuple(
     vendor for vendor, spec in registry.PROVIDERS.items()
     if spec.supported and spec.adapter is not None

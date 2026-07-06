@@ -2,6 +2,7 @@ from engine.discover import (
     AshbyAdapter,
     GreenhouseAdapter,
     LeverAdapter,
+    WorkableAdapter,
     run_discovery,
 )
 
@@ -41,6 +42,16 @@ def test_ashby_adapter_captures_secondary_locations(ashby_raw):
     assert listed.comp == "EUR 70k - 90k"
     unlisted = next(p for p in postings if not p.listed)
     assert unlisted.listed is False
+
+
+def test_discover_workable(workable_raw):
+    postings = WorkableAdapter().parse(workable_raw, "powerlines")
+    assert len(postings) == 5
+    director = postings[0]
+    assert director.vendor == "workable"
+    assert director.job_id == "57CFF1B2AF"
+    assert director.url == "https://apply.workable.com/powerlines/j/57CFF1B2AF/"
+    assert director.locations == ["Washington, District of Columbia, United States"]
 
 
 def test_run_discovery_drops_unlisted_and_dedups(store, greenhouse_raw,

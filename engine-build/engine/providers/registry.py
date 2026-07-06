@@ -33,7 +33,12 @@ from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urlsplit
 
-from engine.discover import AshbyAdapter, GreenhouseAdapter, LeverAdapter
+from engine.discover import (
+    AshbyAdapter,
+    GreenhouseAdapter,
+    LeverAdapter,
+    WorkableAdapter,
+)
 
 
 # -- endpoint builders (board poll URLs) ---------------------------------------
@@ -55,6 +60,19 @@ def lever_endpoint(slug: str, region: str = "us") -> str:
 def ashby_endpoint(slug: str, region: str = "us") -> str:
     return ("https://api.ashbyhq.com/posting-api/job-board/"
             f"{slug}?includeCompensation=true")
+
+
+def workable_endpoint(slug: str, region: str = "us") -> str:
+    # Discovery board feed: the public account widget (name/description/jobs[]).
+    return f"https://apply.workable.com/api/v1/widget/accounts/{slug}"
+
+
+def workable_apply_url(slug: str, job_id: str) -> str:
+    # The public apply-page URL (job_id IS the shortcode). Defined here beside
+    # the endpoint builder rather than in fill.py/browse.py because Workable is
+    # browser-free: there is no browse.py capture/apply body to delegate to (cf.
+    # greenhouse_apply_url in fill.py, lever/ashby apply URLs in browse.py).
+    return f"https://apply.workable.com/{slug}/j/{job_id}/apply/"
 
 
 # -- lazy references to capture / apply functions living in other modules ------
@@ -79,6 +97,15 @@ def _capture_lever(slug: str, job_id: str, opener=None):
     return browse.capture_lever(slug, job_id)
 
 
+def _capture_workable(slug: str, job_id: str, opener=None):
+    # Workable capture is HTTP-only and lives in fieldmap.py beside
+    # capture_greenhouse (greenhouse-class schema GET, no browser). Imported
+    # lazily so importing this registry never eagerly loads fieldmap -> fetch,
+    # which reads registry.PROVIDERS at module scope (the fetch<->registry cycle).
+    from engine.fieldmap import capture_workable
+    return capture_workable(slug, job_id, opener)
+
+
 def _apply_greenhouse(slug: str, job_id: str) -> str:
     from engine.fill import greenhouse_apply_url
     return greenhouse_apply_url(slug, job_id)
@@ -92,13 +119,6 @@ def _apply_ashby(slug: str, job_id: str) -> str:
 def _apply_lever(slug: str, job_id: str) -> str:
     from engine import browse
     return browse.lever_apply_url(slug, job_id)
-
-
-def _workable_unsupported(*_args, **_kwargs):
-    raise NotImplementedError(
-        "workable is a registered STUB only; its endpoint / capture / apply wiring "
-        "lands in W5.4. Do not route live traffic through it yet."
-    )
 
 
 @dataclass(frozen=True)
@@ -153,16 +173,12 @@ PROVIDERS: dict[str, ProviderSpec] = {
         apply_url_fn=_apply_ashby,
         hosts=("ashbyhq.com",),
     ),
-    # W5.4 stub: registered so downstream code can enumerate it, but every wiring
-    # slot raises NotImplementedError until W5.4 fills it in. Excluded from the
-    # fetch / adapter allowlists via supported=False + adapter=None.
     "workable": ProviderSpec(
         vendor="workable",
-        adapter=None,
-        endpoint_fn=_workable_unsupported,
-        capture_fn=_workable_unsupported,
-        apply_url_fn=_workable_unsupported,
-        supported=False,
+        adapter=WorkableAdapter,
+        endpoint_fn=workable_endpoint,
+        capture_fn=_capture_workable,
+        apply_url_fn=workable_apply_url,
         hosts=("workable.com",),
     ),
 }
@@ -172,8 +188,9 @@ def resolve(vendor: str) -> ProviderSpec:
     """Return the ProviderSpec for `vendor`.
 
     Raises ValueError for a vendor with no registry entry at all. A registered but
-    unsupported stub (e.g. workable) resolves normally; calling its wiring functions
-    is what raises NotImplementedError.
+    unsupported stub (supported=False) would still resolve normally; calling its
+    wiring functions is what raises NotImplementedError. (All four registered
+    vendors -- greenhouse/lever/ashby/workable -- are supported today.)
     """
     try:
         return PROVIDERS[vendor]

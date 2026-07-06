@@ -12,13 +12,14 @@ from pathlib import Path
 
 from engine.ssot import SSOT
 from engine.profile_map import profile_from_real_ssot
-from engine.providers import registry, greenhouse, lever, ashby
+from engine.providers import registry, greenhouse, lever, ashby, workable
 from engine.providers.base import _is_submit_request
 from engine.fill import FillAssets
 from engine import browse
 
 VENDOR, SLUG, JOB_ID, APPLY_URL = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-PROV = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}[VENDOR]
+PROV = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby,
+        "workable": workable}[VENDOR]
 SSOT_PATH = os.path.expanduser("~/automations/ssot/job.yaml")
 
 result = {"vendor": VENDOR, "slug": SLUG, "job_id": JOB_ID, "stage": "start"}

@@ -4,8 +4,9 @@ The registry consolidates the four W4-scattered vendor-detection sites
 (fetch.endpoint_for + _ADAPTERS + _VENDORS, fill._apply_url,
 run._collect_fieldmap). These tests pin two things:
 
-1. `resolve` / `detect` behave as the single source of truth, and the workable
-   stub is registered-but-unsupported.
+1. `resolve` / `detect` behave as the single source of truth; all four vendors
+   (greenhouse/lever/ashby/workable) are registered-and-supported (workable was
+   un-stubbed in W5.4).
 2. The three refactored call sites produce results byte-identical to the
    pre-refactor per-vendor branches (golden values), preserving every signature,
    URL, dispatch target, and error path. The lazy browser-vendor references are
@@ -20,7 +21,12 @@ from types import SimpleNamespace
 import pytest
 
 from engine import fetch, fill, run
-from engine.discover import AshbyAdapter, GreenhouseAdapter, LeverAdapter
+from engine.discover import (
+    AshbyAdapter,
+    GreenhouseAdapter,
+    LeverAdapter,
+    WorkableAdapter,
+)
 from engine.fetch import Source
 from engine.providers import registry
 
@@ -59,18 +65,21 @@ def test_resolve_unknown_vendor_raises_value_error():
         registry.resolve("nope")
 
 
-def test_workable_is_a_registered_unsupported_stub():
+def test_workable_is_a_registered_supported_provider():
+    # W5.4 un-stubbed workable: it was formerly supported=False, adapter=None,
+    # with every wiring fn raising NotImplementedError("...W5.4..."). It is now a
+    # first-class supported provider with a live adapter and callable wiring.
     spec = registry.resolve("workable")
-    assert spec.supported is False
-    assert spec.adapter is None
-    # every wiring slot is present but raises when actually called
-    for fn, args in (
-        (spec.endpoint_fn, ("slug",)),
-        (spec.capture_fn, ("slug", "job")),
-        (spec.apply_url_fn, ("slug", "job")),
-    ):
-        with pytest.raises(NotImplementedError, match="W5.4"):
-            fn(*args)
+    assert spec.supported is True
+    assert spec.adapter is WorkableAdapter
+    assert spec.capture_fn is registry._capture_workable
+    # every wiring slot is a live callable now (no NotImplementedError); the
+    # browser-free URL builders return their real values when called.
+    assert callable(spec.capture_fn)
+    assert spec.endpoint_fn("powerlines") == \
+        "https://apply.workable.com/api/v1/widget/accounts/powerlines"
+    assert spec.apply_url_fn("powerlines", "57CFF1B2AF") == \
+        "https://apply.workable.com/powerlines/j/57CFF1B2AF/apply/"
 
 
 # -- detect(): the one place a URL / host maps to a vendor ---------------------
@@ -115,12 +124,14 @@ def test_endpoint_for_unknown_vendor_preserves_error():
 
 
 def test_adapters_and_vendors_are_registry_projections():
-    # the shims kept for import-compat mirror the registry (workable excluded)
-    assert fetch._VENDORS == ("greenhouse", "lever", "ashby")
+    # the shims kept for import-compat mirror the registry (workable now included,
+    # un-stubbed in W5.4)
+    assert fetch._VENDORS == ("greenhouse", "lever", "ashby", "workable")
     assert fetch._ADAPTERS == {
         "greenhouse": GreenhouseAdapter,
         "lever": LeverAdapter,
         "ashby": AshbyAdapter,
+        "workable": WorkableAdapter,
     }
     # adapter_for still hands back a fresh instance and still KeyErrors unknowns
     assert isinstance(fetch.adapter_for("greenhouse"), GreenhouseAdapter)
@@ -140,9 +151,12 @@ def test_apply_url_golden(vendor, slug, job_id, expected):
 
 
 def test_apply_url_unknown_vendor_preserves_error():
+    # workable used to be the example UNKNOWN vendor here; W5.4 made it supported
+    # (fill._apply_url now returns its real apply URL), so the error-path coverage
+    # is repointed to a still-unknown vendor. "workday" is genuinely unregistered.
     with pytest.raises(ValueError,
-                       match=r"unknown vendor 'workable' \(expected greenhouse"):
-        fill._apply_url("workable", "x", "y")
+                       match=r"unknown vendor 'workday' \(expected greenhouse"):
+        fill._apply_url("workday", "x", "y")
 
 
 # -- run._collect_fieldmap: golden dispatch + preserved error path -------------
@@ -189,7 +203,10 @@ def test_collect_fieldmap_lever_routes_to_browse_ignoring_opener(monkeypatch):
     assert calls == [("globex", "req-9")]
 
 
-@pytest.mark.parametrize("vendor", ["workable", "nope"])
+# workable was removed from this list in W5.4 (it is now a supported vendor with a
+# real capture_fn, so run._collect_fieldmap no longer raises for it); the error
+# path is still covered for a genuinely-unsupported vendor.
+@pytest.mark.parametrize("vendor", ["nope"])
 def test_collect_fieldmap_unsupported_vendor_preserves_error(vendor):
     with pytest.raises(ValueError, match="no field-map capture for vendor"):
         run._collect_fieldmap(vendor, _posting("a", "b"), None)

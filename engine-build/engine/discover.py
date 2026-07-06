@@ -128,6 +128,33 @@ class AshbyAdapter:
         )
 
 
+class WorkableAdapter:
+    vendor = "workable"
+    is_authoritative = True
+
+    def parse(self, raw: dict, company_slug: str) -> list[Posting]:
+        return [self._one(job, company_slug) for job in raw.get("jobs", [])]
+
+    def _one(self, job: dict, slug: str) -> Posting:
+        # posting_id is the shortcode; the canonical apply-page URL is rebuilt
+        # from slug+shortcode (the widget's own `url`/`application_url` omit the
+        # account slug). Discovery only ever emits the apply.workable.com host.
+        shortcode = str(job.get("shortcode", ""))
+        return Posting(
+            vendor=self.vendor,
+            company_slug=slug,
+            job_id=shortcode,
+            title=job.get("title", ""),
+            locations=_workable_locations(job),
+            remote_flag=bool(job.get("telecommuting")),
+            comp=None,
+            posted_ts=job.get("published_on"),
+            updated_ts=job.get("created_at") or job.get("published_on"),
+            url=f"https://apply.workable.com/{slug}/j/{shortcode}/",
+            description="",
+        )
+
+
 def run_discovery(sources: list[tuple[SourceAdapter, object, str]],
                  store: Store) -> list[Posting]:
     """Parse every source, enforce liveness, drop already-known items.
@@ -180,6 +207,24 @@ def _ms_to_iso(ms: int | None) -> str | None:
         return None
     from datetime import datetime, timezone
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+
+
+def _workable_locations(job: dict) -> list[str]:
+    """One "City, Region, Country" string per entry in the widget's
+    `locations[]`, falling back to the job's top-level city/state/country when
+    the array is empty."""
+    out: list[str] = []
+    for loc in job.get("locations") or []:
+        name = ", ".join(p for p in (loc.get("city"), loc.get("region"),
+                                     loc.get("country")) if p)
+        if name:
+            out.append(name)
+    if not out:
+        name = ", ".join(p for p in (job.get("city"), job.get("state"),
+                                     job.get("country")) if p)
+        if name:
+            out.append(name)
+    return out
 
 
 def _ashby_locations(job: dict) -> list[str]:

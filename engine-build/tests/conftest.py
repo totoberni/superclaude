@@ -113,6 +113,12 @@ def ashby_raw():
 
 
 @pytest.fixture
+def workable_raw():
+    """PowerLines' public discovery widget feed (5 real jobs, no auth)."""
+    return load_fixture_json("providers/workable/widget-powerlines.json")
+
+
+@pytest.fixture
 def greenhouse_questions_raw():
     """A realistic greenhouse jobs/{id}?questions=true payload (W4 3.1)."""
     return load_fixture_json("greenhouse_acme_questions.json")
