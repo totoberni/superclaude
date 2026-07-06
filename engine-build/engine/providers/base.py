@@ -489,7 +489,7 @@ def _locator_text(locator) -> str:
 
 
 # -- react-select combobox driver (Greenhouse; W4-deferred) --------------------
-# LIVE-DOM FIX (2026-07-06, gitlab/8503792002 acceptance run): the driver used
+# LIVE-DOM FIX #1 (2026-07-06, gitlab/8503792002 acceptance run): the driver used
 # to click `#react-select-{field_id}-input` to open the widget -- that id DOES
 # NOT EXIST on Greenhouse's react-select v5 markup, so every combobox timed out
 # before a single option could be picked. The ids Greenhouse's live DOM DOES
@@ -498,41 +498,56 @@ def _locator_text(locator) -> str:
 # class suffix, e.g. `remix-css-13cymwt-control`, so never matched by a full
 # class-string equality), containing `div.select__value-container` >
 # `div.select__placeholder` (the confirmed `-placeholder` id) and
-# `div.select__input-container` > the control's own `<input>`. The open menu is
-# `div.select__menu` > `div.select__option` children (option text = the visible
-# label). The driver below anchors on the CONFIRMED placeholder id (via
-# Playwright's `:has()` CSS extension) to reach the control, types into the
-# control's own input to filter, and clicks the `div.select__option` whose
-# NORMALIZED text (case/space-insensitive, `_normalize_name`) equals the wanted
-# value -- never a positional/first-match guess, so a partially-filtered list
-# with more than one row can never pick the wrong one.
+# `div.select__input-container` > the control's own `<input>`. The driver below
+# anchors on the CONFIRMED placeholder id (via Playwright's `:has()` CSS
+# extension) to reach the control.
+#
+# LIVE-DOM FIX #2 (2026-07-06, same acceptance run, re-run after fix #1): even
+# with the control correctly reached, clicking the rendered `div.select__option`
+# left `.select__single-value` empty on every one of the 4 comboboxes (all read
+# back "value did not take"). Clicking a react-select option div is unreliable
+# under Playwright/Patchright: the click can land before the option's own click
+# handler is wired, or race the menu's re-render after each filter keystroke.
+# The robust, well-known react-select pattern is TYPE-TO-FILTER then ENTER --
+# react-select keeps the first filtered row highlighted and commits it on
+# `Enter`, exactly like a human using the widget with the keyboard alone (never
+# `Escape` first, which would just close the menu with no selection). The
+# driver now presses `Enter` on the control's own input instead of clicking any
+# `div.select__option`, so the menu-lookup/option-click step is gone entirely.
 
 
 def _combobox_control_selector(field_id: str) -> str:
-    """CSS for the field's react-select control div, scoped by the ONE
-    per-field id Greenhouse's live DOM confirms exists (`-placeholder`),
-    never by the build-hashed control class alone."""
-    return f'div.select__control:has([id="react-select-{field_id}-placeholder"])'
+    """CSS for the field's react-select control div, scoped by the per-field
+    `-live-region` id, which PERSISTS across selection (unlike `-placeholder`,
+    which unmounts the moment a value is picked, so a placeholder-anchored
+    scope silently stops matching the control post-commit and the readback
+    reads empty). The live-region node is a DIRECT child of the react-select
+    container alongside `.select__control`, so anchoring on it reaches the
+    control in BOTH the empty and the selected state. Live-DOM verified."""
+    return (f'div:has(> [id="react-select-{field_id}-live-region"]) '
+            f'div.select__control')
 
 
 def select_react_combobox(page, field_id: str, option_text: str, *,
                           min_delay: float = 60, max_delay: float = 180,
-                          poll_ms: tuple[int, ...] = (200, 500),
-                          wait_timeout: int = 5000) -> bool:
-    """Drive one react-select combobox: open, filter, pick, and confirm the choice.
+                          poll_ms: tuple[int, ...] = (200, 500)) -> bool:
+    """Drive one react-select combobox: open, filter, commit, and confirm.
 
     Sequence (fresh locators at every step; react-select recycles nodes):
       1. Click the field's control (scoped via `_combobox_control_selector`,
          anchored on the confirmed `-placeholder` id) to open the menu.
       2. `type_human` the option text into the control's own input to filter
          the menu (never fill()) -- also the long-country-list path.
-      3. Find the OPEN menu's `div.select__option` whose normalized text
-         equals `option_text`; click it. No matching option renders -> skip
-         the click (never crash), landed reads False.
+      3. Press `Enter` on that same input: react-select commits the
+         highlighted (first-filtered) option itself -- never a `div.select__
+         option` click, which does not reliably commit (see LIVE-DOM FIX #2
+         above).
       4. Poll `.select__single-value` (scoped to the field's control) at
          +200/+500 ms to confirm the value landed.
-      5. Dismiss with Escape -- NEVER blur (a blur can re-open / clear the
-         widget).
+      5. Dismiss with Escape -- harmless (react-select already closed the menu
+         on Enter-commit) but a safe no-op net for the case Enter had nothing
+         to commit (e.g. no option matched the filter). NEVER blur (a blur can
+         re-open / clear the widget).
 
     Returns True iff the readback confirms the selection landed.
     """
@@ -541,14 +556,34 @@ def select_react_combobox(page, field_id: str, option_text: str, *,
     combo_input = _combobox_input(page, field_id)
     type_human(combo_input, option_text, min_delay=min_delay, max_delay=max_delay)
 
-    option = _visible_option(page, option_text, wait_timeout)
-    if option is not None:
-        option.click()
+    # Commit via a FOCUS-FOLLOWING keyboard Enter, not the filter input's own
+    # press: react-select re-renders (detaches) the filter input on each
+    # keystroke, so `combo_input.press("Enter")` hangs on Playwright's
+    # actionability wait for a now-stale node. The live input still holds
+    # focus, so the page keyboard commits the highlighted first-filtered option
+    # reliably. Live-DOM verified. Falls back to the locator's own press for
+    # the offline fake harness (no `page.keyboard`).
+    _keyboard_press(page, combo_input, "Enter")
 
     landed = _poll_single_value(page, field_id, option_text, poll_ms)
-    # Escape dismisses the still-open menu without a blur.
-    combo_input.press("Escape")
+    # Dismiss the still-open menu (a no-op after an Enter-commit) without a blur.
+    _keyboard_press(page, combo_input, "Escape")
     return landed
+
+
+def _keyboard_press(page, locator, key: str) -> None:
+    """Press `key` on the PAGE keyboard (focus-following, so it survives react-
+    select re-rendering/detaching its filter input mid-interaction) when the
+    page exposes one; otherwise fall back to the locator's own `press` (the
+    offline fake-harness path, which has no `page.keyboard`)."""
+    keyboard = getattr(page, "keyboard", None)
+    presser = getattr(keyboard, "press", None) if keyboard is not None else None
+    if callable(presser):
+        presser(key)
+        return
+    locator_press = getattr(locator, "press", None)
+    if callable(locator_press):
+        locator_press(key)
 
 
 def _combobox_control(page, field_id: str):
@@ -561,44 +596,6 @@ def _combobox_input(page, field_id: str):
     per control; react-select recycles the node, so this is re-resolved on
     every call rather than cached)."""
     return _combobox_control(page, field_id).locator("input")
-
-
-def _visible_option(page, option_text: str, wait_timeout: int):
-    """The OPEN menu's `div.select__option` whose normalized text equals
-    `option_text` (case/space-insensitive, `_normalize_name`), or None when
-    nothing matches -- never a positional fallback (picking the wrong option
-    silently would be worse than a clean miss). React-select renders the menu
-    page-wide (not necessarily nested under the control), so options are
-    matched page-wide; only one field's menu is open at a time in this
-    sequential driver. Waits up to `wait_timeout` for at least one option to
-    render (the filtered menu can take a render tick to appear) before
-    scanning; never raises on a timeout, so a value with no matching option
-    is skipped, not crashed on."""
-    want = _normalize_name(option_text)
-    if not want:
-        return None
-    options = page.locator("div.select__menu div.select__option")
-    _wait_visible(_first(options), wait_timeout)
-    lister = getattr(options, "all", None)
-    for item in (lister() if callable(lister) else []):
-        if _normalize_name(_locator_text(item)) == want:
-            return item
-    return None
-
-
-def _first(locator):
-    first = getattr(locator, "first", None)
-    return first if first is not None else locator
-
-
-def _wait_visible(locator, timeout: int) -> None:
-    waiter = getattr(locator, "wait_for", None)
-    if not callable(waiter):
-        return
-    try:
-        waiter(state="visible", timeout=timeout)
-    except Exception:
-        pass
 
 
 def _poll_single_value(page, field_id: str, option_text: str,

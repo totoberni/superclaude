@@ -599,10 +599,17 @@ def test_sweep_required_collects_visible_skips_hidden_and_offscreen():
 
 
 class _FakeComboInput:
-    def __init__(self):
+    """The react-select control's own filter input. `press("Enter")` is the
+    ONLY thing that commits a selection in real react-select (never a
+    `div.select__option` click -- see base.py's LIVE-DOM FIX #2); this fake
+    mirrors that by flipping the paired `_FakeSingleValue` from uncommitted
+    (always reads "") to revealing its `reads` sequence."""
+
+    def __init__(self, single_value=None):
         self.clicked = 0
         self.keys = []
         self.pressed = []
+        self._single_value = single_value
 
     def click(self):
         self.clicked += 1
@@ -612,6 +619,8 @@ class _FakeComboInput:
 
     def press(self, key):
         self.pressed.append(key)
+        if key == "Enter" and self._single_value is not None:
+            self._single_value.commit()
 
     def fill(self, *args, **kwargs):
         raise AssertionError("react-select driver must never call fill()")
@@ -643,68 +652,38 @@ class _FakeComboControl:
         raise AssertionError(f"unexpected control-scoped locator: {css!r}")
 
 
-class _FakeReactOption:
-    """One `div.select__option` row: its visible text plus a click counter."""
-
-    def __init__(self, text):
-        self.text = text
-        self.clicked = 0
-
-    def inner_text(self):
-        return self.text
-
-    def click(self):
-        self.clicked += 1
-
-
-class _FakeOptionMenu:
-    """The open menu's `div.select__menu div.select__option` locator SET:
-    `.first` backs the visibility wait, `.all()` backs the by-text scan the
-    driver performs to find the option matching the intended value."""
-
-    def __init__(self, options):
-        self._options = list(options)
-        self.waited = None
-
-    @property
-    def first(self):
-        return self
-
-    def wait_for(self, **kwargs):
-        self.waited = kwargs
-
-    def all(self):
-        return self._options
-
-
 class _FakeSingleValue:
-    """Reads the rendered value; a multi-element `reads` list pops one per poll so
-    a value that appears only on the +500 ms read is expressible."""
+    """Reads the rendered value. Uncommitted (before `_FakeComboInput` presses
+    `Enter`) always reads "" -- no real react-select selection has landed yet.
+    Once committed, a multi-element `reads` list pops one per poll so a value
+    that appears only on the +500 ms read is expressible."""
 
     def __init__(self, reads):
         self._reads = list(reads)
+        self._committed = False
+
+    def commit(self):
+        self._committed = True
 
     def inner_text(self):
+        if not self._committed:
+            return ""
         if len(self._reads) > 1:
             return self._reads.pop(0)
         return self._reads[0] if self._reads else ""
 
 
 class _FakeComboPage:
-    def __init__(self, *, field_id, single_value_reads, option_texts=("Italy",)):
+    def __init__(self, *, field_id, single_value_reads):
         self._field_id = field_id
-        self.combo = _FakeComboInput()
         self._single_value = _FakeSingleValue(single_value_reads)
+        self.combo = _FakeComboInput(self._single_value)
         self.control = _FakeComboControl(self.combo, self._single_value)
-        self.options = [_FakeReactOption(text) for text in option_texts]
-        self.option_menu = _FakeOptionMenu(self.options)
         self.timeouts = []
 
     def locator(self, css):
         if css == base._combobox_control_selector(self._field_id):
             return self.control
-        if css == "div.select__menu div.select__option":
-            return self.option_menu
         raise AssertionError(f"unexpected selector {css!r}")
 
     def wait_for_timeout(self, ms):
@@ -713,20 +692,16 @@ class _FakeComboPage:
 
 def test_select_react_combobox_happy_path_confirms_and_escapes():
     # Value rendered by the +200 ms read -> lands on the first poll mark.
-    page = _FakeComboPage(field_id="country", single_value_reads=["Italy"],
-                          option_texts=("Italy", "France"))
+    page = _FakeComboPage(field_id="country", single_value_reads=["Italy"])
     landed = base.select_react_combobox(page, "country", "Italy")
 
     assert landed is True
     assert page.control.clicked == 1               # opened once
     assert page.combo.clicked == 1                 # _settle_focus click
     assert page.combo.keys == ["I", "t", "a", "l", "y"]  # human-typed filter
-    assert page.option_menu.waited == {"state": "visible", "timeout": 5000}
-    picked = next(o for o in page.options if o.text == "Italy")
-    other = next(o for o in page.options if o.text != "Italy")
-    assert picked.clicked == 1                     # option chosen
-    assert other.clicked == 0                      # never a positional guess
-    assert page.combo.pressed == ["Escape"]        # dismissed via Escape, no blur
+    # Enter -- never a div.select__option click -- is what commits the
+    # highlighted (first-filtered) option; Escape follows as a safe no-op.
+    assert page.combo.pressed == ["Enter", "Escape"]
     assert page.timeouts == [200]                  # confirmed at +200 ms
 
 
@@ -736,16 +711,20 @@ def test_select_react_combobox_polls_second_mark_when_value_lags():
     landed = base.select_react_combobox(page, "country", "Italy")
 
     assert landed is True
+    assert page.combo.pressed == ["Enter", "Escape"]
     assert page.timeouts == [200, 300]             # +200 then +300 (cumulative +500)
 
 
 def test_select_react_combobox_reports_not_landed_on_readback_miss():
+    # Enter is pressed (it always is), but the committed value never contains
+    # the intended text -- e.g. no option matched the typed filter -- so the
+    # readback gate must still report False.
     page = _FakeComboPage(field_id="country", single_value_reads=[""])
     landed = base.select_react_combobox(page, "country", "Italy")
 
     assert landed is False
     assert page.timeouts == [200, 300]             # both marks exhausted
-    assert page.combo.pressed == ["Escape"]        # still dismissed cleanly
+    assert page.combo.pressed == ["Enter", "Escape"]  # still dismissed cleanly
 
 
 # -- fill-primitive re-export: call-time lookup preserves the monkeypatch seam --

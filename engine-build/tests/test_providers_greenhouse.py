@@ -116,13 +116,18 @@ class _FakeTextLocator:
 class _FakeComboInput:
     """The react-select control's OWN filter input: `_settle_focus` clicks it
     once before typing (first-char-focus fix), `type_human` then types the
-    option text one keystroke at a time, and the driver finally dismisses the
-    still-open menu with Escape (never blur)."""
+    option text one keystroke at a time, `press("Enter")` commits the
+    highlighted (first-filtered) option -- never a `div.select__option`
+    click, mirroring real react-select -- and the driver finally dismisses
+    the (already-closed) menu with Escape (never blur). Enter is modeled here
+    by flipping the paired `_FakeSingleValue` from uncommitted (always reads
+    "") to revealing its `reads` sequence."""
 
-    def __init__(self):
+    def __init__(self, single_value=None):
         self.clicked = 0
         self.keys = []
         self.pressed = []
+        self._single_value = single_value
 
     def click(self):
         self.clicked += 1
@@ -132,6 +137,8 @@ class _FakeComboInput:
 
     def press(self, key):
         self.pressed.append(key)
+        if key == "Enter" and self._single_value is not None:
+            self._single_value.commit()
 
     def fill(self, *args, **kwargs):
         raise AssertionError("react-select driver must never call fill()")
@@ -164,45 +171,22 @@ class _FakeComboControl:
         raise AssertionError(f"unexpected control-scoped locator: {css!r}")
 
 
-class _FakeReactOption:
-    """One `div.select__option` row: its visible text plus a click counter."""
-
-    def __init__(self, text):
-        self.text = text
-        self.clicked = 0
-
-    def inner_text(self):
-        return self.text
-
-    def click(self):
-        self.clicked += 1
-
-
-class _FakeOptionMenu:
-    """The open menu's `div.select__menu div.select__option` locator SET:
-    `.first` backs the visibility wait, `.all()` backs the by-text scan the
-    driver performs to find the option matching the intended value."""
-
-    def __init__(self, options):
-        self._options = list(options)
-        self.waited = None
-
-    @property
-    def first(self):
-        return self
-
-    def wait_for(self, **kwargs):
-        self.waited = kwargs
-
-    def all(self):
-        return self._options
-
-
 class _FakeSingleValue:
+    """Reads the rendered value. Uncommitted (before `_FakeComboInput` presses
+    `Enter`) always reads "" -- no real react-select selection has landed yet.
+    Once committed, a multi-element `reads` list pops one per poll so a value
+    that appears only on the +500 ms read is expressible."""
+
     def __init__(self, reads):
         self._reads = list(reads)
+        self._committed = False
+
+    def commit(self):
+        self._committed = True
 
     def inner_text(self):
+        if not self._committed:
+            return ""
         if len(self._reads) > 1:
             return self._reads.pop(0)
         return self._reads[0] if self._reads else ""
@@ -288,7 +272,6 @@ class _FakeGreenhousePage:
 
     def __init__(self, *, url="https://boards.greenhouse.io/fakeco/jobs/7701001",
                 combo_field_id="question_50001", combo_reads=("No",),
-                combo_options=("Yes", "No"),
                 file_inputs=None, sweep_required_labels=_REQUIRED_LABELS):
         self._url = url
         self.controls = {
@@ -296,12 +279,10 @@ class _FakeGreenhousePage:
             ("textbox", "Email"): _FakeTextLocator(),
         }
         self.combo_field_id = combo_field_id
-        self.combo_input = _FakeComboInput()
         self.single_value = _FakeSingleValue(combo_reads)
+        self.combo_input = _FakeComboInput(self.single_value)
         self.combo_control = _FakeComboControl(self.combo_input,
                                                self.single_value)
-        self.options = [_FakeReactOption(text) for text in combo_options]
-        self.option_menu = _FakeOptionMenu(self.options)
         self.timeouts = []
         self.file_inputs = (list(file_inputs) if file_inputs is not None else
                             [_FakeFileInput(id="resume",
@@ -465,17 +446,14 @@ def test_fill_happy_path_all_required_land_is_complete(tmp_path):
         "test.candidate@example.invalid"
     # The react-select driver: click the control to open the menu, type_human
     # the option text into the control's OWN input (settle-focus click first,
-    # per the first-char-drop fix), click the matching `select__option` row,
-    # then dismiss with Escape -- never the stale #react-select-<id>-input /
-    # -listbox ids the old driver used.
+    # per the first-char-drop fix), commit via Enter (react-select commits the
+    # highlighted first-filtered option itself -- never a `div.select__option`
+    # click), then dismiss with Escape -- never the stale #react-select-<id>-
+    # input / -listbox ids the old driver used.
     assert page.combo_control.clicked == 1
     assert page.combo_input.clicked == 1              # _settle_focus click
     assert "".join(page.combo_input.keys) == "No"
-    assert page.combo_input.pressed == ["Escape"]
-    picked = next(o for o in page.options if o.text == "No")
-    other = next(o for o in page.options if o.text != "No")
-    assert picked.clicked == 1
-    assert other.clicked == 0
+    assert page.combo_input.pressed == ["Enter", "Escape"]
     resume_input = page.file_inputs[0]
     headshot_input = page.file_inputs[1]
     assert resume_input.set_input_files_calls == 1

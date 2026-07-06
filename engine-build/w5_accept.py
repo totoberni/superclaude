@@ -85,6 +85,13 @@ try:
             pass
 
     g = lambda o, a, d=None: getattr(o, a, d)
+    # Field-by-field detail for the hostile review: what value landed in each
+    # driven field (truncated), plus every skip with its reason and the uploads.
+    resolved_fields = [
+        {"key": fv.key, "label": getattr(fv, "label", ""),
+         "value": str(fv.value)[:200], "asset": getattr(fv, "asset", None)}
+        for fv in g(values, "fields", []) or []
+    ]
     result.update({
         "stage": "done",
         "fields_total": len(fieldmap.fields),
@@ -93,8 +100,11 @@ try:
             "filled": g(report, "filled"),
             "required_unfilled": g(report, "required_unfilled"),
             "justified_skips": g(report, "justified_skips"),
+            "uploads": g(report, "uploads"),
+            "skipped": g(report, "skipped"),
             "complete": g(report, "complete"),
         },
+        "resolved_fields": resolved_fields,
         "net_requests": audit["requests"],
         "net_posts": audit["posts"],
         "submit_posts_completed": audit["completed_submits"],
