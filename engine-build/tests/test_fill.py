@@ -39,7 +39,8 @@ from engine.profile_map import profile_from_real_ssot
 from engine.ssot import SSOT
 
 _PINNED = "2026-07-03T00:00:00+00:00"
-_NO_OVERRIDE = object()  # sentinel: input_value() is not overridden
+_NO_OVERRIDE = object()  # sentinel: no readback override forced (input_value()
+                         # for a text/select control, file_count for a file input)
 
 
 # --- fixture builders ---------------------------------------------------------
@@ -149,16 +150,19 @@ class _FakeFileInput:
     """A plain <input type=file> element handle: exposes id/name/accept and the
     direct `set_input_files` upload path (no click), like a Playwright handle.
 
-    `input_value` mirrors real <input type=file> behaviour: it reads back
-    whatever `set_input_files` last recorded, so a genuine attach reports
-    non-empty by default. Pass `readback` to force a specific value (e.g. ""
-    to simulate a custom widget that silently swallowed the upload without
-    ever wiring the native input)."""
+    `evaluate` mirrors the real `<input type=file>`'s `el.files.length`
+    signal `_upload_attached` reads (NEVER `input_value()`: Greenhouse's live
+    DOM proves that reads back EMPTY regardless of whether a file attached,
+    so it cannot be the success signal -- see `_upload_attached`'s docstring
+    in fill.py). It reports 1 file attached once `set_input_files` has been
+    called, unless `file_count` forces a specific count (e.g. 0, to simulate
+    a custom widget that silently swallowed the upload without ever wiring
+    the native input's `files` FileList)."""
 
     def __init__(self, *, id=None, name=None, accept=None,
-                 readback=_NO_OVERRIDE):
+                 file_count=_NO_OVERRIDE):
         self._attrs = {"id": id, "name": name, "accept": accept}
-        self._readback_override = readback
+        self._file_count_override = file_count
         self.set_input_files_calls = 0
         self.uploaded = None
         self.clicks = 0
@@ -173,10 +177,10 @@ class _FakeFileInput:
     def click(self):
         self.clicks += 1
 
-    def input_value(self):
-        if self._readback_override is not _NO_OVERRIDE:
-            return self._readback_override
-        return self.uploaded or ""
+    def evaluate(self, expression, arg=None):
+        if self._file_count_override is not _NO_OVERRIDE:
+            return self._file_count_override
+        return 1 if self.uploaded else 0
 
 
 class _FakePage:
@@ -1371,7 +1375,7 @@ def test_required_upload_that_does_not_attach_forces_not_complete(
     fm = _fieldmap(_field("resume", "Resume / CV", type_="input_file",
                           role="button"))
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
-    resume_input = _FakeFileInput(id="resume", accept=".pdf", readback="")
+    resume_input = _FakeFileInput(id="resume", accept=".pdf", file_count=0)
     page = _control_page(values.fields, file_inputs=[resume_input])()
 
     report = fill_form("greenhouse", "acme", "1", values,

@@ -978,21 +978,50 @@ def _fill_upload(page, fv: FieldValue, assets: FillAssets | None,
 
 
 def _upload_attached(control) -> bool:
-    """True iff the file input's readback shows a file actually attached after
-    `set_input_files`: a genuine attach leaves the control's value non-empty
-    (a real browser reports a fakepath filename); a control the upload silently
-    passed through without wiring the native input reads back empty and must
-    not count as filled. A control with no readable value (no `input_value`) is
-    assumed attached -- real <input type=file> handles always expose it; this
-    is defence in depth only, matching `_safe_get_attr`'s read-or-default
-    pattern."""
+    """True iff the file input genuinely holds an attached file after
+    `set_input_files`.
+
+    PREFERS the input's own `files` FileList, read via `evaluate` (`el.files
+    .length >= 1`): a live-DOM probe of Greenhouse's resume/CV widget proved
+    `input_value()` (the `.value` string property) reads back EMPTY
+    regardless of whether the attach genuinely landed -- Greenhouse's own
+    widget resets `.value` once its change handler runs, to allow
+    re-selecting the same file, so an empty read never distinguishes a real
+    attach from one a custom widget silently swallowed. Keying off it there
+    produced a structural FALSE POSITIVE: the old defensive "could not read
+    -> assume attached" fallback (`except Exception: return True`, `not
+    callable: return True`) guessed wrong, in the ATTACHED direction, every
+    time the value read came back empty or unreadable. `el.files.length` has
+    no such ambiguity: it is >=1 iff a file object is actually on the input,
+    independent of anything a vendor's JS does to `.value` afterwards.
+
+    Falls back to `input_value()` only when the control exposes no
+    `evaluate` at all (a vendor/fixture not yet carrying the file-count
+    signal); that fallback is UNCONFIRMED for Greenhouse and must never be
+    reinstated there. Never-attached bias throughout, mirroring the
+    never-send guard's "any ambiguity blocks" philosophy elsewhere in this
+    module: a control this code cannot positively confirm attached -- no
+    `evaluate`, no `input_value`, or either one raising or returning
+    something that is not a genuine count -- is treated as NOT attached, so
+    an unreadable readback can never silently pass a required upload as
+    filled."""
+    evaluator = getattr(control, "evaluate", None)
+    if callable(evaluator):
+        try:
+            count = evaluator("el => (el.files ? el.files.length : 0)")
+        except Exception:
+            return False
+        try:
+            return int(count) >= 1
+        except (TypeError, ValueError):
+            return False
     getter = getattr(control, "input_value", None)
     if not callable(getter):
-        return True
+        return False
     try:
         value = getter()
     except Exception:
-        return True
+        return False
     return bool(value)
 
 
