@@ -128,6 +128,238 @@ def test_submit_predicate_workable_graphql_create_candidate_aborts():
         "POST", url, '{"operationName":"jobPosting"}') is False
 
 
+# -- never-send: graphql operation-name resolution (2026-07-06 guard fix) ------
+# CONFIRMED BUG (live on toto 2026-07-05): _is_submit_request used to run
+# _SUBMIT_OPERATION_RE over the WHOLE graphql body. Ashby's hosted-jobs-page READ
+# op ApiOrganizationFromHostedJobsPageName ships a query document whose TEXT
+# references a submitApplicationFormOptions-shaped field, so the old whole-body
+# scan wrongly aborted a read (net::ERR_FAILED), the page data never loaded, and
+# the form fill got 0/9 fields. The rewrite resolves operationName(s) instead of
+# scanning blindly, while keeping (and extending) the never-send bias: any
+# ambiguity in what the body will execute still blocks.
+
+
+def test_submit_predicate_ashby_graphql_read_with_submit_keyword_in_query_text_passes():
+    # LIVE-FP regression: the submit-keyword substring lives only in a pure query
+    # document's text; the operationName resolves cleanly to an innocent read, so
+    # this must flow (this is the exact request that broke live fill).
+    url = ("https://jobs.ashbyhq.com/api/non-user-graphql"
+           "?op=ApiOrganizationFromHostedJobsPageName")
+    body = (
+        '{"operationName": "ApiOrganizationFromHostedJobsPageName", '
+        '"variables": {}, "query": "query ApiOrganizationFromHostedJobsPageName '
+        '{ organization { hostedJobsPageName submitApplicationFormOptions } }"}'
+    )
+    assert base._is_submit_request("POST", url, body) is False
+
+
+def test_submit_predicate_graphql_real_submit_mutation_aborts():
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    body = (
+        '{"operationName": "submitApplicationForm", "variables": {}, '
+        '"query": "mutation submitApplicationForm($input: '
+        'SubmitApplicationFormInput!) { submitApplicationForm(input: $input) '
+        '{ success } }"}'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
+def test_submit_predicate_graphql_renamed_op_with_mutation_keyword_aborts():
+    # Rule 3 (defense in depth): a submit mutation renamed to an innocent
+    # operationName is still caught because the body is a `mutation` document
+    # that names a submit-shaped field.
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    body = (
+        '{"operationName": "InnocentSave", "variables": {}, '
+        '"query": "mutation InnocentSave { submitApplicationForm(input: {}) '
+        '{ success } }"}'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
+def test_submit_predicate_graphql_missing_operation_name_falls_back_to_body_scan():
+    # Rule 4: no operationName to resolve (complete=False) falls back to the
+    # legacy whole-body scan.
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    keyword_body = ('{"variables": {}, '
+                     '"query": "{ submitApplicationForm(input: {}) { success } }"}')
+    clean_body = ('{"variables": {}, '
+                  '"query": "{ organization { hostedJobsPageName } }"}')
+    assert base._is_submit_request("POST", url, keyword_body) is True
+    assert base._is_submit_request("POST", url, clean_body) is False
+
+
+def test_submit_predicate_graphql_nonjson_body_falls_back_to_body_scan():
+    # Unparseable JSON also leaves complete=False -> same whole-body fail-safe.
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    assert base._is_submit_request(
+        "POST", url, "not json submitApplication blob") is True
+    assert base._is_submit_request(
+        "POST", url, "not json at all, no keywords here") is False
+
+
+def test_submit_predicate_graphql_url_op_param_is_block_only_signal_aborts():
+    # Rule 2: the URL's op= names a submit operation even though the fully-parsed
+    # body carries an innocent operationName and a clean pure-query document; the
+    # URL param is a BLOCK-ONLY signal, so it aborts regardless of the (innocent)
+    # body it disagrees with.
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql?op=submitApplicationForm"
+    body = (
+        '{"operationName": "InnocentRead", "variables": {}, '
+        '"query": "query InnocentRead { organization { hostedJobsPageName } }"}'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
+def test_submit_predicate_graphql_batch_with_submit_operation_name_aborts():
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    body = (
+        '[{"operationName": "InnocentRead", "query": "query InnocentRead { x }"}, '
+        '{"operationName": "submitApplicationForm", '
+        '"query": "mutation submitApplicationForm { y }"}]'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
+def test_submit_predicate_graphql_batch_all_innocent_operation_names_passes():
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    body = (
+        '[{"operationName": "InnocentRead", "query": "query InnocentRead { x }"}, '
+        '{"operationName": "AnotherRead", "query": "query AnotherRead { y }"}]'
+    )
+    assert base._is_submit_request("POST", url, body) is False
+
+
+def test_submit_predicate_graphql_batch_incomplete_element_falls_back_to_body_scan():
+    # One batched element has no operationName at all (complete=False); a submit
+    # keyword elsewhere in the raw batch body trips the rule-4 fail-safe.
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    body = (
+        '[{"operationName": "InnocentRead", "query": "query InnocentRead { x }"}, '
+        '{"query": "{ submitApplicationForm(input: {}) { success } }"}]'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
+@pytest.mark.parametrize("url", [
+    "https://boards.greenhouse.io/acme/jobs/12345/applications",
+    "https://jobs.lever.co/globex/req-77/apply",
+    "https://acme.workable.com/spi/v3/accounts/1/jobs/abc/candidates",
+])
+def test_submit_predicate_plain_submit_url_still_aborts_regardless_of_body(url):
+    # Untouched arm (spec: byte-identical): a plain vendor submit URL aborts
+    # regardless of body content, unaffected by the graphql decision rewrite.
+    assert base._is_submit_request("POST", url, "anything at all, no keywords") is True
+    assert base._is_submit_request("POST", url, None) is True
+
+
+def test_submit_predicate_get_to_submit_url_still_passes():
+    url = "https://boards.greenhouse.io/acme/jobs/12345/applications"
+    assert base._is_submit_request("GET", url, None) is False
+
+
+def test_submit_predicate_workable_graphql_read_with_keyword_in_query_text_passes():
+    # New-semantics spot check on the OTHER graphql vendor: a read op whose query
+    # text merely mentions a submit-shaped field name must still flow, exactly
+    # like the ashby live-FP regression above.
+    url = "https://www.workable.com/api/graphql"
+    body = (
+        '{"operationName": "jobPosting", "variables": {}, '
+        '"query": "query jobPosting { title candidateCreateOptions }"}'
+    )
+    assert base._is_submit_request("POST", url, body) is False
+
+
+# -- never-send: security-review round-1 hardening (2026-07-06) ----------------
+# MEDIUM: a persisted/hash-only graphql op (APQ -- no inline `query` text) with
+# an innocent operationName used to be ALLOWED even when a stray submit token
+# sat elsewhere in the body, because complete=True short-circuited the old
+# rule-4 whole-body fail-safe. Rule 4 now also fires when any executed op lacks
+# inline query text, since a persisted op's innocence can't be vouched for by
+# query-text inspection the way an inlined operation's can.
+# LOW: the URL's `op=` block-only signal (rule 2) now matches the query key
+# case-insensitively and checks EVERY value, not just the first.
+
+
+def test_submit_predicate_graphql_batch_operation_name_alone_proves_rule_one():
+    # Isolates rule 1 (batched operationName collection) from rule 3 and rule 4:
+    # no `mutation` keyword anywhere and every element carries inline query
+    # text, so only the operationName match can be responsible for the abort
+    # (the existing batch-submit test above is vacuous on this point -- its
+    # query text ALSO contains a `mutation` keyword, so it could pass on rule 3
+    # alone without rule 1 ever being exercised).
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    body = (
+        '[{"operationName": "InnocentA", "query": "query InnocentA { x }"}, '
+        '{"operationName": "submitApplicationForm", '
+        '"query": "query Whatever { y }"}]'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
+def test_submit_predicate_graphql_persisted_query_innocent_op_with_stray_token_aborts():
+    # MEDIUM repro: a persisted op (no inline `query`, just a sha256Hash) with an
+    # innocent operationName but a stray submit token elsewhere in the body used
+    # to be ALLOWED (no `mutation` keyword, complete=True skipped the old rule
+    # 4). Hardened: now blocks.
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    body = (
+        '{"operationName":"SaveDraft","variables":{"target":"submitApplicationForm"},'
+        '"extensions":{"persistedQuery":{"version":1,"sha256Hash":"deadbeef"}}}'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
+def test_submit_predicate_graphql_batch_with_persisted_element_and_stray_token_aborts():
+    # Same hardening in a batch: one clean full-text read plus one persisted
+    # innocent-op element; the stray submit token anywhere in the raw body
+    # still trips the fail-safe because the persisted element can't be vouched
+    # for by query text.
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    body = (
+        '[{"operationName": "CleanRead", "query": "query CleanRead { x }"}, '
+        '{"operationName":"SaveDraft","variables":{"target":"submitApplicationForm"},'
+        '"extensions":{"persistedQuery":{"version":1,"sha256Hash":"deadbeef"}}}]'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
+def test_submit_predicate_graphql_persisted_query_innocent_op_no_token_passes():
+    # Boundary control (unchanged pre-existing behavior, pinned as documentation
+    # of the boundary): a persisted/hash-only op with an innocent operationName
+    # and NO submit token anywhere in the body is still allowed -- the
+    # hardening only fires when the whole-body scan itself finds something
+    # suspicious to begin with.
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql"
+    body = (
+        '{"operationName":"SaveDraft","variables":{"target":"a normal value"},'
+        '"extensions":{"persistedQuery":{"version":1,"sha256Hash":"deadbeef"}}}'
+    )
+    assert base._is_submit_request("POST", url, body) is False
+
+
+def test_submit_predicate_url_op_param_uppercase_key_aborts():
+    # LOW fix: the `op` URL query key is matched case-insensitively.
+    url = "https://jobs.ashbyhq.com/api/non-user-graphql?OP=submitApplicationForm"
+    body = (
+        '{"operationName": "InnocentRead", "variables": {}, '
+        '"query": "query InnocentRead { organization { hostedJobsPageName } }"}'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
+def test_submit_predicate_url_op_param_second_repeated_value_aborts():
+    # LOW fix: every value of a repeated `op=` param is checked, not just the
+    # first (parse_qs preserves order: ["Innocent", "submitApplicationForm"]).
+    url = ("https://jobs.ashbyhq.com/api/non-user-graphql"
+           "?op=Innocent&op=submitApplicationForm")
+    body = (
+        '{"operationName": "InnocentRead", "variables": {}, '
+        '"query": "query InnocentRead { organization { hostedJobsPageName } }"}'
+    )
+    assert base._is_submit_request("POST", url, body) is True
+
+
 # -- never-send: interceptor install + handler behaviour -----------------------
 
 
