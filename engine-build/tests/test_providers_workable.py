@@ -435,8 +435,9 @@ def test_fill_completes_when_all_safe_required_land():
     assert report.vendor == "workable"
     # (1) never-send installed exactly once, at CONTEXT scope.
     assert len(page.context.routed) == 1 and page.context.routed[0][0] == "**"
-    # (2)+(3) text via type_human, readback-confirmed.
-    assert page.controls[("textbox", "First name")].input_value() == "Test Candidate"
+    # (2)+(3) text via type_human, readback-confirmed. Combined identity.name is
+    # split to the first token for a First name field (gap #2), so it lands "Test".
+    assert page.controls[("textbox", "First name")].input_value() == "Test"
     assert page.controls[("textbox", "Email")].input_value() == \
         "test.candidate@example.invalid"
     assert report.readback_mismatches == []

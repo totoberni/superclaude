@@ -186,16 +186,24 @@ _PORTAL_WIDGET_KEYS = {"longitude", "latitude"}
 _SKILLS_EXPERIENCE_RE = re.compile(r"experience\s+(?:using|with|in)\b",
                                   re.IGNORECASE)
 
+# First/last name label keywords, shared with `engine.fill` (imported there) so
+# the full-name-split fallback at render time detects the same fields these
+# matchers do.
+_FIRST_NAME_KEYWORDS = ("first name", "given name", "forename")
+_LAST_NAME_KEYWORDS = ("last name", "surname", "family name")
+
 # Ordered label-keyword -> candidate SSOT dotted paths. First matcher whose any
 # keyword is a substring of the (lowercased) label wins; within it the first
-# candidate path that resolves in the SSOT makes the field answerable. Specific
-# name variants precede the generic "name" so "First Name" never resolves via
-# the bare fallback first. Order is load-bearing.
+# candidate path that resolves in the SSOT makes the field answerable. The
+# discrete first_name/last_name key leads each list so a form with BOTH a First
+# Name and a Last Name field never has the full name typed into both; the
+# full-name paths remain as a fallback (split at render time in engine.fill)
+# for an SSOT that only carries a combined name. Order is load-bearing.
 _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
-    (("first name", "given name", "forename"),
-     ["identity.name", "identity.full_name", "identity.first_name"]),
-    (("last name", "surname", "family name"),
-     ["identity.name", "identity.full_name", "identity.last_name"]),
+    (_FIRST_NAME_KEYWORDS,
+     ["identity.first_name", "identity.name", "identity.full_name"]),
+    (_LAST_NAME_KEYWORDS,
+     ["identity.last_name", "identity.name", "identity.full_name"]),
     (("full name", "legal name", "your name"),
      ["identity.name", "identity.full_name"]),
     (("email", "e-mail"), ["identity.email"]),

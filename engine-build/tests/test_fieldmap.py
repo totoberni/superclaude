@@ -163,6 +163,47 @@ def test_coverage_classifies_answerable_missing_and_manual_only(
     assert report.missing_paths() == [unanswerable.path]
 
 
+def test_first_and_last_name_prefer_discrete_ssot_keys_over_full_name():
+    # FIX 1: when the SSOT carries discrete identity.first_name/
+    # identity.last_name keys, the matcher resolves to THOSE, not the combined
+    # identity.name (previously both fields resolved via identity.name first,
+    # so the full name got typed into both fields).
+    ssot = SSOT({"identity": {
+        "name": "Ada Lovelace", "first_name": "Ada", "last_name": "Lovelace"}})
+    fm = FieldMap(vendor="acme", posting_id="1", captured_at=_PINNED, fields=[
+        Field(key="first_name", label="First Name", type="input_text",
+              required=True, options=[], source="questions",
+              locator=Locator(role="textbox", name="First Name")),
+        Field(key="last_name", label="Last Name", type="input_text",
+              required=True, options=[], source="questions",
+              locator=Locator(role="textbox", name="Last Name")),
+    ])
+    report = coverage(fm, ssot, {})
+    by_key = {f.key: f for f in report.fields}
+
+    assert by_key["first_name"].path == "identity.first_name"
+    assert by_key["last_name"].path == "identity.last_name"
+
+
+def test_first_and_last_name_fall_back_to_full_name_path_when_no_discrete_key():
+    # No discrete first_name/last_name key at all: both fall back to the
+    # combined identity.name path (split at render time in engine.fill).
+    ssot = SSOT({"identity": {"name": "Ada Lovelace"}})
+    fm = FieldMap(vendor="acme", posting_id="1", captured_at=_PINNED, fields=[
+        Field(key="first_name", label="First Name", type="input_text",
+              required=True, options=[], source="questions",
+              locator=Locator(role="textbox", name="First Name")),
+        Field(key="last_name", label="Last Name", type="input_text",
+              required=True, options=[], source="questions",
+              locator=Locator(role="textbox", name="Last Name")),
+    ])
+    report = coverage(fm, ssot, {})
+    by_key = {f.key: f for f in report.fields}
+
+    assert by_key["first_name"].path == "identity.name"
+    assert by_key["last_name"].path == "identity.name"
+
+
 def test_coverage_required_demographic_is_manual_only():
     # A required EEO/demographic field is manual-only regardless of label match.
     fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,

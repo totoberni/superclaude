@@ -411,9 +411,11 @@ def test_fill_happy_path_all_required_land_is_complete(tmp_path):
     # (1) never-send installed.
     assert len(page.routed) == 1
     assert page.routed[0][0] == "**"
-    # (2)+(3) every field landed and readback-confirmed.
+    # (2)+(3) every field landed and readback-confirmed. The SSOT carries only a
+    # combined identity.name, so a First Name field is split to the first token
+    # (gap #2): the discrete field lands "Test", not the whole name.
     assert page.controls[("textbox", "First Name")].input_value() == \
-        "Test Candidate"
+        "Test"
     assert page.controls[("textbox", "Email")].input_value() == \
         "test.candidate@example.invalid"
     assert page.combo.clicked == 1

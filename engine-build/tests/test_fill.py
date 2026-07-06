@@ -252,14 +252,106 @@ def _control_page(fields, *, url="https://jobs.example.com/x/1/apply",
 # =============================================================================
 
 def test_resolve_answerable_text(real_ssot_path):
+    # The fixture SSOT carries only a combined `identity.name` ("Test
+    # Candidate"), no discrete first/last key: a First Name field resolves via
+    # the full-name-path fallback and is split to the first token (FIX 1),
+    # never the whole name.
     ssot = SSOT.load(real_ssot_path)
     fm = _fieldmap(_field("first_name", "First Name"),
                    _field("email", "Email"))
     resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
 
-    assert resolved.values["first_name"] == "Test Candidate"
+    assert resolved.values["first_name"] == "Test"
     assert resolved.values["email"] == "test.candidate@example.invalid"
     assert resolved.skipped == []
+
+
+def test_resolve_discrete_first_and_last_name_fields_win_over_full_name():
+    # FIX 1 regression: when the SSOT carries BOTH a combined name and
+    # discrete first_name/last_name keys, each field must resolve to its OWN
+    # discrete key, never the whole name (the bug: both fields got the full
+    # name because `identity.name` led both candidate lists).
+    ssot = SSOT({"identity": {
+        "name": "Ada Lovelace", "first_name": "Ada", "last_name": "Lovelace",
+        "email": "ada@example.invalid"}})
+    fm = _fieldmap(_field("first_name", "First Name"),
+                   _field("last_name", "Last Name"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["first_name"] == "Ada"
+    assert resolved.values["last_name"] == "Lovelace"
+    assert resolved.skipped == []
+
+
+def test_resolve_full_name_only_splits_into_first_and_last():
+    # FIX 1 regression: no discrete first_name/last_name key at all -> the
+    # matcher falls back to the combined `identity.name`, which is split at
+    # render time rather than typed whole into both fields.
+    ssot = SSOT({"identity": {"name": "Ada Lovelace",
+                             "email": "ada@example.invalid"}})
+    fm = _fieldmap(_field("first_name", "First Name"),
+                   _field("last_name", "Last Name"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["first_name"] == "Ada"
+    assert resolved.values["last_name"] == "Lovelace"
+    assert resolved.skipped == []
+
+
+def test_resolve_single_token_full_name_first_gets_it_last_is_skipped():
+    # A single-token name has nothing to split out for the last-name field:
+    # it is honestly skipped rather than typed as an empty string.
+    ssot = SSOT({"identity": {"name": "Cher", "email": "cher@example.invalid"}})
+    fm = _fieldmap(_field("first_name", "First Name"),
+                   _field("last_name", "Last Name"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["first_name"] == "Cher"
+    assert "last_name" not in resolved.values
+    reasons = dict(resolved.skipped)
+    assert "single-token name" in reasons["last_name"]
+
+
+def test_resolve_select_dict_node_matches_a_scalar_sub_value():
+    # FIX 2 regression: the resolved path is a dict node (not a scalar). A
+    # select field can still answer from one of the dict's own scalar values.
+    ssot = SSOT({"canned_answers": {"notice_period": {
+        "weeks": "2", "note": "negotiable"}}})
+    fm = _fieldmap(_field("q_notice", "Notice period",
+                          type_="multi_value_single_select",
+                          options=["Immediate", "negotiable"], role="combobox"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_notice"] == "negotiable"
+    assert resolved.skipped == []
+
+
+def test_resolve_select_dict_node_no_scalar_match_is_skipped():
+    # FIX 2 regression: none of the dict's scalar values match any option ->
+    # honestly skipped with a reason naming the mapping, never a crash.
+    ssot = SSOT({"canned_answers": {"notice_period": {
+        "weeks": "2", "note": "flexible"}}})
+    fm = _fieldmap(_field("q_notice", "Notice period",
+                          type_="multi_value_single_select",
+                          options=["Immediate", "2 weeks"], role="combobox"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert "q_notice" not in resolved.values
+    reasons = dict(resolved.skipped)
+    assert "resolved to a mapping with no usable scalar" in reasons["q_notice"]
+    assert "canned_answers.notice_period" in reasons["q_notice"]
+
+
+def test_resolve_text_field_dict_node_is_skipped_never_typed_as_a_mapping():
+    # FIX 2 regression: a text (non-select) field whose path resolves to a
+    # dict must never be typed as a mapping; it is skipped instead.
+    ssot = SSOT({"canned_answers": {"notice_period": {"weeks": "2"}}})
+    fm = _fieldmap(_field("q_notice", "Notice period"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert "q_notice" not in resolved.values
+    reasons = dict(resolved.skipped)
+    assert "resolved to a mapping with no usable scalar" in reasons["q_notice"]
 
 
 def test_resolve_select_option_match(real_ssot_path):

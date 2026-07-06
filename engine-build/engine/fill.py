@@ -58,6 +58,8 @@ from engine.fieldmap import (
     MANUAL_ONLY,
     MISSING_STATUS,
     _DECLINE_SECTIONS,
+    _FIRST_NAME_KEYWORDS,
+    _LAST_NAME_KEYWORDS,
     _PORTAL_WIDGET_KEYS,
     FieldMap,
     Locator,
@@ -515,6 +517,13 @@ def _consent_ratified(ssot: SSOT) -> bool:
     return False
 
 
+# Full-name SSOT paths: when the fieldmap matcher falls back to one of these
+# (no discrete identity.first_name/identity.last_name in the SSOT), a first- or
+# last-name field must split the combined value rather than type it whole into
+# both fields.
+_FULL_NAME_PATHS = frozenset({"identity.name", "identity.full_name"})
+
+
 def _render_value(fld, path: str, ssot: SSOT):
     """Render one ANSWERABLE field to (value, None) or (None, skip_reason).
 
@@ -526,9 +535,56 @@ def _render_value(fld, path: str, ssot: SSOT):
     raw = ssot.get(path)
     if raw is MISSING:
         return None, f"answerable via {path} but no literal SSOT value"
+    if isinstance(raw, dict):
+        return _render_dict_value(fld, path, raw)
+    if path in _FULL_NAME_PATHS:
+        kind = _name_part_kind(fld.label)
+        if kind is not None:
+            return _split_full_name(kind, path, raw)
     if fld.type in _SELECT_TYPES:
         return _render_select(fld, raw, ssot)
     return _render_text(raw, path)
+
+
+def _render_dict_value(fld, path: str, raw: dict):
+    """A dotted path that resolved to an SSOT sub-tree (dict) rather than a
+    scalar. A select field may still be answerable from one of the dict's
+    scalar values matching an option; a text field (or a select with no
+    matching scalar) is honestly skipped rather than typing/matching the
+    mapping itself."""
+    if fld.type in _SELECT_TYPES:
+        for value in raw.values():
+            match = _match_option(fld.options, value)
+            if match is not None:
+                return match, None
+    return None, f"{path} resolved to a mapping with no usable scalar"
+
+
+def _name_part_kind(label: str) -> str | None:
+    """"first" / "last" / None, using the SAME label keywords the fieldmap
+    matchers use to identify a first- or last-name question."""
+    low = (label or "").lower()
+    if any(keyword in low for keyword in _FIRST_NAME_KEYWORDS):
+        return "first"
+    if any(keyword in low for keyword in _LAST_NAME_KEYWORDS):
+        return "last"
+    return None
+
+
+def _split_full_name(kind: str, path: str, raw):
+    """Split a combined-name SSOT value for a discrete first/last name field.
+
+    A single-token name gives the first-name field the whole token; the
+    last-name field has nothing left to split out, so it is honestly skipped
+    rather than typed as an empty string."""
+    tokens = str(raw).split()
+    if not tokens:
+        return None, _empty_value_skip(path)
+    if kind == "first":
+        return tokens[0], None
+    if len(tokens) == 1:
+        return None, f"{path} is a single-token name; no last name to split out"
+    return tokens[-1], None
 
 
 def _render_select(fld, raw, ssot: SSOT):
