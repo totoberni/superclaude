@@ -194,6 +194,13 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     for fv in upload_fields:
         _fill_upload(page, fv, uploads, extra_skips, filled_keys,
                     file_attached_keys)
+        # Let greenhouse's React render THIS attachment's confirmation before
+        # the next upload starts: two file uploads back-to-back saturate the
+        # React queue so NEITHER renders its filename in time (live-verified),
+        # but a settle between them lets each render independently. Only pays
+        # the cost when there is a further upload still to drive.
+        if fv is not upload_fields[-1]:
+            _settle_page(page)
 
     # (2) + (3) drive + readback-gate every resolved non-upload field.
     for fv in other_fields:
@@ -456,13 +463,13 @@ def _settle_page(page) -> None:
     waiter = getattr(page, "wait_for_load_state", None)
     if callable(waiter):
         try:
-            waiter("networkidle", timeout=8000)
+            waiter("networkidle", timeout=12000)
         except Exception:
             pass
     tw = getattr(page, "wait_for_timeout", None)
     if callable(tw):
         try:
-            tw(2000)
+            tw(8000)
         except Exception:
             pass
 
@@ -510,16 +517,24 @@ def _reconfirm_late_uploads(page, fieldmap: FieldMap, values: ResolvedValues,
     # second-chance re-poll runs. Best-effort, never raises.
     _settle_page(page)
 
-    required_keys = {f.key for f in fieldmap.required_fields()}
     text_sibling_of = {upload_key: text_key
                        for text_key, upload_key in _TEXT_UPLOAD_SIBLINGS.items()}
+    # Re-confirm EVERY attempted upload still missing from filled_keys, required
+    # AND optional: with two file uploads on one form (resume + cover_letter),
+    # BOTH greenhouse React renders lag past the inline poll, so the optional
+    # cover_letter needs this second chance too, not just the required resume.
+    # `poll_upload_confirmed` still gates on a real vendor-rendered confirmation,
+    # so an upload that never actually attached is never promoted here.
     for fv in values.fields:
-        if (not _is_upload(fv) or fv.key in filled_keys
-                or fv.key not in required_keys):
+        if not _is_upload(fv) or fv.key in filled_keys:
             continue
         control = _fill._locate_file_input(page, fv)
-        if control is None:
-            continue
+        # `control` can be None here precisely BECAUSE the upload SUCCEEDED:
+        # greenhouse unmounts the <input type=file> once it re-renders the
+        # widget to a filename + remove control, so a None control is NOT a
+        # reason to skip. `poll_upload_confirmed` falls back to a page-wide
+        # rendered-filename check (needs no control) and returns False only
+        # when the filename genuinely is not shown (a real non-attach).
         if not base.poll_upload_confirmed(page, control, str(fv.value)):
             continue
         filled_keys.add(fv.key)
