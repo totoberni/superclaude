@@ -151,6 +151,16 @@ _UPLOAD_BUTTON_RE = re.compile(r"attach|upload|browse", re.I)
 _PHOTO_LABEL_RE = re.compile(
     r"photo|picture|headshot|profile image|foto|immagine", re.I)
 
+# A cover-letter file-upload control: key or label names "cover letter" (also
+# matches the underscore/hyphen key form cover_letter, cover-letter-text).
+# There is no cover-letter DOCUMENT asset (the cover letter is drafted
+# per-posting in the manual flow), so a match here must never fall through to
+# the CV-selection branch -- see the live-run bug where a `cover_letter` file
+# field silently received `cv-ats.pdf`. Deliberately narrow (requires "cover"
+# immediately followed by "letter") so it never misfires on `resume` or
+# `avatar`/`photo` keys that merely share a stray token.
+_COVER_LETTER_RE = re.compile(r"cover[\s_-]*letter", re.I)
+
 # Posting-language tokens that select the photo CV (cv-atsi) as an informality
 # proxy when the form carries no separate candidate-photo field (criterion 2).
 _ITALIAN_LANGS = frozenset({"it", "it-it", "italian", "italiano"})
@@ -345,11 +355,14 @@ def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
     """Classify + render every field of `fieldmap` into concrete fill values.
 
     File-upload fields resolve to a whitelisted asset (owner override): a
-    candidate-photo field gets the profile photo, every other file field gets a
-    CV picked by the deterministic rule (cv-ats by default; cv-atsi ONLY when the
-    form has no photo field AND `posting_lang` is Italian). With no `assets`
-    (the pre-override default) file fields keep the old "file-upload" skip, so
-    the existing contract holds.
+    candidate-photo field gets the profile photo, a cover-letter file field
+    (key/label matching "cover letter", e.g. `cover_letter`) is SKIPPED rather
+    than filled -- there is no cover-letter document asset, so it must never
+    receive the CV -- and every OTHER file field gets a CV picked by the
+    deterministic rule (cv-ats by default; cv-atsi ONLY when the form has no
+    photo field AND `posting_lang` is Italian). With no `assets` (the
+    pre-override default) file fields keep the old "file-upload" skip, so the
+    existing contract holds.
 
     A checkbox (boolean) is resolved by its label intent (`_resolve_boolean`): a
     consent/confirmation box ticks True when the SSOT ratifies consent, a
@@ -416,6 +429,23 @@ def _form_has_photo_field(fieldmap: FieldMap) -> bool:
     return any(_is_upload_field(f) and _is_photo_field(f) for f in fieldmap.fields)
 
 
+def _is_cover_letter_field(fld) -> bool:
+    """A cover-letter file-upload field: `_COVER_LETTER_RE` matches the key or
+    the label. Only consulted for fields already classified as upload fields,
+    so a stray text match elsewhere can never trigger this."""
+    return bool(_COVER_LETTER_RE.search(fld.key or "")
+                or _COVER_LETTER_RE.search(fld.label or ""))
+
+
+# The cover-letter file field is left unfilled on purpose: there is no
+# cover-letter DOCUMENT asset in `FillAssets` (only the two CVs and the
+# photo), and the field is optional, so it is honestly skipped rather than
+# silently receiving the CV (the live-confirmed bug this fixes).
+_COVER_LETTER_SKIP_REASON = (
+    "optional cover-letter upload; no cover-letter document asset (cover "
+    "letter is drafted per-posting in the manual flow)")
+
+
 def _resolve_upload(fld, resolved: ResolvedValues, assets: FillAssets | None,
                     posting_lang: str, has_photo_field: bool) -> None:
     if assets is None:
@@ -425,6 +455,11 @@ def _resolve_upload(fld, resolved: ResolvedValues, assets: FillAssets | None,
     if _is_photo_field(fld):
         asset_name, path, reason = ("photo", assets.photo,
                                     "candidate photo/portrait field")
+    elif _is_cover_letter_field(fld):
+        # Never resolve a cover-letter file field to the CV asset: there is no
+        # cover-letter document to upload, and the field is optional.
+        resolved.skipped.append((fld.key, _COVER_LETTER_SKIP_REASON))
+        return
     else:
         asset_name, path, reason = _select_cv(assets, posting_lang, has_photo_field)
     if path is None:

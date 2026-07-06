@@ -17,6 +17,7 @@ from engine.fill import (
     FillReport,
     FillSafetyError,
     ResolvedValues,
+    _is_cover_letter_field,
     _is_photo_field,
     _locate_file_input,
     _resolve_photo,
@@ -770,6 +771,58 @@ def test_missing_asset_is_skipped(tmp_path, real_ssot_path):
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
     assert values.fields == []
     assert dict(values.skipped)["resume"] == "asset missing: cv-ats"
+
+
+def test_cover_letter_file_field_is_skipped_never_gets_the_cv(
+        tmp_path, real_ssot_path):
+    # Regression (live-confirmed on a real greenhouse run): a `resume` file
+    # input (required) alongside a `cover_letter` file input (optional) must
+    # NOT both resolve to the CV asset -- the cover letter field must be
+    # skipped, never filled with `cv-ats.pdf`.
+    ssot = SSOT.load(real_ssot_path)
+    fm = _fieldmap(
+        _field("resume", "Resume", type_="input_file", role="button",
+              required=True),
+        _field("cover_letter", "Cover Letter", type_="input_file",
+               role="button", required=False),
+    )
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot),
+                            assets=_make_assets(tmp_path))
+
+    by_key = {fv.key: fv for fv in values.fields}
+    assert "resume" in by_key
+    assert by_key["resume"].asset == "cv-ats"
+    assert Path(by_key["resume"].value).name == "cv-ats.pdf"
+
+    assert "cover_letter" not in by_key
+    skip_reason = dict(values.skipped)["cover_letter"]
+    assert "cv-ats" not in skip_reason
+    assert skip_reason == (
+        "optional cover-letter upload; no cover-letter document asset (cover "
+        "letter is drafted per-posting in the manual flow)")
+
+
+@pytest.mark.parametrize("key,label", [
+    ("cover_letter", "Cover Letter"),
+    ("cover_letter_upload", "Upload your cover letter"),
+    ("cover-letter", "cover-letter"),
+    ("x", "Cover Letter"),
+])
+def test_cover_letter_field_detection_matches_key_or_label(key, label):
+    assert _is_cover_letter_field(
+        _field(key, label, type_="input_file", role="button"))
+
+
+@pytest.mark.parametrize("key,label", [
+    ("resume", "Resume"),
+    ("resume", "Resume / CV"),
+    ("avatar", "Profile picture"),
+    ("headshot", "Headshot"),
+])
+def test_cover_letter_detection_does_not_misfire_on_resume_or_avatar(
+        key, label):
+    assert not _is_cover_letter_field(
+        _field(key, label, type_="input_file", role="button"))
 
 
 @pytest.mark.parametrize("label", [
