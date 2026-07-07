@@ -14,7 +14,7 @@ canonical dotted path, `engine.providers.lever.capture`):
                    `engine.browse`)
 
 Lever has NO `.resolve` submodule: `resolve_values` INHERITS greenhouse's
-hole-fix e structural CV/photo choice (a load-bearing safety rule with ONE home
+hole-fix and structural CV/photo choice (a load-bearing safety rule with ONE home
 in `greenhouse.resolve_values`), so `.fill.resolve_values` just delegates there
 rather than duplicating it -- exactly as ashby / workable do. The `.discover`
 adapter move lands in Stage 2e WITH the eager-light `_registry.py`, because the

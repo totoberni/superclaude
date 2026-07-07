@@ -12,7 +12,7 @@ canonical dotted path, `engine.providers.workable.capture`):
   - `.capture`  -- schema capture/parse (moved out of `engine.fieldmap`)
 
 Workable has NO `.resolve` submodule: `resolve_values` INHERITS greenhouse's
-hole-fix e structural CV/photo choice (a load-bearing safety rule with ONE home
+hole-fix and structural CV/photo choice (a load-bearing safety rule with ONE home
 in `greenhouse.resolve`), so `.fill.resolve_values` just delegates there rather
 than duplicating it. The `.discover` adapter move lands in Stage 2e WITH the
 eager-light `_registry.py`, because the CURRENT `registry.py` loads at
