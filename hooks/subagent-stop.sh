@@ -119,14 +119,22 @@ if [ -n "$agent_id" ] && [ -f "$rich_log" ]; then
   fi
 fi
 
+# m1 fix (wf-skills review round 1, log-forgery): strip TAB/NEWLINE from the
+# payload-derived fields before they enter the tab-delimited row, so a crafted
+# field cannot forge extra columns/rows in _spawns.log. Row format and field
+# order below are unchanged.
+agent_type_safe=$(printf '%s' "$agent_type" | tr -d '\t\n')
+agent_id_display_safe=$(printf '%s' "$agent_id_display" | tr -d '\t\n')
+transcript_path_safe=$(printf '%s' "$transcript_path" | tr -d '\t\n')
+
 printf '%s\t%s\t%s\tSTOP\t%s\t%s\t%s\t%s\n' \
   "$ts" \
   "" \
-  "$agent_type" \
-  "$agent_id_display" \
+  "$agent_type_safe" \
+  "$agent_id_display_safe" \
   "$duration_s" \
   "$outcome" \
-  "$transcript_path" \
+  "$transcript_path_safe" \
   >> "$log_file" 2>/dev/null || true
 
 exit 0

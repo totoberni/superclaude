@@ -43,7 +43,16 @@ case "$1" in
   latest-rpt)
     AGENT="$2"
     if [ -n "$AGENT" ]; then
-      WHERE_CLAUSE="kind='RPT' AND from_agent = '$AGENT'"
+      # M1 fix (wf-skills review round 1): reject before any SQL runs (allowlist),
+      # then defence-in-depth quote-double the survivor in case the allowlist ever
+      # regresses. Both layers, not one.
+      AGENT_RE='^[A-Za-z0-9_@.-]+$'
+      if ! [[ "$AGENT" =~ $AGENT_RE ]]; then
+        echo "broker-queries.sh: invalid agent name (allowed charset: A-Za-z0-9_@.-)" >&2
+        exit 2
+      fi
+      AGENT_ESC="${AGENT//\'/\'\'}"
+      WHERE_CLAUSE="kind='RPT' AND from_agent = '$AGENT_ESC'"
     else
       WHERE_CLAUSE="kind='RPT'"
     fi
@@ -91,6 +100,15 @@ case "$1" in
     ;;
   volume)
     SINCE="${2:-2026-04-01}"
+    # M1 fix (wf-skills review round 1): reject before any SQL runs (allowlist),
+    # then defence-in-depth quote-double the survivor in case the allowlist ever
+    # regresses. Both layers, not one.
+    SINCE_RE='^[A-Za-z0-9 :+._-]+$'
+    if ! [[ "$SINCE" =~ $SINCE_RE ]]; then
+      echo "broker-queries.sh: invalid since-arg (allowed charset: A-Za-z0-9 :+._-)" >&2
+      exit 2
+    fi
+    SINCE_ESC="${SINCE//\'/\'\'}"
     sqlite3 -header -column "$DB" "
       SELECT
         date(ts, 'unixepoch') AS day,
@@ -98,7 +116,7 @@ case "$1" in
         SUM(CASE WHEN kind='DIR' THEN 1 ELSE 0 END) AS dirs,
         SUM(CASE WHEN kind='RPT' THEN 1 ELSE 0 END) AS rpts
       FROM messages
-      WHERE ts >= strftime('%s', '$SINCE')
+      WHERE ts >= strftime('%s', '$SINCE_ESC')
       GROUP BY day
       ORDER BY day DESC;
     "

@@ -420,12 +420,15 @@ test_skills() {
     [ -d "$skill_dir" ] || continue
     local NAME
     NAME=$(basename "$skill_dir")
-    # Underscore-prefixed dirs are structural support libraries, NOT skills, and have
-    # no SKILL.md by design (e.g. _shared holds the 8 wf-skills rubric blocks; _archive
-    # holds retired skills). They are validated by their own dedicated checks (S6 covers
-    # _shared). Mirrors the _archive skip already used in test_agents/test_comms. Every
-    # REAL skill dir is still fully required to have a SKILL.md below.
-    case "$NAME" in _*) continue ;; esac
+    # Only _shared and _archive are structural support libraries, NOT skills, and
+    # have no SKILL.md by design (_shared holds the 8 wf-skills rubric blocks;
+    # _archive holds retired skills). They are validated by their own dedicated
+    # checks (S6 covers _shared). Mirrors the _archive skip already used in
+    # test_agents/test_comms. m2 fix (wf-skills review round 1): narrowed from
+    # skipping every "_*" dir to exactly these two names, so a future real
+    # skill dir that happens to start with "_" is still required to have a
+    # SKILL.md below, same as any other skill dir.
+    case "$NAME" in _shared|_archive) continue ;; esac
     SKILL_COUNT=$((SKILL_COUNT + 1))
     if [ ! -f "$skill_dir/SKILL.md" ]; then
       ALL_EXIST=false
@@ -524,6 +527,10 @@ test_skills() {
   # exist, each must declare a "Consumed by:" provenance line, and none may contain an
   # em-dash (U+2014) or en-dash (U+2013) byte (writing-style rule). Real failing paths:
   # a deleted block, a block missing its Consumed-by pointer, or a stray dash byte.
+  # m2 fix (wf-skills review round 1): the Consumed-by + dash-clean checks below now
+  # walk every actual _shared/*.md on disk, not just the 8 named blocks, so a 9th or
+  # unlisted block cannot escape validation. The 8 required blocks are still asserted
+  # present BY NAME first (that check is unchanged).
   local SHARED_DIR="$SKILL_DIR/_shared"
   local SHARED_BLOCKS="verdict-schema dispatch-contract helper-prompt retro-evidence diff-target discovery-protocol search-budget memory-distill"
   local SHARED_OK=true sb sbf
@@ -532,15 +539,18 @@ test_skills() {
     if [ ! -f "$sbf" ]; then
       SHARED_OK=false
       fail "S6 _shared integrity" "$sb.md: missing"
-      continue
     fi
+  done
+  for sbf in "$SHARED_DIR"/*.md; do
+    [ -f "$sbf" ] || continue
+    sb=$(basename "$sbf" .md)
     grep -q 'Consumed by:' "$sbf" 2>/dev/null || { SHARED_OK=false; fail "S6 _shared integrity" "$sb.md: no 'Consumed by:' line"; }
     if grep -qP '\xe2\x80[\x93\x94]' "$sbf" 2>/dev/null; then
       SHARED_OK=false
       fail "S6 _shared integrity" "$sb.md: contains em-dash/en-dash byte"
     fi
   done
-  [ "$SHARED_OK" = true ] && pass "S6 _shared integrity (8 blocks exist, Consumed-by present, dash-clean)"
+  [ "$SHARED_OK" = true ] && pass "S6 _shared integrity (8 required blocks present; all _shared/*.md Consumed-by present, dash-clean)"
 
   # S7: wf-skills new loop-driver skills (W1.4/W1.5). converge + review-dispatch must
   # exist with frontmatter carrying name/description/user-invocable, must NOT carry a
@@ -1043,6 +1053,27 @@ test_wfscripts() {
     pass "WF3 decontaminate.sh (forbidden-token file exit 1, clean file exit 0)"
   else
     fail "WF3 decontaminate.sh" "dirty=$WF3_DIRTY (expect 1), clean=$WF3_CLEAN (expect 0)"
+  fi
+
+  # WF4: broker-queries.sh input-validation gate (M1 fix, wf-skills review round 1).
+  # A crafted latest-rpt AGENT / volume SINCE arg shaped like a SQL-injection payload
+  # (quote + semicolon) must be REJECTED before any sqlite3 invocation happens at all.
+  # Hermetic: HOME points at a throwaway dir with a stub (empty) broker.db, so even a
+  # validation regression could only ever touch the stub, never the real
+  # ~/.claude/comms/.broker.db. Exit 2 is the script's dedicated validation-reject
+  # code, distinct from sqlite3's own error exit (1) or success (0); this genuinely
+  # fails if the M1 allowlist regresses, it does not just check for any nonzero code.
+  local WF4_HOME="$WF_TMP/bh4"
+  mkdir -p "$WF4_HOME/.claude/comms"
+  : > "$WF4_HOME/.claude/comms/.broker.db"
+  HOME="$WF4_HOME" bash "$SCRIPT_DIR/comms/broker-queries.sh" latest-rpt "x'; DROP TABLE messages;--" >/dev/null 2>&1
+  local WF4_RPT_RC=$?
+  HOME="$WF4_HOME" bash "$SCRIPT_DIR/comms/broker-queries.sh" volume "2026-01-01'; DELETE FROM messages;--" >/dev/null 2>&1
+  local WF4_VOL_RC=$?
+  if [ "$WF4_RPT_RC" -eq 2 ] && [ "$WF4_VOL_RC" -eq 2 ]; then
+    pass "WF4 broker-queries.sh (SQLi-shaped args rejected pre-SQL, exit 2)"
+  else
+    fail "WF4 broker-queries.sh" "latest-rpt exit $WF4_RPT_RC, volume exit $WF4_VOL_RC (expected 2, 2)"
   fi
 
   rm -rf "$WF_TMP" 2>/dev/null
