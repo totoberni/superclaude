@@ -196,10 +196,11 @@ class FieldMap:
         # itself now lives in engine.kernel.resolve.coverage (vendor_resolver
         # injection seam, spec 3.4), but THIS method must keep delegating to
         # the engine.fieldmap.coverage SHIM because that shim default-injects
-        # the Greenhouse widget resolver -- the live method callers
-        # (run.py:301,621; test_browse) rely on today's Greenhouse-widget
-        # classification. Stage 3 moves those callers onto the kernel function
-        # with an explicitly registry-built vendor_resolver; then this seam and
+        # the Greenhouse widget resolver -- the remaining live method callers
+        # (test_browse; run.py's two sites were moved onto the kernel function
+        # with registry-built injection in Stage 2e-2) rely on today's
+        # Greenhouse-widget classification. Stage 3 moves the remaining callers
+        # onto the kernel function likewise; then this seam and
         # the `_KNOWN_UPWARD_EXCEPTIONS` allowlist entry in
         # tests/kernel/test_kernel_invariants.py are removed together. An eager
         # top-level import here would cycle back through fieldmap's own shim
