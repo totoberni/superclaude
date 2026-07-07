@@ -29,7 +29,7 @@ from typing import Callable
 
 import yaml
 
-from engine.discover import SourceAdapter
+from engine.kernel.discover_base import SourceAdapter
 from engine.kernel.capture_toolkit import UA  # noqa: F401 (moved to kernel, W5.1 stage 5)
 from engine.providers import registry
 from engine.store import Store

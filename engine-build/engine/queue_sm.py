@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from engine.discover import Posting
+from engine.kernel.contracts import Posting
 from engine.match import ScoreBreakdown
 from engine.store import Store
 

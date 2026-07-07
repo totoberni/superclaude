@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from engine.discover import Posting
+from engine.kernel.contracts import Posting
 from engine.ssot import MISSING, SSOT
 
 

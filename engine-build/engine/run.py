@@ -38,13 +38,8 @@ from engine.config import Config, load_config
 from engine.discover import run_discovery
 from engine.draft import ClaudeCliDrafter, Drafter, select_language
 from engine.fetch import HttpFetcher, Source, adapter_for, fetch_all, load_sources
-from engine.fieldmap import (
-    ANSWERABLE,
-    MANUAL_ONLY,
-    MISSING_STATUS,
-    FieldMap,
-)
-from engine.kernel.resolve import coverage
+from engine.kernel.contracts import FieldMap
+from engine.kernel.resolve import ANSWERABLE, MANUAL_ONLY, MISSING_STATUS, coverage
 from engine.match import Scorer
 from engine.notify import (
     FakeTransport,
