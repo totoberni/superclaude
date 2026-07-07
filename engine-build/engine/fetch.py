@@ -30,10 +30,9 @@ from typing import Callable
 import yaml
 
 from engine.discover import SourceAdapter
+from engine.kernel.capture_toolkit import UA  # noqa: F401 (moved to kernel, W5.1 stage 5)
 from engine.providers import registry
 from engine.store import Store
-
-UA = "abe-automations-jobhunt/0.1 (personal job-search; polite reader)"
 
 # _VENDORS / _ADAPTERS are thin projections of the provider registry (the SSOT for
 # per-vendor wiring). Kept as module-level names for import-compat: other code and
