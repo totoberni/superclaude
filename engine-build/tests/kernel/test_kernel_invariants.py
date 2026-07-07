@@ -216,20 +216,23 @@ _FORBIDDEN_PREFIXES = (
 )
 
 # Documented, intentional NON-LOAD-TIME upward references, keyed by
-# (kernel_file_basename, imported_module). Both are ``engine.fieldmap`` and both
-# are proven load-time-clean by ``test_kernel_no_loadtime_upward_imports``:
-#   * protocol.py  -- under ``if TYPE_CHECKING:`` (only the `FieldMap` annotation
-#                     name); NEVER executes at runtime.
-#   * contracts.py -- a CALL-TIME import inside ``FieldMap.coverage()``; the
-#                     deliberate anti-cycle seam (an eager import would recreate
-#                     the fetch -> providers -> fieldmap -> fetch cycle). The
-#                     kernel module still imports standalone.
+# (kernel_file_basename, imported_module), proven load-time-clean by
+# ``test_kernel_no_loadtime_upward_imports``:
+#   * contracts.py -- a TRANSITIONAL CALL-TIME import inside
+#                     ``FieldMap.coverage()``; the deliberate anti-cycle seam (an
+#                     eager import would recreate the fetch -> providers ->
+#                     fieldmap -> fetch cycle). The kernel module still imports
+#                     standalone. Dies in W5.1 Stage 2 when the generic
+#                     ``coverage()`` classifier moves to ``engine.kernel.resolve``
+#                     -- remove the entry then.
+# (protocol.py's TYPE_CHECKING FieldMap import was repointed to
+# ``engine.kernel.contracts`` during Stage-0 review remediation, so it no longer
+# needs an entry here.)
 # This allowlist is SUBSET-checked: entries may be REMOVED (a refactor that drops
 # a seam is an improvement and must not break the suite) but adding a new entry
 # requires the same kernel-escalation review as a guard change -- a new forbidden
 # import is a layering regression, not a convenience.
 _KNOWN_UPWARD_EXCEPTIONS = frozenset({
-    ("protocol.py", "engine.fieldmap"),
     ("contracts.py", "engine.fieldmap"),
 })
 

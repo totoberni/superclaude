@@ -51,16 +51,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    # Deferred: engine.providers.__init__ imports this module eagerly (the
-    # daily poller's import path, per registry.py's own lazy-reference
-    # invariant), and engine.fieldmap itself imports engine.fetch, which
-    # imports engine.providers.registry -- a real top-level `from engine.
-    # fieldmap import FieldMap` here would recreate the exact
-    # fetch -> providers -> fieldmap -> fetch cycle registry.py's docstring
-    # warns about. `from __future__ import annotations` already makes every
-    # annotation in this file a lazy string, so this import only serves
-    # type-checkers, never executes at runtime.
-    from engine.fieldmap import FieldMap
+    # FieldMap now lives in the kernel (W5.1 stage 0), so this annotation-only
+    # import is kernel-internal -- the pre-move fetch -> providers -> fieldmap
+    # -> fetch cycle rationale for deferring it no longer applies to this path.
+    # It stays TYPE_CHECKING-gated purely to keep protocol.py's load graph
+    # minimal (`from __future__ import annotations` makes every annotation a
+    # lazy string; nothing here needs the class at runtime).
+    from engine.kernel.contracts import FieldMap
 
 
 @runtime_checkable

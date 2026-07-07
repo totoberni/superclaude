@@ -1,9 +1,13 @@
 """Kernel data contracts (W5.1 stage 0).
 
 The dataclasses/enums shared by every vendor plugin and by the kernel's own
-fill/fieldmap/discover modules. This is the base of the kernel: it imports
-ONLY the standard library, never `engine.*`, so any provider or kernel module
-can depend on it without pulling in classification/automation logic.
+fill/fieldmap/discover modules. This is the base of the kernel: at LOAD time it
+imports only the standard library, so any provider or kernel module can depend
+on it without pulling in classification/automation logic. One documented,
+transitional CALL-TIME seam remains (`FieldMap.coverage` delegates to
+`engine.fieldmap.coverage`; see that method) until W5.1 Stage 2 moves the
+generic `coverage()` classifier into `engine.kernel.resolve`, after which this
+module references nothing outside the kernel.
 
 Moved verbatim from `engine.fieldmap` / `engine.fill` / `engine.discover`
 (W5.1 stage 0); each origin module now re-exports these names via a shim
@@ -186,12 +190,16 @@ class FieldMap:
         return [f for f in self.fields if f.required]
 
     def coverage(self, ssot: SSOT, profile: dict) -> "CoverageReport":
-        # Call-time import (not moved eagerly): `coverage()` is the deterministic
-        # classification FUNCTION, real business logic that stays in
-        # engine.fieldmap (not a data contract) -- an eager top-level import
-        # here would cycle back through fieldmap's own shim import of this
-        # module. Mirrors the provider call-time-access pattern already used
-        # for engine.fill primitives (see engine/providers/base.py).
+        # TRANSITIONAL call-time seam (dies in W5.1 Stage 2): `coverage()` is
+        # the deterministic classification FUNCTION, real business logic that
+        # stays in engine.fieldmap until Stage 2 moves it to
+        # engine.kernel.resolve (with the vendor_resolver injection param), at
+        # which point this import becomes kernel-internal and the
+        # `_KNOWN_UPWARD_EXCEPTIONS` allowlist entry in
+        # tests/kernel/test_kernel_invariants.py is removed. An eager top-level
+        # import here would cycle back through fieldmap's own shim import of
+        # this module. Mirrors the provider call-time-access pattern already
+        # used for engine.fill primitives (see engine/providers/base.py).
         from engine.fieldmap import coverage as _coverage
         return _coverage(self, ssot, profile)
 
