@@ -31,7 +31,7 @@ it earns its own module rather than reusing one wholesale:
    lands in `required_unfilled` -> NOT_COMPLETE, never a silent skip and never a
    reckless auto-click that could trip Turnstile mid-form.
 
-INHERITS FROM greenhouse: `resolve_values` -- the hole-fix e structural CV/photo
+INHERITS FROM greenhouse: `resolve_values` -- the hole-fix and structural CV/photo
 choice (an image/photo upload field present on the FORM -> the ATSI CV variant +
 photo; absent -> the plain ATS CV). Workable's `avatar` field is exactly such a
 photo field, so a Workable form that exposes it takes the ATSI variant. The rule
@@ -104,7 +104,7 @@ def resolve_values(fieldmap: FieldMap, ssot, profile: dict, *,
                    assets: FillAssets | None = None,
                    posting_lang: str = "en") -> ResolvedValues:
     """Render every field to a concrete fill value, INHERITING greenhouse's
-    hole-fix e structural CV/photo choice verbatim.
+    hole-fix and structural CV/photo choice verbatim.
 
     Delegates to `greenhouse.resolve_values` (which wraps `fill.resolve_values`
     and applies the photo-field-present -> ATSI+photo override). The rule keys

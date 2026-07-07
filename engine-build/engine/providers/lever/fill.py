@@ -43,7 +43,7 @@ completeness SEMANTICS differ, for the two reasons Lever is a distinct reference
    skip and never a reckless auto-click. Native `<select>` is unaffected:
    `select_option` is not a click and hCaptcha does not intercept it.
 
-INHERITS FROM greenhouse: `resolve_values` -- the hole-fix e structural CV/photo
+INHERITS FROM greenhouse: `resolve_values` -- the hole-fix and structural CV/photo
 choice (an image/photo upload field present on the FORM -> the ATSI CV variant +
 photo; absent -> the plain ATS CV). That rule is vendor-agnostic (it is keyed on
 `fill._form_has_photo_field`, a form-structure signal, never posting text, per
@@ -118,7 +118,7 @@ def resolve_values(fieldmap: FieldMap, ssot, profile: dict, *,
                    assets: FillAssets | None = None,
                    posting_lang: str = "en") -> ResolvedValues:
     """Render every field to a concrete fill value, INHERITING greenhouse's
-    hole-fix e structural CV/photo choice verbatim.
+    hole-fix and structural CV/photo choice verbatim.
 
     Delegates to `greenhouse.resolve_values` (which wraps `fill.resolve_values`
     and applies the photo-field-present -> ATSI+photo override). The rule keys

@@ -118,7 +118,7 @@ def apply_url(slug: str, job_id: str) -> str:
 def resolve_values(fieldmap: FieldMap, ssot, profile: dict, *,
                    assets: FillAssets | None = None,
                    posting_lang: str = "en") -> ResolvedValues:
-    """`fill.resolve_values` plus the hole-fix e structural CV/photo override.
+    """`fill.resolve_values` plus the hole-fix and structural CV/photo override.
 
     A field is judged an image/photo upload the same way `fill.
     _form_has_photo_field` already judges it: an upload-type field whose

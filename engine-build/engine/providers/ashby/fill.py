@@ -62,7 +62,7 @@ must treat a re-fill of an already-applied Ashby posting as a NO-OP so a second
 run cannot ride Ashby's silent merge into a duplicate touch. Recorded here as a
 COMMENT so the seam is not lost; there is no submit code to attach it to.
 
-INHERITS FROM greenhouse: `resolve_values` -- the hole-fix e structural CV/photo
+INHERITS FROM greenhouse: `resolve_values` -- the hole-fix and structural CV/photo
 choice (a photo/image upload field present on the FORM -> the ATSI CV variant +
 photo; absent -> the plain ATS CV). That rule keys purely on the form's own
 upload-field shape (`fill._form_has_photo_field`, never posting text, per
@@ -140,7 +140,7 @@ def resolve_values(fieldmap: FieldMap, ssot, profile: dict, *,
                    assets: FillAssets | None = None,
                    posting_lang: str = "en") -> ResolvedValues:
     """Render every field to a concrete fill value, INHERITING greenhouse's
-    hole-fix e structural CV/photo choice verbatim.
+    hole-fix and structural CV/photo choice verbatim.
 
     Delegates to `greenhouse.resolve_values` (which wraps `fill.resolve_values`
     and applies the photo-field-present -> ATSI+photo override). The rule keys
