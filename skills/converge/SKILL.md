@@ -13,6 +13,8 @@ Generic convergence-loop driver: iterate produce, then review, until a fresh aud
 
 **Authority**: meta + orch only. Workers (`w-*`) cannot spawn reviewers, so invoking converge from a worker is a no-op error. The conductor (meta or orch) owns the loop, quotes verdicts, and maintains the ledger.
 
+**Conductor context (tool convention for bound skills)**: loop orchestration (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the CONDUCTOR's context, which holds Agent + Skill. A skill bound into a converge loop declares in its own `allowed-tools` only what its SINGLE invocation needs; its loop-integration section is documented as conductor-driven, not self-driven. A skill that forks to a worker (`agent:` / `context: fork`) is therefore a round REVIEWER or producer, never the loop driver, and never seals itself: the terminal SEAL always comes from a fresh auditor of a DIFFERENT identity than any round reviewer (verdict-schema.md, No pre-approval + Provenance).
+
 ## Iteration protocol (one round)
 
 Each round runs five steps in order.
