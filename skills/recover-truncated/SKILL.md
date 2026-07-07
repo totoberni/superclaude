@@ -25,39 +25,46 @@ Handles the recovery flow for the `WORKER-TRUNCATED` failure tag (added in V-001
 ```
 
 Arguments parsed from `$ARGUMENTS`:
-- Positional: description fragment from the truncated spawn (matched against `~/.claude/comms/_spawns.log` column 4, case-insensitive substring).
-- `--recent`: ignore positional fragment, pick the most recent SPAWN row whose `(parent, subagent_type, description)` triple lacks a matching EXIT row.
+- Positional: description fragment from the truncated spawn (used for reference when filling the hand-off template in Step 4; the caller typically already knows this from their own dispatch).
+- `--recent`: locate the most recently modified artifact file (subagent transcript or task output) in the current session's `subagents/` or `tasks/` directory, rather than an exact `agentId`/`task_id`.
 - `--writes`: switch the recovery worker shape from read-only synthesis (w-explorer / haiku / low) to file-writing recovery (w-implementer / sonnet / medium). Default is read-only.
 
 ---
 
 ## Behavior
 
-### Step 1 — Locate the truncated spawn
+### Step 1: Locate the truncated worker's output and extract it
 
-Read `~/.claude/comms/_spawns.log` (TSV: `timestamp \t parent \t subagent_type \t description`).
+Claude Code writes each spawn's output to disk under the current session directory. Two patterns, depending on how the worker was dispatched:
+
+```
+# Foreground subagent (the common /recover-truncated case): full transcript.
+~/.claude/projects/<project-slug>/<session-id>/subagents/agent-<agentId>.jsonl
+
+# Background task (dispatched with run_in_background): final-result file,
+# the `output_file` path returned to the caller at dispatch time.
+~/.claude/projects/<project-slug>/<session-id>/tasks/<task-id>.output
+```
+
+If you already know the `agentId` or `task_id` (visible in your own conversation, from the spawn that just got truncated), address that file directly; this is the reliable path. Otherwise, resolve `--recent` / `<description-fragment>` against the candidates in the current session's directories:
 
 ```bash
-LOG="$HOME/.claude/comms/_spawns.log"
-[ -f "$LOG" ] || { echo "ERROR: spawn log missing at $LOG"; exit 1; }
+SESSION_DIR="$HOME/.claude/projects/<project-slug>/<session-id>"
 
-# Match by fragment (default) or pick most-recent-without-EXIT (--recent)
-if [ "${ARGS_RECENT:-false}" = "true" ]; then
-  # Most recent non-EXIT row, in reverse order
-  TARGET=$(tac "$LOG" | awk -F'\t' '$4 != "" && $4 != "EXIT" { print; exit }')
-else
-  FRAGMENT="$1"
-  # Case-insensitive substring match in description column, take MOST RECENT
-  TARGET=$(grep -iF -- "$FRAGMENT" "$LOG" | grep -v -P '\tEXIT\t' | tail -1)
-fi
-
-[ -z "$TARGET" ] && { echo "ERROR: no matching SPAWN entry in $LOG"; exit 1; }
-
-PARENT=$(echo "$TARGET" | cut -f2)
-SUBAGENT=$(echo "$TARGET" | cut -f3)
-DESCRIPTION=$(echo "$TARGET" | cut -f4)
-TS=$(echo "$TARGET" | cut -f1)
+# --recent (also the default when no fragment is given): most recently
+# modified artifact in the relevant directory.
+AGENT_FILE=$(ls -t "$SESSION_DIR"/subagents/agent-*.jsonl 2>/dev/null | head -1)
+TASK_FILE=$(ls -t "$SESSION_DIR"/tasks/*.output 2>/dev/null | head -1)
 ```
+
+Then extract a compact, LLM-safe summary. Never paste raw JSONL into a prompt; both modes below hard-cap their output:
+
+```bash
+[ -n "$AGENT_FILE" ] && ~/.claude/scripts/swarm/recover-worker.sh agent "$AGENT_FILE"
+[ -n "$TASK_FILE" ]  && ~/.claude/scripts/swarm/recover-worker.sh task "$TASK_FILE"
+```
+
+The printed result (last assistant text or final result, tool_use count, touched-file list) is the `<PRIOR-WORKER-OUTPUT>` content for Step 4. Combine it with what you already know about the spawn (parent, subagent_type, description, timestamp) to fill in that template.
 
 ### Step 2 — Verify state via git
 
