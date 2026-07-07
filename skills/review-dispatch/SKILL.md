@@ -45,6 +45,7 @@ Each dispatch carries the four-part contract (`_shared/dispatch-contract.md`) pl
 4. **Numeric budget** (`_shared/dispatch-contract.md` §5): state a review band of 10-20 calls; expected above ~20-24 overrides `model: opus` regardless of worker class (sonnet truncates destructively past ~24; opus truncation is report-only). Hard architectural cap ~40 calls / ~250k tokens; hitting the ceiling means checkpoint + `STATUS: PARTIAL`, never a silent overrun.
 5. **Named-skills-only boundary**: name the allowed rubric skill explicitly. Every other visible skill (CLI built-ins, plugin skills, owner-opt-in commands) is off-limits to the reviewer.
 6. **maxTurns backstop**: note the reviewer agent's `maxTurns` as the structural ceiling behind the numeric budget, and name the checkpoint path so load-bearing findings hit disk before the final message.
+7. **No pre-approval**: the dispatch instructs the reviewer to re-examine the CURRENT state and cite fresh file:line evidence THIS round; never pass a prior clean verdict or the producer's self-assessment; a SEAL binds to a named revision and any later change voids it (`verdict-schema.md`, No pre-approval).
 
 Evidence bar (verdict-schema): findings without a `file:line` citation (or DOI/arxiv id, re-run expected-vs-actual, named principle + clause) are dropped before counting. A zero-finding review is valid.
 

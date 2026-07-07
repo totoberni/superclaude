@@ -19,7 +19,7 @@ Each round runs five steps in order.
 
 1. **PRODUCE / REVISE**: delegate the build (round 1) or the punch-list fixes (later rounds) to a producer worker per `dispatch-contract.md`. The model split applies: expected <=20 tool calls keeps sonnet-class defaults; beyond ~20-24 the dispatch overrides to `model: opus` regardless of worker class (`dispatch-contract.md` section 5). Producers never self-certify.
 2. **PERSIST**: the producer writes the artifact to disk, then the conductor appends a ledger entry (round, delta, open-findings count) before any review runs. Checkpoint-first: load-bearing content lives on disk, not in the final message.
-3. **REVIEW**: resolve the reviewer through `/review-dispatch` (artifact class to w- type + rubric + effort). Round 1 uses a FRESH reviewer; middle rounds reuse a persistent delta-scoped reviewer (via SendMessage where available, else persistent-via-respawn rehydrated from the ledger); the final seal audit is always a FRESH holistic auditor. Every reviewer receives artifact + diff + rubric ONLY, and emits a VERDICT line (the seal auditor emits SEAL).
+3. **REVIEW**: resolve the reviewer through `/review-dispatch` (artifact class to w- type + rubric + effort). Round 1 uses a FRESH reviewer; middle rounds reuse a delta-scoped reviewer, rehydrated from the ledger (persistent-via-respawn is the DEFAULT: SendMessage continuation is gated behind the agent-teams experiment and not assumed available); the final seal audit is always a FRESH holistic auditor examining the COMPLETE current state. Every reviewer receives artifact + diff + rubric ONLY, re-examines the CURRENT state and cites fresh evidence THIS round, and emits a VERDICT line (the seal auditor emits SEAL). No pre-approval: a reviewer never approves a round on the strength of a prior round, and any change after a SEAL voids it (verdict-schema.md, No pre-approval).
 4. **REPORT**: the conductor quotes the reviewer's VERDICT line verbatim into the transcript and appends it to the ledger. Only reviewers author tokens; the conductor relays them.
 5. **TRIAGE**: accept or contest each finding with evidence (file:line, re-run expected-vs-actual, or a named principle and clause). Accepted findings become the next round's punch list; contested ones are logged with a rebuttal.
 
@@ -33,7 +33,7 @@ e. **Two-token protocol.** The reviewer emits a per-round VERDICT line; terminat
    - `VERDICT: REWORK|CLEAN blocking=N major=N minor=N round=K`
    - `SEAL: ACCEPTED|REJECTED blocking=N major=N minor=N nits=N`
 f. **Dual-condition exit.** A clean `SEAL: ACCEPTED` terminates the loop only together with the producer's separate completion statement (its `STATUS: DONE`), two independent signals.
-g. **Nit policy.** After round 1, NEW minor findings are logged but do not gate convergence, unless `--strict`. Minor counts still appear in every token line.
+g. **Nit policy / bar levels.** The seal bar has three tiers (verdict-schema.md, Bar levels): default (`blocking=0 major=0`; minors + nits logged, do not gate after round 1), gate (`--stakes gate` or a gate campaign: `blocking=0 major=0 minor=0 nits=0`), strict (`--strict`: the gate bar AND two consecutive clean SEALs). Minor counts always appear in every token line.
 h. **Caps.** Default `--rounds 4`. Escalate if total findings do not decrease for 2 consecutive rounds (stall or oscillation). `--panel` (2-3 diverse-tier judges, at least one opus, majority vote) is reserved for irreversible gates (DEC-R5).
 
 ## Engine bindings (B1-B5)
@@ -57,10 +57,10 @@ h. **Caps.** Default `--rounds 4`. Escalate if total findings do not decrease fo
 
 ## Goal-string emission (DEC-R2)
 
-Setup ENDS by printing a ready-to-paste `/goal` block templated for the chosen binding, then STOPS. The external judge stays independent; converge NEVER arms `/goal` itself. The emitted goal requires all of:
+Setup ENDS by printing a ready-to-paste `/goal` block in the canonical shape (verdict-schema.md, Canonical emitted /goal block), specialising the bracketed slots for the chosen binding, then STOPS. The external judge stays independent; converge NEVER arms `/goal` itself. `/goal` takes a natural-language CONDITION; never invent a `/goal seal ...` subcommand. The emitted goal requires all of:
 
-1. `SEAL: ACCEPTED` quoted verbatim by the conductor from a fresh auditor return.
-2. The producer's separate completion statement.
+1. `SEAL: ACCEPTED` quoted verbatim by the conductor from a FRESH auditor return, stated to be the MOST RECENT such line AND to post-date the last change to the artefact (no pre-approval; a stale SEAL never fires the goal).
+2. The producer's separate completion statement (a signal, not an approval).
 3. The round cap (default 4).
 4. The non-decreasing-findings escape clause: if total findings do not fall for 2 consecutive rounds, emit `ESCALATE` rather than looping further.
 
