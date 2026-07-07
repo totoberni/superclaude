@@ -5,9 +5,11 @@
 #
 # NON-BLOCKING — never prevents dispatch, never exits non-zero. Soft advisory only.
 #
-# Source: V-001 retro lesson #1 (model selection ≠ thinking depth) + W-7 best practice
-# that subagent thinking is NOT inherited from parent (rules/13-worker-first-mandate.md
-# § Critical Implementation Note).
+# Source: V-001 retro lesson #1 (model selection is distinct from reasoning depth).
+# Corrected doctrine (2026-07-07): thinking IS inherited from the session; a subagent's
+# depth is set via its frontmatter `effort:` or a model/effort override at dispatch, NOT
+# a prompt keyword (keywords are no-ops on adaptive-thinking models). The advisory below
+# reflects this. See rules/13-worker-first-mandate.md § Critical Implementation Note.
 #
 # Slot 14 — between 10-nudge and 15-baseline-stash; pre-tool-use phase.
 
@@ -105,7 +107,7 @@ mod_thinking_nudge() {
   [ -f "$NUDGE_MARKER" ] && return 0
   touch "$NUDGE_MARKER" 2>/dev/null || true
 
-  emit_context "Matrix prescribes \`${PRESCRIBED}\` for ${SUBAGENT} on ${TASK_CLASS} tasks. Consider embedding the keyword in the spawn prompt (subagent thinking is NOT inherited from parent — see rules/13-worker-first-mandate.md § Critical Implementation Note). This is advisory only — proceeding with dispatch as-is."
+  emit_context "${SUBAGENT} on ${TASK_CLASS} tasks benefits from elevated reasoning depth, but prompt thinking keywords are no-ops on adaptive-thinking models (Opus 4.6/4.7, Sonnet 4.6, Fable). Set depth via the target agent's frontmatter \`effort:\` (low/medium/high/xhigh/max), or override model/effort at dispatch; do NOT embed a prompt keyword. See rules/13-worker-first-mandate.md section Critical Implementation Note. Advisory only; proceeding with dispatch as-is."
 
   return 0
 }

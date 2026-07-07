@@ -48,13 +48,13 @@ This is the canonical reference. All other files cross-reference here.
 
 ### Critical Implementation Note
 
-Subagent thinking is **NOT inherited** from parent. Keywords (`think`, `think hard`, `think harder`, `megathink`, `ultrathink`) and `/effort` setting do not propagate to spawned subagents.
+Thinking configuration **IS inherited** from the session (v2.1.198+); there is no per-subagent thinking toggle. The depth control is the **effort chain** (highest precedence first): `CLAUDE_CODE_EFFORT_LEVEL` env var > agent frontmatter `effort:` (one of `low`/`medium`/`high`/`xhigh`/`max`) > inherited session effort.
 
-To get thinking depth in a worker:
-- (a) **Embed the keyword in the spawn prompt text** the worker reads, OR
-- (b) **Set the default in the worker's `agent.md`** instruction text (encourages the desired thinking depth)
+Prompt-embedded `think` / `think hard` / `think harder` / `megathink` are **dead tokens on adaptive-thinking models** (Opus 4.6/4.7, Sonnet 4.6, Fable); they change nothing. Only `ultrathink` survives, and only as soft in-context guidance, not an effort change.
 
-When dispatching parallel batches with mixed thinking depth, embed differently per worker.
+To get depth in a reviewer or worker, set `effort:` in its agent frontmatter (example: `w-hostile-reviewer` ships `effort: max`) or override model/effort at dispatch. Do NOT rely on a prompt keyword.
+
+This supersedes the prior "embed the keyword in the spawn prompt" guidance, which assumed thinking was not inherited; that instruction is retired.
 
 ### Per-Worker Defaults
 
@@ -79,6 +79,17 @@ When dispatching parallel batches with mixed thinking depth, embed differently p
 | `w-committer` | haiku | low | none | History rewrite ⇒ sonnet |
 
 Aggregate distribution if fully adopted: ~5% haiku / ~70% sonnet / ~25% opus.
+
+**"Default Thinking" column superseded**: on adaptive-thinking models (Opus 4.6/4.7, Sonnet 4.6, Fable) the keyword in that column is a no-op; the live depth control is `effort:` in agent frontmatter (see § Critical Implementation Note). The column is retained only as historical reference and for the legacy orthogonal-thinking models in § Effort × Thinking Orthogonality.
+
+### Worker model split (tool-call budget)
+
+Model choice keys on expected tool-call count, not just worker class:
+- **<=20 calls**: keep the sonnet-class defaults in the table above.
+- **Beyond ~20-24 calls**: override `model: opus` regardless of worker class. Sonnet truncates **destructively** past ~24 calls (half-applied edits land on disk); opus truncation is **report-only** (the work completes underneath, only the closing message is cut).
+- **Hard architectural cap ~40 calls / ~250k tokens for all models**: split the task rather than exceed it.
+
+Evidence: concurrent-meta experiment 2026-07-07 (memory `worker-model-sonnet-truncation-opus-experiment`).
 
 ### Effort Level Reference
 

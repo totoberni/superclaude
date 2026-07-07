@@ -28,6 +28,8 @@ After every worker returns:
 3. `git diff --stat` (confirm only expected files changed)
 4. Watch for: weakened assertions, added skips, scope violations
 5. If wrong: fix yourself OR re-delegate with clearer instructions (NEVER redo their work — escalate or re-delegate)
+6. Findings and claims require `file:line` evidence; never trust worker self-reports. Verify each claim against the cited lines before acting on it.
+7. On worker **FAILURE**, resume or re-dispatch rather than redo the work yourself (v2.1.198 failure messages carry the worker's last output, so the run is resumable once the blocker clears). Checkpoint-first: workers write load-bearing findings to disk BEFORE their final message, so a truncated or failed return still leaves the evidence recoverable.
 
 ## R-4: Stringent w-* Fleet Expansion (DEC-001)
 
@@ -39,15 +41,30 @@ Track override patterns via `memory_db.py list --tier shared-global` (use /lt-me
 
 For one-offs: use `/autocommission` to spawn ephemeral worker (auto-cleanup on task done).
 
+## R-5: No pre-approval (no inherited approval)
+
+Standing rule for ALL convergence and review work (promoted from doctrine delta 7; PERSISTENT, not campaign-scoped).
+
+Every VERDICT and every SEAL derives from a **fresh examination of the CURRENT state**, with evidence gathered THIS round. Approval never transfers across rounds:
+- No approving round N+1 on the strength of round N.
+- No anticipating a future clean state.
+- No resting on "prior findings addressed" without re-examining the current artefact and citing fresh `file:line` evidence.
+
+A SEAL binds to a **named artefact revision** (commit hash or round); any later change to the artefact voids it and requires a fresh SEAL. The conductor never quotes a stale token; the goal evaluator acts only on the MOST RECENT SEAL that post-dates the last change. The producer's completion is a signal, not an approval; the sole approval is an independent fresh auditor that examined the COMPLETE final state, not a delta.
+
+SOT: `skills/_shared/verdict-schema.md` (§ No pre-approval + Canonical /goal block). Consumer: `/converge`.
+
 ## Enforcement
 
 - R-2 baseline-stash: enforced by `~/.claude/hooks/modules/15-baseline-stash.sh` (when policy=/commit false)
 - R-3 worker verification: enforced by orch.md § Worker Verification protocol
 - R-1 schema spec: enforced by `/swarm-dispatch` skill checks
 - R-4 fleet expansion: enforced by `/promote` skill (queries DB `shared-global` tier for ≥3-occurrence patterns)
+- R-5 no pre-approval: enforced by `/converge` and `/review-dispatch` (fresh-auditor SEAL, most-recent and post-change); SOT `skills/_shared/verdict-schema.md`
 
 ## Cross-References
 
 - `13-worker-first-mandate.md` (matrix SOT — model × effort × thinking)
 - `12-agent-hierarchy.md` (write scopes for spawn-capable agents)
-- Skills: `/swarm-dispatch`, `/autocommission`, `/promote`
+- `skills/_shared/verdict-schema.md` (No pre-approval SOT for R-5)
+- Skills: `/swarm-dispatch`, `/autocommission`, `/promote`, `/converge`, `/review-dispatch`
