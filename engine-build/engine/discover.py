@@ -17,7 +17,7 @@ from __future__ import annotations
 import html
 import re
 
-from engine.kernel.contracts import Posting, SourceAdapter  # noqa: F401
+from engine.kernel.discover_base import Posting, SourceAdapter, _looks_remote  # noqa: F401
 from engine.store import Store
 
 
@@ -172,10 +172,6 @@ def _names(entries: list[dict] | None) -> list[str]:
     `departments`/`offices` shape). Null-safe: missing key or empty/None list
     both yield []."""
     return [e["name"] for e in (entries or []) if e.get("name")]
-
-
-def _looks_remote(location: str | None) -> bool:
-    return bool(location) and "remote" in location.lower()
 
 
 def _plain(content: str) -> str:
