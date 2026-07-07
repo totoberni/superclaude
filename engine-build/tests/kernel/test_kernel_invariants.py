@@ -222,9 +222,13 @@ _FORBIDDEN_PREFIXES = (
 #                     ``FieldMap.coverage()``; the deliberate anti-cycle seam (an
 #                     eager import would recreate the fetch -> providers ->
 #                     fieldmap -> fetch cycle). The kernel module still imports
-#                     standalone. Dies in W5.1 Stage 2 when the generic
-#                     ``coverage()`` classifier moves to ``engine.kernel.resolve``
-#                     -- remove the entry then.
+#                     standalone. The classifier now lives in
+#                     ``engine.kernel.resolve``, but the method must keep routing
+#                     through the ``engine.fieldmap.coverage`` shim because that
+#                     shim default-injects the Greenhouse widget resolver for the
+#                     live method callers (run.py:301,621). Dies in W5.1 Stage 3
+#                     when callers inject via the registry -- remove the entry
+#                     then.
 # (protocol.py's TYPE_CHECKING FieldMap import was repointed to
 # ``engine.kernel.contracts`` during Stage-0 review remediation, so it no longer
 # needs an entry here.)

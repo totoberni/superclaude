@@ -55,16 +55,8 @@ from pathlib import Path
 from typing import Callable
 
 from engine.fieldmap import (
-    MANUAL_ONLY,
-    MISSING_STATUS,
-    _DECLINE_SECTIONS,
-    _FIRST_NAME_KEYWORDS,
-    _LAST_NAME_KEYWORDS,
-    _PORTAL_WIDGET_KEYS,
+    GREENHOUSE_WIDGET_RESOLVER,
     FieldMap,
-    Locator,
-    _classify_field,
-    _missing_path_guess,
     capture_greenhouse,
 )
 from engine.kernel.contracts import (  # noqa: F401
@@ -98,572 +90,92 @@ from engine.kernel.fill_toolkit import (  # noqa: F401
     _upload_attached,
 )
 from engine.providers import registry
-from engine.ssot import MISSING, SSOT
+from engine.ssot import SSOT
 
-# Canned-answer paths (checked in order) that ratify consent: the first that
-# resolves to a non-negative value gates every consent/confirmation checkbox to
-# True. The real SSOT keys this as `privacy_consent_default`; the synthetic v1.4
-# fixture keys it as `optional_consents`, so both are consulted.
-_CONSENT_SOURCE_PATHS = (
-    "canned_answers.privacy_consent_default",
-    "canned_answers.optional_consents",
+# The resolve engine (coverage classification + fill-value render) moved to
+# engine.kernel.resolve (W5.1 kernel extraction). These 50 closure symbols are
+# re-exported unchanged so every pre-Stage-2 importer keeps resolving them;
+# `resolve_values` and `_completeness` (below) are thin shims that inject the
+# Greenhouse widget resolver as the default, preserving today's behaviour for
+# every caller that does not yet pass an explicit vendor_resolver.
+from engine.kernel.resolve import (  # noqa: F401
+    _CONSENT_RE,
+    _CONSENT_SOURCE_PATHS,
+    _COVERED_REGION_RE,
+    _COVER_LETTER_RE,
+    _COVER_LETTER_SKIP_REASON,
+    _FULL_NAME_PATHS,
+    _ITALIAN_LANGS,
+    _MARKETING_RE,
+    _PHOTO_LABEL_RE,
+    _SELECT_TYPES,
+    _SPONSOR_INTENT_RE,
+    _TALENT_POOL_RE,
+    _UNCOVERED_REGION_RE,
+    _WORK_AUTH_INTENT_RE,
+    _YESNO_NEG_RE,
+    _YESNO_POS_RE,
+    _bool_field,
+    _classify_checkbox,
+    _consent_ratified,
+    _empty_value_skip,
+    _extract_yesno_option,
+    _form_has_photo_field,
+    _has_eu_work_rights,
+    _is_cover_letter_field,
+    _is_eeo_reason,
+    _is_hidden_field,
+    _is_italian,
+    _is_justified_eeo_skip,
+    _is_photo_field,
+    _is_satisfied_by_sibling_upload,
+    _is_upload_skip,
+    _match_option,
+    _name_part_kind,
+    _pick_option,
+    _questionnaire_skip,
+    _region_ambiguous,
+    _render_dict_value,
+    _render_select,
+    _render_text,
+    _render_value,
+    _resolve_boolean,
+    _resolve_upload,
+    _resolve_yes_no_select,
+    _select_cv,
+    _select_intent,
+    _short,
+    _sponsorship_needed,
+    _split_full_name,
+    _work_auth_text,
+    _yesno,
 )
 
-# Field types that render as an option choice rather than free text.
-_SELECT_TYPES = frozenset({
-    "multi_value_single_select", "multi_value_multi_select", "yes_no",
-})
-
-# -- checkbox intent classifiers (criterion: consent checkboxes) ---------------
-# A checkbox is ticked True only when its label reads as a legal
-# consent/confirmation ask, or as a talent-pool / future-opportunities opt-in
-# (YES per the owner split). A pure marketing/newsletter box is left unticked.
-# Order at the call site is talent-pool -> marketing -> consent, so a "marketing"
-# ask that also says "I agree" is never mistaken for legal consent.
-_CONSENT_RE = re.compile(
-    r"please confirm|privacy|consent|i agree|\bagree\b|\bterms\b|gdpr|"
-    r"data processing|i acknowledge|i certify|i confirm", re.I)
-_TALENT_POOL_RE = re.compile(
-    r"talent (pool|community|network)|future opportunit|future role|"
-    r"keep .*on file|consider me for|stay in touch|keep me in mind|"
-    r"other (roles|positions|opportunit)", re.I)
-_MARKETING_RE = re.compile(
-    r"marketing|newsletter|promotional|promotions|subscribe|mailing list|"
-    r"updates and offers|product updates|latest news", re.I)
-
-# -- yes/no select intent + region coverage (criterion: yes/no selects) --------
-# Right-to-work / sponsorship selects are answered by deriving an affirmative or
-# negative from the SSOT work-authorization facts, then picking the matching
-# Yes/No option. A posting whose label targets a region the SSOT does not cover
-# (e.g. the United States) is region-ambiguous and is left honestly unfilled.
-_SPONSOR_INTENT_RE = re.compile(r"sponsor|\bvisa\b", re.I)
-_WORK_AUTH_INTENT_RE = re.compile(
-    r"authori[sz]ed to work|authori[sz]ation to work|right to work|"
-    r"eligible to work|legally (authori[sz]ed|entitled|permitted|able)|"
-    r"work permit|work authori[sz]ation|permitted to work|able to work in|"
-    r"do you have the right to work", re.I)
-_COVERED_REGION_RE = re.compile(
-    r"\beu\b|\be\.u\.\b|european union|\beurope\b|\beea\b|ital", re.I)
-_UNCOVERED_REGION_RE = re.compile(
-    r"united states|\bu\.?s\.?a?\.?\b|\bamerica|\bcanad|"
-    r"united kingdom|\bu\.?k\.?\b|\bbritain\b|\bengland\b|\baustralia\b|"
-    r"\bindia\b|\bsingapore\b|\buae\b|\bdubai\b", re.I)
-_YESNO_NEG_RE = re.compile(r"^\s*(no\b|n\b|not\b|none\b|false\b|nope\b)", re.I)
-_YESNO_POS_RE = re.compile(r"^\s*(yes\b|y\b|true\b|yep\b|yeah\b)", re.I)
-
-# A candidate-photo control: label reads like a portrait ask (English + Italian)
-# or the field is an image-accepting file input (criterion 3).
-_PHOTO_LABEL_RE = re.compile(
-    r"photo|picture|headshot|profile image|foto|immagine", re.I)
-
-# A cover-letter file-upload control: key or label names "cover letter" (also
-# matches the underscore/hyphen key form cover_letter, cover-letter-text). A
-# match here resolves to the dedicated `FillAssets.cover_letter` document
-# asset when one is present, and must NEVER fall through to the CV-selection
-# branch -- see the live-run bug where a `cover_letter` file field silently
-# received `cv-ats.pdf`. With no cover-letter asset it is honestly skipped
-# (there is nothing to upload). Deliberately narrow (requires "cover"
-# immediately followed by "letter") so it never misfires on `resume` or
-# `avatar`/`photo` keys that merely share a stray token.
-_COVER_LETTER_RE = re.compile(r"cover[\s_-]*letter", re.I)
-
-# Posting-language tokens that select the photo CV (cv-atsi) as an informality
-# proxy when the form carries no separate candidate-photo field (criterion 2).
-_ITALIAN_LANGS = frozenset({"it", "it-it", "italian", "italiano"})
 
 # Preference order when several Me.<ext> portraits exist under a Profile Pics dir.
 _PHOTO_EXT_ORDER = (".png", ".jpeg", ".jpg")
 
 
-
-
-# -- deterministic value resolution --------------------------------------------
+# -- deterministic value resolution (kernel shim) ------------------------------
 
 def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
                    assets: FillAssets | None = None,
-                   posting_lang: str = "en") -> ResolvedValues:
-    """Classify + render every field of `fieldmap` into concrete fill values.
+                   posting_lang: str = "en",
+                   vendor_resolver=None) -> ResolvedValues:
+    """Classify + render every field into concrete fill values (kernel shim).
 
-    File-upload fields resolve to a whitelisted asset (owner override): a
-    candidate-photo field gets the profile photo, a cover-letter file field
-    (key/label matching "cover letter", e.g. `cover_letter`) gets the
-    dedicated cover-letter document asset when one is present in `FillAssets`
-    -- it must NEVER receive the CV instead -- and is otherwise honestly
-    SKIPPED (no cover-letter document asset), and every OTHER file field gets
-    a CV picked by the deterministic rule (cv-ats by default; cv-atsi ONLY
-    when the form has no photo field AND `posting_lang` is Italian). With no
-    `assets` (the pre-override default) file fields keep the old
-    "file-upload" skip, so the existing contract holds.
-
-    A checkbox (boolean) is resolved by its label intent (`_resolve_boolean`): a
-    consent/confirmation box ticks True when the SSOT ratifies consent, a
-    talent-pool box ticks True, a marketing box is left unticked. Every other
-    field reuses `fieldmap._classify_field` (the SSOT coverage classifier):
-    manual-only (EEO-demographic / portal widget) and missing (unanswerable)
-    fields are SKIPPED with their classifier reason. An answerable field is
-    rendered by type: free text from the resolved SSOT string, and an option
-    label for a select (an exact case-insensitive option match, else a yes/no
-    normalization for right-to-work / sponsorship questions, else skipped).
-    Deterministic, no LLM; never writes the SSOT.
+    Transitional shim over `engine.kernel.resolve.resolve_values`: injects the
+    Greenhouse widget resolver as the default so every pre-Stage-2 caller
+    (`engine.fill.main`, `engine.providers.*`, tests calling this directly)
+    keeps today's Greenhouse-widget classification (paste-in resume/cover-letter
+    textareas, location autocomplete). Stage 2/3 moves callers onto the kernel +
+    registry injection and drops this shim.
     """
-    profile = profile or {}
-    assets = assets.verified() if assets is not None else None
-    resolved = ResolvedValues()
-    has_photo_field = _form_has_photo_field(fieldmap)
-    for fld in fieldmap.fields:
-        if _is_upload_field(fld):
-            _resolve_upload(fld, resolved, assets, posting_lang, has_photo_field)
-            continue
-        if (fld.type or "").lower() == "boolean":
-            _resolve_boolean(fld, resolved, ssot, profile)
-            continue
-        classified = _classify_field(fld, ssot, profile)
-        if classified.status == MANUAL_ONLY:
-            resolved.skipped.append((fld.key, classified.reason or MANUAL_ONLY))
-            continue
-        if classified.status == MISSING_STATUS:
-            resolved.skipped.append((fld.key, classified.classification()))
-            continue
-        value, skip_reason = _render_value(fld, classified.path, ssot)
-        if skip_reason is not None:
-            resolved.skipped.append((fld.key, skip_reason))
-            continue
-        resolved.fields.append(FieldValue(
-            key=fld.key, label=fld.label, type=fld.type,
-            locator=fld.locator, value=value))
-    return resolved
-
-
-def _is_photo_field(fld) -> bool:
-    """A candidate-image field: label matches the portrait pattern (EN + IT)
-    (criterion 3). Only consulted for fields that are already upload fields,
-    so a stray text match cannot trigger an upload.
-
-    `Field` (engine.fieldmap) carries no `accept` MIME attribute, so an
-    accept-sniffing branch would be dead in production; the label regex is the
-    sole detection signal."""
-    return bool(_PHOTO_LABEL_RE.search(fld.label or ""))
-
-
-def _form_has_photo_field(fieldmap: FieldMap) -> bool:
-    return any(_is_upload_field(f) and _is_photo_field(f) for f in fieldmap.fields)
-
-
-def _is_cover_letter_field(fld) -> bool:
-    """A cover-letter file-upload field: `_COVER_LETTER_RE` matches the key or
-    the label. Only consulted for fields already classified as upload fields,
-    so a stray text match elsewhere can never trigger this."""
-    return bool(_COVER_LETTER_RE.search(fld.key or "")
-                or _COVER_LETTER_RE.search(fld.label or ""))
-
-
-# The cover-letter file field is skipped with this reason ONLY when
-# `FillAssets.cover_letter` is absent: the field is optional and there is
-# nothing to upload, so it is honestly skipped rather than silently
-# receiving the CV (the live-confirmed bug this guards against). When a real
-# cover-letter document asset IS present, `_resolve_upload` uploads it
-# instead -- see the cover-letter branch below.
-_COVER_LETTER_SKIP_REASON = (
-    "optional cover-letter upload; no cover-letter document asset (cover "
-    "letter is drafted per-posting in the manual flow)")
-
-
-def _resolve_upload(fld, resolved: ResolvedValues, assets: FillAssets | None,
-                    posting_lang: str, has_photo_field: bool) -> None:
-    if assets is None:
-        # Pre-override contract: no assets -> file fields are skipped, not filled.
-        resolved.skipped.append((fld.key, "file-upload"))
-        return
-    if _is_photo_field(fld):
-        asset_name, path, reason = ("photo", assets.photo,
-                                    "candidate photo/portrait field")
-    elif _is_cover_letter_field(fld):
-        if assets.cover_letter is None:
-            # Never resolve a cover-letter file field to the CV asset: with
-            # no cover-letter document asset there is nothing to upload, and
-            # the field is optional, so it is honestly skipped.
-            resolved.skipped.append((fld.key, _COVER_LETTER_SKIP_REASON))
-            return
-        asset_name, path, reason = ("cover-letter", assets.cover_letter,
-                                    "cover-letter document asset")
-    else:
-        asset_name, path, reason = _select_cv(assets, posting_lang, has_photo_field)
-    if path is None:
-        resolved.skipped.append((fld.key, f"asset missing: {asset_name}"))
-        return
-    resolved.fields.append(FieldValue(
-        key=fld.key, label=fld.label, type=fld.type, locator=fld.locator,
-        value=path, asset=asset_name, upload_reason=reason))
-
-
-def _select_cv(assets: FillAssets, posting_lang: str, has_photo_field: bool):
-    """The deterministic v1 CV rule (criterion 2): cv-ats by default; cv-atsi
-    ONLY when the form has no separate photo field AND the posting is Italian
-    (informal-company proxy, flagged in the report for owner calibration)."""
-    if not has_photo_field and _is_italian(posting_lang):
-        return ("cv-atsi", assets.cv_atsi,
-                "italian posting and no photo field (informal-company proxy)")
-    return "cv-ats", assets.cv_ats, "default (cv-ats always preferred)"
-
-
-def _is_italian(posting_lang: str) -> bool:
-    return str(posting_lang or "").strip().lower() in _ITALIAN_LANGS
-
-
-# -- checkbox (boolean) resolution ---------------------------------------------
-
-def _resolve_boolean(fld, resolved: ResolvedValues, ssot: SSOT,
-                     profile: dict) -> None:
-    """Resolve a checkbox by its label intent (criterion: consent checkboxes).
-
-    An EEO/demographic or file boolean stays manual-only (never auto-answered).
-    A consent/confirmation box is ticked True when the SSOT ratifies consent; a
-    talent-pool / future-opportunities box is ticked True (YES per the owner
-    split); a marketing/newsletter box is left unticked; any other checkbox is
-    left for a human (unchanged pre-existing behaviour)."""
-    classified = _classify_field(fld, ssot, profile)
-    if classified.status == MANUAL_ONLY:
-        resolved.skipped.append((fld.key, classified.reason or MANUAL_ONLY))
-        return
-    kind = _classify_checkbox(fld.label)
-    if kind == "marketing":
-        resolved.skipped.append(
-            (fld.key, "marketing/newsletter checkbox left unticked"))
-        return
-    if kind == "talent_pool":
-        resolved.fields.append(_bool_field(fld, True))
-        return
-    if kind == "consent":
-        if _consent_ratified(ssot):
-            resolved.fields.append(_bool_field(fld, True))
-        else:
-            resolved.skipped.append(
-                (fld.key, "consent checkbox not auto-ticked: SSOT carries no "
-                 "ratified consent answer"))
-        return
-    resolved.skipped.append(
-        (fld.key, "non-consent checkbox not auto-checked in dry run"))
-
-
-def _bool_field(fld, value: bool) -> FieldValue:
-    return FieldValue(key=fld.key, label=fld.label, type=fld.type,
-                      locator=fld.locator, value=value)
-
-
-def _classify_checkbox(label: str) -> str | None:
-    """One of "talent_pool" | "marketing" | "consent" | None for a checkbox.
-
-    Talent-pool is checked first, then marketing, then consent: a marketing box
-    that also says "I agree" must never read as legal consent, and a
-    future-opportunities box (owner: YES) must not be dropped as marketing."""
-    low = (label or "").lower()
-    if _TALENT_POOL_RE.search(low):
-        return "talent_pool"
-    if _MARKETING_RE.search(low):
-        return "marketing"
-    if _CONSENT_RE.search(low):
-        return "consent"
-    return None
-
-
-def _consent_ratified(ssot: SSOT) -> bool:
-    """True iff the SSOT carries a non-negative consent answer (never fabricated:
-    an explicit "no" or an absent answer leaves the box unticked)."""
-    for path in _CONSENT_SOURCE_PATHS:
-        value = ssot.get(path)
-        if value is MISSING:
-            continue
-        if _yesno(value) is not False:   # True or non-yes/no prose -> ratified
-            return True
-    return False
-
-
-# Full-name SSOT paths: when the fieldmap matcher falls back to one of these
-# (no discrete identity.first_name/identity.last_name in the SSOT), a first- or
-# last-name field must split the combined value rather than type it whole into
-# both fields.
-_FULL_NAME_PATHS = frozenset({"identity.name", "identity.full_name"})
-
-
-def _render_value(fld, path: str, ssot: SSOT):
-    """Render one ANSWERABLE field to (value, None) or (None, skip_reason).
-
-    File and boolean fields are handled by their own branches of `resolve_values`
-    and never reach here; the file guard below is defence in depth so a file
-    field can never be rendered as free text even if the dispatch changes."""
-    if fld.type == "input_file":
-        return None, "file-upload"
-    raw = ssot.get(path)
-    if raw is MISSING:
-        return None, f"answerable via {path} but no literal SSOT value"
-    if isinstance(raw, dict):
-        return _render_dict_value(fld, path, raw)
-    if path in _FULL_NAME_PATHS:
-        kind = _name_part_kind(fld.label)
-        if kind is not None:
-            return _split_full_name(kind, path, raw)
-    if fld.type in _SELECT_TYPES:
-        return _render_select(fld, raw, ssot)
-    return _render_text(raw, path)
-
-
-def _render_dict_value(fld, path: str, raw: dict):
-    """A dotted path that resolved to an SSOT sub-tree (dict) rather than a
-    scalar. A select field may still be answerable from one of the dict's
-    scalar values matching an option (exact match first, then the leading-
-    Yes/No-token fallback, `_extract_yesno_option` -- e.g. a region-keyed
-    `sponsorship_answer_by_region` dict whose EU sub-value is a full sentence
-    "No, I have the right to work..." maps onto a bare "No" option); a text
-    field (or a select with no matching scalar) is honestly skipped rather
-    than typing/matching the mapping itself."""
-    if fld.type in _SELECT_TYPES:
-        for value in raw.values():
-            match = _match_option(fld.options, value)
-            if match is not None:
-                return match, None
-        for value in raw.values():
-            extracted = _extract_yesno_option(fld.options, value)
-            if extracted is not None:
-                return extracted, None
-    return None, f"{path} resolved to a mapping with no usable scalar"
-
-
-def _name_part_kind(label: str) -> str | None:
-    """"first" / "last" / None, using the SAME label keywords the fieldmap
-    matchers use to identify a first- or last-name question."""
-    low = (label or "").lower()
-    if any(keyword in low for keyword in _FIRST_NAME_KEYWORDS):
-        return "first"
-    if any(keyword in low for keyword in _LAST_NAME_KEYWORDS):
-        return "last"
-    return None
-
-
-def _split_full_name(kind: str, path: str, raw):
-    """Split a combined-name SSOT value for a discrete first/last name field.
-
-    A single-token name gives the first-name field the whole token; the
-    last-name field has nothing left to split out, so it is honestly skipped
-    rather than typed as an empty string."""
-    tokens = str(raw).split()
-    if not tokens:
-        return None, _empty_value_skip(path)
-    if kind == "first":
-        return tokens[0], None
-    if len(tokens) == 1:
-        return None, f"{path} is a single-token name; no last name to split out"
-    return tokens[-1], None
-
-
-def _render_select(fld, raw, ssot: SSOT):
-    if fld.type == "multi_value_multi_select":
-        candidates = raw if isinstance(raw, list) else [raw]
-        matched = [m for m in (_match_option(fld.options, c) for c in candidates)
-                   if m is not None]
-        if not matched:
-            return None, f"no option matches SSOT value {_short(raw)!r}"
-        return matched, None
-    intent = _select_intent(fld.label)
-    if intent is not None:
-        return _resolve_yes_no_select(fld, ssot, intent, raw)
-    match = _match_option(fld.options, raw)
-    if match is not None:
-        return match, None
-    extracted = _extract_yesno_option(fld.options, raw)
-    if extracted is not None:
-        return extracted, None
-    return None, f"no option matches SSOT value {_short(raw)!r}"
-
-
-def _extract_yesno_option(options, raw):
-    """Fallback for a Yes/No select whose SSOT value is a full sentence
-    carrying a leading Yes/No token ("No. I have no non-compete.", "Yes, I
-    would relocate."): map it onto the option that reads EXACTLY "Yes" or
-    "No" (case-insensitively strip/first-word), when one exists. Applied only
-    AFTER an exact option match has already failed (`_match_option`), never
-    as a replacement for it.
-
-    Never guesses a specific "Yes, <detail>" variant from a bare Yes token:
-    an option set carrying only "Yes, X" phrasing (no BARE "Yes" option, e.g.
-    a sponsorship select enumerating regions) has no single right answer to
-    pick, so this returns None and the caller's existing "no option matches"
-    skip stays honest rather than fabricating a choice among several
-    plausible variants. A leading "No" mapping onto a bare "No" option always
-    wins, since a bare negative reads the same regardless of enumeration."""
-    verdict = _yesno(raw)
-    if verdict is None:
-        return None
-    target = "yes" if verdict else "no"
-    for option in options or []:
-        if str(option).strip().lower() == target:
-            return option
-    return None
-
-
-# -- yes/no select normalization (criterion: right-to-work / sponsorship) ------
-
-def _select_intent(label: str) -> str | None:
-    low = (label or "").lower()
-    if _SPONSOR_INTENT_RE.search(low):
-        return "sponsorship"
-    if _WORK_AUTH_INTENT_RE.search(low):
-        return "work_auth"
-    return None
-
-
-def _resolve_yes_no_select(fld, ssot: SSOT, intent: str, raw):
-    """Answer a right-to-work / sponsorship select conservatively.
-
-    The region gate takes precedence over a naive exact option match: a posting
-    whose label targets a region the SSOT does not cover (e.g. the US) is left
-    honestly unfilled with a questionnaire pointer rather than answered from
-    EU-context facts. Otherwise an exact option match wins, then a yes/no derived
-    from the SSOT work-authorization facts (EU/Italy rights -> Yes to
-    authorization / No to sponsorship-required). Never fabricates a Yes for a
-    right the SSOT does not state."""
-    if _region_ambiguous(fld.label):
-        detail = ("region-ambiguous work authorization" if intent == "work_auth"
-                  else "region-ambiguous visa sponsorship")
-        return None, _questionnaire_skip(
-            fld, f"{detail} (posting region outside the SSOT's EU/Italy work "
-            "rights)")
-    match = _match_option(fld.options, raw)
-    if match is not None:
-        return match, None
-    if intent == "work_auth":
-        if not _has_eu_work_rights(_work_auth_text(ssot)):
-            return None, _questionnaire_skip(
-                fld, "work authorization not established in the SSOT")
-        want_yes = True
-    else:
-        needed = _sponsorship_needed(ssot)
-        if needed is None:
-            return None, _questionnaire_skip(
-                fld, "visa sponsorship requirement not established in the SSOT")
-        want_yes = needed                        # sponsorship needed -> Yes
-    option = _pick_option(fld.options, want_yes)
-    if option is None:
-        return None, f"no yes/no option to answer {_short(fld.label)!r}"
-    return option, None
-
-
-def _region_ambiguous(label: str) -> bool:
-    """True when the label names a region the SSOT does not cover and does NOT
-    also name a covered (EU/Italy) region."""
-    return bool(_UNCOVERED_REGION_RE.search(label or "")
-                and not _COVERED_REGION_RE.search(label or ""))
-
-
-def _work_auth_text(ssot: SSOT) -> str:
-    raw = ssot.get("work_authorization")
-    if raw is MISSING:
-        return ""
-    if isinstance(raw, dict):
-        return " ".join(str(v) for v in raw.values()).lower()
-    if isinstance(raw, (list, tuple)):
-        return " ".join(str(v) for v in raw).lower()
-    return str(raw).lower()
-
-
-def _has_eu_work_rights(text: str) -> bool:
-    if not text:
-        return False
-    region = re.search(r"\beu\b|european|\beea\b|ital|europe", text)
-    rights = re.search(
-        r"work right|authori|citizen|permit|entitled|no visa|no sponsor|"
-        r"freedom of movement", text)
-    return bool(region and rights)
-
-
-def _sponsorship_needed(ssot: SSOT):
-    """True/False/None: does the candidate require visa sponsorship? Prefers the
-    dedicated canned answer, then the work-authorization prose."""
-    raw = ssot.get("canned_answers.visa_sponsorship_required")
-    if raw is not MISSING:
-        verdict = _yesno(raw)
-        if verdict is not None:
-            return verdict
-    text = _work_auth_text(ssot)
-    if re.search(r"no (visa )?sponsor|sponsorship not (needed|required)|"
-                 r"without sponsor|no need for sponsor", text):
-        return False
-    return None
-
-
-def _pick_option(options, want_yes: bool):
-    """The option whose label reads affirmative (want_yes) or negative. A yes_no
-    field with no enumerated options falls back to the literal "Yes"/"No"."""
-    for option in options or []:
-        if _yesno(option) is want_yes:
-            return option
-    if not options:
-        return "Yes" if want_yes else "No"
-    return None
-
-
-def _yesno(value):
-    """True/False/None for a scalar: yes/no leading token, else undetermined."""
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip()
-    if not text:
-        return None
-    if _YESNO_NEG_RE.match(text):
-        return False
-    if _YESNO_POS_RE.match(text):
-        return True
-    return None
-
-
-def _questionnaire_skip(fld, detail: str) -> str:
-    """A skip reason that both explains the ambiguity and carries a
-    questionnaire dotted-path pointer (same shape as fieldmap's missing guess),
-    so the required field stays honestly unfilled and feeds a questionnaire."""
-    return f"needs questionnaire ({detail}): {_missing_path_guess(fld.label)}"
-
-
-def _match_option(options, raw):
-    """The option label equal (case-insensitively) to a scalar SSOT value."""
-    if isinstance(raw, (list, dict)):
-        return None
-    target = str(raw).strip().lower()
-    if not target:
-        return None
-    for option in options:
-        if str(option).strip().lower() == target:
-            return option
-    return None
-
-
-def _render_text(raw, path: str):
-    if isinstance(raw, bool):
-        return ("Yes" if raw else "No"), None
-    if isinstance(raw, str):
-        if not raw.strip():
-            return None, _empty_value_skip(path)
-        return raw, None
-    if isinstance(raw, (int, float)):
-        return str(raw), None
-    if isinstance(raw, list) and all(
-            isinstance(item, (str, int, float)) for item in raw):
-        rendered = ", ".join(str(item) for item in raw)
-        if not rendered.strip():
-            return None, _empty_value_skip(path)
-        return rendered, None
-    return None, f"value for {path} is not renderable as text"
-
-
-def _empty_value_skip(path: str) -> str:
-    """The skip reason for a required/answerable field whose SSOT path resolves
-    to an empty/whitespace value: there is nothing to fill, so it is SKIPPED
-    (never a confirmed fill). A required field with this reason lands in
-    `required_unfilled` -> NOT COMPLETE, never a silent false-COMPLETE."""
-    return f"empty SSOT value at {path} (nothing to fill)"
-
-
-def _short(value) -> str:
-    text = str(value)
-    return text if len(text) <= 60 else text[:57] + "..."
+    from engine.kernel.resolve import resolve_values as _kernel_resolve_values
+    return _kernel_resolve_values(
+        fieldmap, ssot, profile, assets=assets, posting_lang=posting_lang,
+        vendor_resolver=(vendor_resolver if vendor_resolver is not None
+                         else GREENHOUSE_WIDGET_RESOLVER))
 
 
 # -- the fill itself -----------------------------------------------------------
@@ -804,120 +316,20 @@ def _fill_upload(page, fv: FieldValue, assets: FillAssets | None,
 
 
 def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
-                  all_skips: list[tuple[str, str]], filled: int):
-    """Compute (fillable_total, required_unfilled, justified_skips) (criterion 1).
+                  all_skips: list[tuple[str, str]], filled: int,
+                  vendor_resolver=None):
+    """Compute (fillable_total, required_unfilled, justified_skips) (kernel shim).
 
-    A required field left unfilled for an UNjustified reason enters
-    `required_unfilled` (Z); a non-hidden field left unfilled is counted in
-    `justified_skips` only for a justified reason -- a GENUINE demographic-
-    section skip (`_is_justified_eeo_skip`: section in COMPLIANCE_EEOC /
-    DEMOGRAPHIC / VOLUNTARY, or decline_allowed=True -- regardless of
-    requiredness) or an OPTIONAL file-upload/asset-missing skip. A REQUIRED
-    field is never justified on EEO grounds merely because its label/reason
-    contains an EEO keyword when it is NOT a genuine demographic-section
-    field. Hidden portal-telemetry fields are excluded entirely. Without a
-    field map the report degrades to the fields fill_form saw and cannot
-    assert requiredness, so `required_unfilled` is empty.
+    Transitional shim over `engine.kernel.resolve._completeness`: injects the
+    Greenhouse widget resolver as the default so hidden portal-telemetry fields
+    (longitude/latitude) are excluded from the denominator for every pre-Stage-2
+    caller (`fill_form`, `engine.providers.*`), preserving today's behaviour.
     """
-    skip_reason = dict(all_skips)
-    if fieldmap is None:
-        # No field map means no requiredness to assert (required_unfilled stays
-        # empty either way), so an upload skip is counted justified here same
-        # as before the fix -- there is no `f.required` to gate it on.
-        fillable_total = filled + len(skip_reason)
-        justified = sum(1 for reason in skip_reason.values()
-                        if _is_eeo_reason(reason) or _is_upload_skip(reason)
-                        or _is_satisfied_by_sibling_upload(reason))
-        return fillable_total, [], justified
-
-    non_hidden = [f for f in fieldmap.fields if not _is_hidden_field(f)]
-    required_unfilled: list[dict] = []
-    justified = 0
-    for f in non_hidden:
-        if f.key in filled_keys:
-            continue
-        reason = skip_reason.get(f.key, "not filled")
-        if _is_justified_eeo_skip(f, reason):
-            justified += 1
-        elif _is_satisfied_by_sibling_upload(reason):
-            justified += 1
-        elif _is_upload_skip(reason) and not f.required:
-            justified += 1
-        elif f.required:
-            required_unfilled.append(
-                {"key": f.key, "label": f.label, "reason": reason})
-    return len(non_hidden), required_unfilled, justified
-
-
-def _is_hidden_field(fld) -> bool:
-    """Pure portal telemetry (longitude/latitude) is mechanically populated and
-    never seen by the applicant, so it is not a fillable denominator field."""
-    return (fld.key or "").lower() in _PORTAL_WIDGET_KEYS
-
-
-def _is_eeo_reason(reason: str) -> bool:
-    """True iff the skip reason names an EEO/demographic classification.
-
-    A reason-STRING check ONLY: on its own it does NOT justify a skip. A real
-    required question can carry this reason via a mere label-keyword match (the
-    `fieldmap._manual_only_reason` keyword list flags e.g. "disability" on a
-    STANDARD-section field), so justification additionally requires the field to
-    be a genuine voluntary demographic field -- see `_is_justified_eeo_skip`.
-    Used directly only in the no-field-map branch of `_completeness`, where
-    requiredness cannot be asserted anyway."""
-    low = (reason or "").lower()
-    return "demographic" in low or "eeo" in low
-
-
-def _is_justified_eeo_skip(f, reason: str) -> bool:
-    """An EEO/demographic skip is justified for a GENUINE demographic field:
-    a COMPLIANCE_EEOC / DEMOGRAPHIC / VOLUNTARY section (`_DECLINE_SECTIONS`),
-    or `decline_allowed=True`. This holds REGARDLESS of requiredness: policy
-    never auto-answers a real demographic question and decline is always
-    allowed there, so even a genuinely demographic field that (unusually)
-    carries `required=True` stays justified, never a false gap (Greenhouse's
-    own capture already forces `required=False` on these -- `_fields_from_
-    question`/`_fields_from_demographic` -- but the gate itself must not
-    depend on that normalization holding for every vendor/path).
-
-    A REQUIRED field is NEVER justified on EEO grounds merely because its
-    reason string (or its LABEL) happens to contain an EEO keyword: a
-    genuinely non-demographic question (STANDARD/CUSTOM/LOCATION section,
-    e.g. "disability accommodations needed for the interview?") stays a
-    required gap even when `_manual_only_reason`'s keyword-based safety net
-    (never auto-fill a suspected-EEO field) fires on its label -- that keyword
-    match only prevents auto-fill; it never by itself proves the field is a
-    real demographic question. The SECTION (a structural signal set from the
-    vendor schema's own section/source tag, never from a label keyword) is the
-    gate, not the reason string and not requiredness."""
-    return (_is_eeo_reason(reason)
-            and (f.decline_allowed
-                 or getattr(f, "section", "") in _DECLINE_SECTIONS))
-
-
-def _is_satisfied_by_sibling_upload(reason: str) -> bool:
-    """True iff the skip reason names a satisfied-by-sibling-file-upload
-    justification (Greenhouse's `resume_text`/`cover_letter_text` paste
-    textarea: the schema exposes it even when the LIVE form is configured
-    for file-upload instead of paste-text, so the textarea is simply ABSENT
-    from the DOM and never attempted -- the sibling `resume`/`cover_letter`
-    file field already carries the same document). Unlike `_is_upload_skip`,
-    this is justified REGARDLESS of requiredness: the requirement genuinely
-    IS satisfied by the equivalent uploaded artifact, not merely excused
-    because the field happens to be optional."""
-    return (reason or "").lower().startswith("satisfied by sibling file upload")
-
-
-def _is_upload_skip(reason: str) -> bool:
-    """A file-upload skip: either the legacy no-assets skip ("file-upload") or
-    a resolved-but-missing asset ("asset missing: <name>"). Unlike an
-    EEO/demographic skip, this is justified ONLY when the field itself is
-    OPTIONAL (see the `and not f.required` guard at the call site). A REQUIRED
-    upload field left unfilled (no CV/photo attached) is a genuine gap, never a
-    free pass -- it must land in `required_unfilled` so `complete` cannot read
-    True while a mandatory document was never attached."""
-    low = (reason or "").lower()
-    return "file-upload" in low or "asset missing" in low
+    from engine.kernel.resolve import _completeness as _kernel_completeness
+    return _kernel_completeness(
+        fieldmap, filled_keys, all_skips, filled,
+        vendor_resolver=(vendor_resolver if vendor_resolver is not None
+                         else GREENHOUSE_WIDGET_RESOLVER))
 
 
 def _apply(locator, fv: FieldValue) -> None:

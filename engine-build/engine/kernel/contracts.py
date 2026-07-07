@@ -190,16 +190,18 @@ class FieldMap:
         return [f for f in self.fields if f.required]
 
     def coverage(self, ssot: SSOT, profile: dict) -> "CoverageReport":
-        # TRANSITIONAL call-time seam (dies in W5.1 Stage 2): `coverage()` is
-        # the deterministic classification FUNCTION, real business logic that
-        # stays in engine.fieldmap until Stage 2 moves it to
-        # engine.kernel.resolve (with the vendor_resolver injection param), at
-        # which point this import becomes kernel-internal and the
-        # `_KNOWN_UPWARD_EXCEPTIONS` allowlist entry in
-        # tests/kernel/test_kernel_invariants.py is removed. An eager top-level
-        # import here would cycle back through fieldmap's own shim import of
-        # this module. Mirrors the provider call-time-access pattern already
-        # used for engine.fill primitives (see engine/providers/base.py).
+        # TRANSITIONAL call-time seam (dies in W5.1 Stage 3): the classifier
+        # itself now lives in engine.kernel.resolve.coverage (vendor_resolver
+        # injection seam, spec 3.4), but THIS method must keep delegating to
+        # the engine.fieldmap.coverage SHIM because that shim default-injects
+        # the Greenhouse widget resolver -- the live method callers
+        # (run.py:301,621; test_browse) rely on today's Greenhouse-widget
+        # classification. Stage 3 moves those callers onto the kernel function
+        # with an explicitly registry-built vendor_resolver; then this seam and
+        # the `_KNOWN_UPWARD_EXCEPTIONS` allowlist entry in
+        # tests/kernel/test_kernel_invariants.py are removed together. An eager
+        # top-level import here would cycle back through fieldmap's own shim
+        # import of this module.
         from engine.fieldmap import coverage as _coverage
         return _coverage(self, ssot, profile)
 

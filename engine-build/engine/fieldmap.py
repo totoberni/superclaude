@@ -48,15 +48,30 @@ from engine.kernel.contracts import (  # noqa: F401
 )
 from engine.ssot import MISSING, SSOT
 
-# The three classification verdicts a required field can receive.
-ANSWERABLE = "answerable"
-MISSING_STATUS = "missing"
-MANUAL_ONLY = "manual-only"
-
-# Sections that are always declinable and never block a fill/coverage run.
-_DECLINE_SECTIONS = frozenset({
-    Section.COMPLIANCE_EEOC, Section.DEMOGRAPHIC, Section.VOLUNTARY,
-})
+# The generic coverage-classification cluster moved to engine.kernel.resolve
+# (W5.1 kernel extraction). Re-exported here so every pre-Stage-2 importer
+# (run.py, tests, engine.fill) keeps resolving these names unchanged; the
+# Greenhouse widget resolvers below are injected into the kernel classifier via
+# the `coverage` shim. Transitional until Stage 2/3 moves callers onto the
+# kernel + registry injection directly.
+from engine.kernel.resolve import (  # noqa: F401
+    ANSWERABLE,
+    MANUAL_ONLY,
+    MISSING_STATUS,
+    CoverageReport,
+    FieldCoverage,
+    _ANSWER_MATCHERS,
+    _DECLINE_SECTIONS,
+    _DEMOGRAPHIC_KEYWORDS,
+    _FIRST_NAME_KEYWORDS,
+    _LAST_NAME_KEYWORDS,
+    _SKILLS_EXPERIENCE_RE,
+    _answerable_path,
+    _classify_field,
+    _manual_only_reason,
+    _missing_path_guess,
+    _profile_answers_work_auth,
+)
 
 # parse_greenhouse's `source` tag (the bucket a question arrived in) -> the
 # canonical Section. Unrecognised sources fall back to STANDARD.
@@ -116,14 +131,6 @@ def normalize_type(vendor_native: str) -> str:
     return _TYPE_MAP.get(key, FieldType.TEXT)
 
 
-# Label keywords that mark a field as EEO/demographic no matter which section it
-# arrived in (defence in depth on top of the source tag).
-_DEMOGRAPHIC_KEYWORDS = (
-    "gender", "race", "ethnic", "veteran", "disability", "disabilities",
-    "sexual orientation", "hispanic", "latino", "self-identification",
-    "self identification",
-)
-
 # Greenhouse's location-autocomplete widget (round-1 live-capture finding):
 # the composite question shares one label across three sub-fields keyed
 # `location`/`longitude`/`latitude`. All three are mechanically populated by
@@ -145,127 +152,6 @@ _KEY_TEXT_PATHS = {
     "cover_letter_text": ("canned_answers.cover_letter_text",
                           "canned_answers.cover_letter"),
 }
-
-# A required "how much X experience do you have" question is answerable
-# in principle: the SSOT's skills bucket can decide yes/no for any named
-# technology, even if the honest answer is "no" (answerability is about
-# whether the SSOT can decide, not about the polarity of the answer).
-_SKILLS_EXPERIENCE_RE = re.compile(r"experience\s+(?:using|with|in)\b",
-                                  re.IGNORECASE)
-
-# First/last name label keywords, shared with `engine.fill` (imported there) so
-# the full-name-split fallback at render time detects the same fields these
-# matchers do.
-_FIRST_NAME_KEYWORDS = ("first name", "given name", "forename")
-_LAST_NAME_KEYWORDS = ("last name", "surname", "family name")
-
-# Ordered label-keyword -> candidate SSOT dotted paths. First matcher whose any
-# keyword is a substring of the (lowercased) label wins; within it the first
-# candidate path that resolves in the SSOT makes the field answerable. The
-# discrete first_name/last_name key leads each list so a form with BOTH a First
-# Name and a Last Name field never has the full name typed into both; the
-# full-name paths remain as a fallback (split at render time in engine.fill)
-# for an SSOT that only carries a combined name. Order is load-bearing: the
-# country-of-residence matcher MUST precede the generic current-location
-# matcher (below) so a "country of residence" question resolves the discrete
-# `identity.country` rather than the full postal address, which matches no
-# country-name option.
-_ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
-    (_FIRST_NAME_KEYWORDS,
-     ["identity.first_name", "identity.name", "identity.full_name"]),
-    (_LAST_NAME_KEYWORDS,
-     ["identity.last_name", "identity.name", "identity.full_name"]),
-    (("full name", "legal name", "your name"),
-     ["identity.name", "identity.full_name"]),
-    (("email", "e-mail"), ["identity.email"]),
-    (("phone", "mobile number", "telephone"),
-     ["identity.phone", "canned_answers.phone"]),
-    (("linkedin",), ["links.linkedin", "canned_answers.linkedin"]),
-    (("github",), ["links.github"]),
-    (("portfolio", "personal website", "personal site", "web site", "website"),
-     ["links.site", "links.website", "links.portfolio"]),
-    (("notice period", "notice",),
-     ["canned_answers.notice_period"]),
-    (("employment agreement", "post-employment", "post employment",
-      "non-compete", "noncompete", "restrictive covenant"),
-     ["canned_answers.post_employment_restrictions"]),
-    (("previously worked", "previously consulted", "worked at or consulted",
-      "previously employed at", "previously interned"),
-     ["canned_answers.previously_worked_at_company",
-      "canned_answers.previously_applied_default"]),
-    (("sponsorship", "sponsor", "visa"),
-     ["canned_answers.sponsorship_answer_by_region",
-      "canned_answers.visa_sponsorship_required",
-      "canned_answers.us_visa_sponsorship_required"]),
-    (("authorized to work", "authorised to work", "right to work",
-      "eligible to work", "work authorization", "work authorisation",
-      "legally authorized", "legally authorised", "work permit"),
-     ["work_authorization", "canned_answers.work_authorization"]),
-    (("relocat",),
-     ["canned_answers.relocation", "canned_answers.willing_to_relocate"]),
-    (("salary", "compensation expectation", "expected", "desired compensation"),
-     ["preferences.comp_floor", "canned_answers.salary_expectation"]),
-    (("country of residence", "current country", "country you reside",
-      "country you are located"),
-     ["identity.country"]),
-    (("currently located in",
-      "where are you currently located", "where are you located",
-      "current location", "location"),
-     ["identity.current_location", "identity.address", "identity.country"]),
-    (("please confirm", "privacy policy", "consent to", "i agree"),
-     ["canned_answers.optional_consents"]),
-    (("accommodation", "accommodations", "accessible and inclusive",
-      "reasonable adjustment", "accessibility need"),
-     ["canned_answers.accommodations"]),
-    (("name",), ["identity.name", "identity.full_name"]),
-]
-
-
-@dataclass
-class FieldCoverage:
-    key: str
-    label: str
-    status: str          # answerable | missing | manual-only
-    path: str            # answerable: resolving path; missing: dotted-path guess
-    reason: str = ""     # manual-only: why (file-upload | demographic/EEO)
-
-    def classification(self) -> str:
-        """The compact verdict string (`missing:` carries the guessed path)."""
-        if self.status == MISSING_STATUS:
-            return f"{MISSING_STATUS}:{self.path}"
-        return self.status
-
-
-@dataclass
-class CoverageReport:
-    vendor: str
-    posting_id: str
-    fields: list[FieldCoverage]
-
-    @property
-    def answerable(self) -> int:
-        return sum(1 for f in self.fields if f.status == ANSWERABLE)
-
-    @property
-    def missing(self) -> int:
-        return sum(1 for f in self.fields if f.status == MISSING_STATUS)
-
-    @property
-    def manual_only(self) -> int:
-        return sum(1 for f in self.fields if f.status == MANUAL_ONLY)
-
-    @property
-    def required_total(self) -> int:
-        return len(self.fields)
-
-    def missing_paths(self) -> list[str]:
-        """Dotted-path guesses for every unanswerable required field (feeds 7.6)."""
-        return [f.path for f in self.fields if f.status == MISSING_STATUS]
-
-    def summary_line(self) -> str:
-        return (f"{self.answerable} answerable, {self.missing} missing, "
-                f"{self.manual_only} manual-only of {self.required_total} required")
-
 
 def greenhouse_questions_url(slug: str, job_id: str) -> str:
     """The sanctioned schema endpoint (R-WT-8 D3): one GET, questions=true."""
@@ -460,76 +346,22 @@ def _workable_choice_labels(choices) -> list[str]:
     return [str(c.get("body", "")) for c in choices if isinstance(c, dict)]
 
 
-def coverage(fieldmap: FieldMap, ssot: SSOT, profile: dict) -> CoverageReport:
-    """Classify every REQUIRED field of `fieldmap` against the SSOT + profile.
+def coverage(fieldmap: FieldMap, ssot: SSOT, profile: dict,
+             vendor_resolver=None) -> CoverageReport:
+    """Classify every REQUIRED field of `fieldmap` against the SSOT (shim).
 
-    Deterministic, no LLM. Order per field: manual-only (file upload or
-    EEO/demographic, never auto-answered) wins first; then a keyword match
-    against the SSOT buckets makes it answerable; otherwise it is missing and
-    gets a dotted-path guess (canned_answers.<slug> for an unrecognised
-    question) that a questionnaire item can later resolve.
+    Transitional shim over the kernel classifier (`engine.kernel.resolve.
+    coverage`): injects `GREENHOUSE_WIDGET_RESOLVER` as the default so every
+    pre-Stage-2 caller (run.py, tests, incl. the bare-coverage greenhouse-widget
+    tests) keeps today's Greenhouse-widget behaviour. Stage 2/3 moves callers
+    onto the kernel + registry injection and drops this shim. The kernel import
+    is call-time to avoid an import cycle at fieldmap load.
     """
-    profile = profile or {}
-    results: list[FieldCoverage] = []
-    for fld in fieldmap.required_fields():
-        results.append(_classify_field(fld, ssot, profile))
-    return CoverageReport(vendor=fieldmap.vendor,
-                          posting_id=fieldmap.posting_id, fields=results)
-
-
-def _classify_field(fld: Field, ssot: SSOT, profile: dict) -> FieldCoverage:
-    reason = _manual_only_reason(fld)
-    if reason:
-        return FieldCoverage(fld.key, fld.label, MANUAL_ONLY, "", reason)
-    path = _answerable_path(fld, ssot, profile)
-    if path is not None:
-        return FieldCoverage(fld.key, fld.label, ANSWERABLE, path)
-    return FieldCoverage(fld.key, fld.label, MISSING_STATUS,
-                         _missing_path_guess(fld.label))
-
-
-def _manual_only_reason(fld: Field) -> str:
-    """"file-upload" ONLY for a genuine file control: a native file type, or a
-    label carrying an explicit upload/attach verb (mirrors `engine.fill`'s
-    `_is_upload_field`). A bare "resume"/"cv" label keyword is NOT enough --
-    Greenhouse's paste-in `resume_text`/`cover_letter_text` textareas share
-    their label with the sibling file-upload field ("Resume"/"Resume/CV"),
-    so tagging on the label alone would wrongly classify a fillable free-text
-    field as manual-only file-upload (never resolved, never fillable)."""
-    if "file" in fld.type.lower():
-        return "file-upload"
-    label = fld.label.lower()
-    if any(word in label for word in ("upload", "attach")):
-        return "file-upload"
-    if fld.source in ("demographic", "eeo", "eeoc", "compliance"):
-        return "demographic/EEO"
-    if any(word in label for word in _DEMOGRAPHIC_KEYWORDS):
-        return "demographic/EEO"
-    if fld.key.lower() in _PORTAL_WIDGET_KEYS:
-        return "portal-widget"
-    return ""
-
-
-def _answerable_path(fld: Field, ssot: SSOT, profile: dict) -> str | None:
-    location_path = _location_widget_path(fld, ssot)
-    if location_path is not None:
-        return location_path
-    key_text_path = _key_text_widget_path(fld, ssot)
-    if key_text_path is not None:
-        return key_text_path
-    low = fld.label.lower()
-    if _SKILLS_EXPERIENCE_RE.search(low) and ssot.get("skills") is not MISSING:
-        return "skills"
-    for keywords, candidates in _ANSWER_MATCHERS:
-        if not any(keyword in low for keyword in keywords):
-            continue
-        for path in candidates:
-            if ssot.get(path) is not MISSING:
-                return path
-        if _profile_answers_work_auth(candidates, profile):
-            return "profile.capabilities"
-        return None
-    return None
+    from engine.kernel.resolve import coverage as _kernel_coverage
+    return _kernel_coverage(
+        fieldmap, ssot, profile,
+        vendor_resolver=(vendor_resolver if vendor_resolver is not None
+                         else GREENHOUSE_WIDGET_RESOLVER))
 
 
 def _location_widget_path(fld: Field, ssot: SSOT) -> str | None:
@@ -564,20 +396,25 @@ def _key_text_widget_path(fld: Field, ssot: SSOT) -> str | None:
     return None
 
 
-def _profile_answers_work_auth(candidates: list[str], profile: dict) -> bool:
-    """Work-authorization questions may be answered from a profile capability
-    (e.g. work_authorization_eu) even when the raw SSOT string is absent."""
-    if "work_authorization" not in candidates:
-        return False
-    caps = profile.get("capabilities") or []
-    return any(str(cap).startswith("work_authorization") for cap in caps)
+class _GreenhouseWidgetResolver:
+    """Greenhouse portal-widget resolver (moves to providers/greenhouse/resolve.py in Stage 2).
+
+    The `vendor_resolver` (spec 3.4) the kernel classifier consults for
+    Greenhouse's location-autocomplete `location` field, the paste-in
+    `resume_text`/`cover_letter_text` textareas, and the `longitude`/`latitude`
+    portal-telemetry fields. Each method MIRRORS the exact membership test the
+    pre-extraction `engine.fieldmap`/`engine.fill` code used: `manual_reason`
+    keeps `fld.key.lower()` (the old `_manual_only_reason` portal branch) and
+    `hidden_widget` keeps `(fld.key or "").lower()` (the old `_is_hidden_field`)."""
+    def location_path(self, fld, ssot): return _location_widget_path(fld, ssot)
+    def key_text_path(self, fld, ssot): return _key_text_widget_path(fld, ssot)
+    def manual_reason(self, fld):
+        return "portal-widget" if fld.key.lower() in _PORTAL_WIDGET_KEYS else ""
+    def hidden_widget(self, fld):
+        return (fld.key or "").lower() in _PORTAL_WIDGET_KEYS
 
 
-def _missing_path_guess(label: str) -> str:
-    """A free-form unrecognised question is answered from canned_answers (7.6)."""
-    slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
-    slug = slug or "unlabelled"
-    return f"canned_answers.{slug}"
+GREENHOUSE_WIDGET_RESOLVER = _GreenhouseWidgetResolver()
 
 
 def _fields_from_question(question: dict, source: str) -> list[Field]:
