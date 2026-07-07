@@ -1,14 +1,17 @@
 ---
 name: push
-description: "Toggle git push permissions on/off in settings.json."
+description: "Use when the user explicitly asks to enable or disable agent git-push permission."
 category: workflow
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "{true|false}"
 allowed-tools: Read, Bash, Edit
 ---
 
 # Push Toggle
+
+## Unattended-context gate
+
+This skill performs a mutating or irreversible operation and is now model-invocable. If it is invoked WITHOUT an explicit human instruction to perform this exact action in the CURRENT session, print the proposed mutation (the exact command or change it would make) and STOP; do not execute. Proceed only when a human has explicitly requested this action this session.
 
 Enable or disable `git push` for all agents by modifying `~/.claude/settings.json` deny rules.
 

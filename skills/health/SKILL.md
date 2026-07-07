@@ -4,7 +4,6 @@ description: "Infrastructure health check. /health [component] for specific."
 model: haiku
 category: health
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[component]"
 allowed-tools: Read, Bash, Glob
 ---

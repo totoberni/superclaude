@@ -3,7 +3,6 @@ name: commit
 description: "Creates a conventional commit with auto-detected type and TDD check."
 category: workflow
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[optional message override]"
 allowed-tools: Bash, Read
 ---

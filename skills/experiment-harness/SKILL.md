@@ -3,7 +3,6 @@ name: experiment-harness
 description: "Multi-seed experiment runner + passport.yaml claim-provenance verifier."
 category: domain
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "<run|verify> [args]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

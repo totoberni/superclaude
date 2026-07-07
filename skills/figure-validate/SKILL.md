@@ -4,7 +4,6 @@ description: "Pre-flight figure validator: WCAG-AA contrast, thin lines, low alp
 model: haiku
 category: code-quality
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "FIGURE [FIGURE ...] [--mode image|code|pdf] [--min-contrast N] [--min-linewidth N] [--min-alpha N] [--json]"
 allowed-tools: Bash, Read
 ---

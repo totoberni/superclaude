@@ -4,7 +4,6 @@ description: "Live snapshot: in-flight workers, BG reviewer queue, active epheme
 model: haiku
 category: delegation
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--all | --bg-only | --ephemeral-only]"
 allowed-tools: Read, Bash, Glob
 ---

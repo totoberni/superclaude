@@ -3,7 +3,6 @@ name: lt-mem
 description: "Memory DB consolidation: re-tier mature entries, prune stale, merge near-dups; propagate to peer when replicated (Step 8)."
 category: memory
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--quick | --complete] [--compact | --skip-compact] [--sanitize] [--dry-run] [project <name> | all]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

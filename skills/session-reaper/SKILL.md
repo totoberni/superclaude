@@ -1,15 +1,18 @@
 ---
 name: session-reaper
-description: "Monitor and clean Claude Code sessions: list, kill zombies, check."
+description: "Use when the user explicitly asks to inspect or clean up agent sessions (status dashboard, kill zombies, history, cron)."
 model: haiku
 category: orchestration
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[status|kill|history|cron] [--dry-run] [--all]"
 allowed-tools: Read, Bash, Glob
 ---
 
 # Session Reaper
+
+## Unattended-context gate
+
+This skill performs a mutating or irreversible operation and is now model-invocable. If it is invoked WITHOUT an explicit human instruction to perform this exact action in the CURRENT session, print the proposed mutation (the exact command or change it would make) and STOP; do not execute. Proceed only when a human has explicitly requested this action this session.
 
 Manage Claude Code session lifecycle. Shows process health, kills zombies, reviews session history.
 

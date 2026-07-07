@@ -4,7 +4,6 @@ description: "Search across all agent memory files for a keyword or topic."
 model: haiku
 category: memory
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "<search-query>"
 allowed-tools: Read, Grep, Glob, Bash
 ---

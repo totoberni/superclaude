@@ -3,7 +3,6 @@ name: sanity-check
 description: "Detect test-weakening, scope violations, and drift in orch work."
 category: meta
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "<orch-name>"
 context: fork
 agent: w-reviewer

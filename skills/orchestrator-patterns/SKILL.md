@@ -3,7 +3,6 @@ name: orchestrator-patterns
 description: "Templates and conventions for orchestrated projects."
 category: meta
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[project-name]"
 ---
 

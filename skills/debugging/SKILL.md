@@ -3,7 +3,6 @@ name: debugging
 description: "Systematic debugging methodology. Loaded by w-debugger agent."
 category: meta
 user-invocable: false
-disable-model-invocation: true
 ---
 
 # Systematic Debugging

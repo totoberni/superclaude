@@ -1,14 +1,17 @@
 ---
 name: handoff
-description: "Permanent-ork commission, decommission, handoff. Not for parallel batches."
+description: "Use when the user explicitly asks to commission, continue, or decommission a permanent ork, or to hand off the current session."
 category: orchestration
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--commission <project> [name]] [--continue] [--decommission [--dry-run] [name]] [<target>]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
 # /handoff — Permanent-Ork Lifecycle Manager
+
+## Unattended-context gate
+
+This skill performs a mutating or irreversible operation and is now model-invocable. If it is invoked WITHOUT an explicit human instruction to perform this exact action in the CURRENT session, print the proposed mutation (the exact command or change it would make) and STOP; do not execute. Proceed only when a human has explicitly requested this action this session.
 
 Focused on **permanent-ork lifecycle** (commission + decommission). Status checks are thinned to a delegation hint (use `/super-health --quick` and `/nudge`). Parallel batch dispatch lives in `/swarm-dispatch`.
 

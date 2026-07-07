@@ -3,7 +3,6 @@ name: rb
 description: "Refresh bootstrap.md from state + directive + pitfalls"
 category: workflow
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "<orch-name>"
 allowed-tools: Read, Write, Bash, Glob, Grep
 ---

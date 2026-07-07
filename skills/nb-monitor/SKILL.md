@@ -3,7 +3,6 @@ name: nb-monitor
 description: "Run a notebook with live per-cell progress + BROKEN/HUNG/SLOW state."
 category: code-quality
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "run NOTEBOOK [--cell-timeout 300] [--kernel-name NAME] [--progress-path PATH] [--heartbeat 0.5] [--allow-errors]"
 allowed-tools: Bash, Read
 ---

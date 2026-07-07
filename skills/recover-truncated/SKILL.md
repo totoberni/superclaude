@@ -3,7 +3,6 @@ name: recover-truncated
 description: "WORKER-TRUNCATED recovery: narrow re-dispatch + hand-off context. Meta+orch only"
 category: orchestration
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[<description-fragment>] | [--recent] [--writes]"
 allowed-tools: Read, Bash, Grep, Glob
 ---

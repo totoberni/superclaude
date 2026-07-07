@@ -4,7 +4,6 @@ description: "Browse the v3 memory DB: list entries by tier/type and show DB sta
 model: haiku
 category: memory
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--tier instance|shared|class|global] [--type feedback|project|reference|user] [--stats]"
 allowed-tools: Read, Write, Bash, Grep, Glob
 ---

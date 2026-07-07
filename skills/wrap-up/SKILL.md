@@ -3,7 +3,6 @@ name: wrap-up
 description: "Post-work bundle: record outcome + /mistake + /good-idea + /remember --save + state/recovery"
 category: workflow
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "<project>"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

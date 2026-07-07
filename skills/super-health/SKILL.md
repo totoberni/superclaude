@@ -3,7 +3,6 @@ name: super-health
 description: "Superclaude health /100 across 9 subsystems (always deepest); --complete adds 5-agent audit."
 category: health
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--complete]"
 allowed-tools: Read, Bash, Glob, Grep, Agent
 ---

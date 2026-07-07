@@ -3,7 +3,6 @@ name: verify
 description: "Enforce evidence-before-claims. Loaded by orch before writing RPTs."
 category: workflow
 user-invocable: false
-disable-model-invocation: true
 ---
 
 # Verification Before Completion

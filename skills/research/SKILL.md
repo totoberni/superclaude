@@ -3,7 +3,6 @@ name: research
 description: "Scientific research: design, literature, hostile-review, report, and friends."
 category: domain
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "<design|paper|literature|ablation|hyperparams|reproduce|gap-audit|hostile-review|report|report-publish|report-technical> [args]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

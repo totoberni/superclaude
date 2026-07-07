@@ -4,7 +4,6 @@ description: "Cross-orch dashboard: active orchs, status, escalations"
 model: haiku
 category: orchestration
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--orch] [--worker] [--meta] [--scaf] [--all]"
 allowed-tools: Read, Glob, Grep, Bash
 ---

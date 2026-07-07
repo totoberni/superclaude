@@ -3,7 +3,6 @@ name: mem-health
 description: "Score memory DB health /100. 6 DB-aware criteria + v3 trigger checks."
 category: memory
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--quick | --verbose]"
 allowed-tools: Read, Bash, Glob, Grep
 ---

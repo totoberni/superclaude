@@ -3,7 +3,6 @@ name: threat-model
 description: "STRIDE threat analysis: map attack surface, rate, output model."
 category: domain
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "<target-component-or-project> [--<project>]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

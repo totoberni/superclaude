@@ -3,7 +3,6 @@ name: promote
 description: "Scan DB for >=3-occurrence autocommission patterns; draft permanent w-*.md."
 category: delegation
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--threshold N] [--dry-run]"
 allowed-tools: Read, Write, Bash, Grep, Glob
 ---

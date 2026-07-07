@@ -3,7 +3,6 @@ name: good-idea
 description: "Record effective solutions and patterns for reuse across sessions."
 category: memory
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[project-name or 'all']"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

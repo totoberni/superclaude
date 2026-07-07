@@ -4,7 +4,6 @@ description: "Score skill subsystem health /100. Frontmatter, refs, descriptions
 model: haiku
 category: health
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[skill-name | all]"
 allowed-tools: Read, Bash, Glob, Grep
 ---

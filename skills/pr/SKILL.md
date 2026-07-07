@@ -3,7 +3,6 @@ name: pr
 description: "Create a GitHub pull request with structured summary using gh CLI."
 category: workflow
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[base-branch]"
 allowed-tools: Bash, Read
 ---

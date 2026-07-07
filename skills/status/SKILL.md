@@ -4,7 +4,6 @@ description: "Show project status from state files, git status, and plan."
 model: haiku
 category: orchestration
 user-invocable: true
-disable-model-invocation: true
 allowed-tools: Read, Glob, Bash
 ---
 

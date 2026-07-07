@@ -3,7 +3,6 @@ name: delegate
 description: "Fresh subagent per task with two-stage review. For orch agents."
 category: orchestration
 user-invocable: false
-disable-model-invocation: true
 ---
 
 # Subagent-Driven Delegation

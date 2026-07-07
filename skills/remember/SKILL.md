@@ -3,7 +3,6 @@ name: remember
 description: "Meta context save/load: cheaper than compaction"
 category: memory
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--save] [--deep]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

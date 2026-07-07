@@ -4,7 +4,6 @@ description: "Ad-hoc SQLite queries against HCOM broker: ESC, stuck orks, latenc
 model: haiku
 category: comms
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "<query-name> [args...]"
 allowed-tools: Read, Bash, Grep
 ---

@@ -3,7 +3,6 @@ name: mistake
 description: "Record mistakes and promote recurring patterns to prevention rules."
 category: memory
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[project-name or 'all']"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---

@@ -4,7 +4,6 @@ description: "Score hook subsystem health /100. Syntax, perf, naming, coverage."
 model: haiku
 category: health
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[--quick | --standard | --deep] [hook-name | all]"
 allowed-tools: Read, Bash, Glob, Grep, Agent
 ---

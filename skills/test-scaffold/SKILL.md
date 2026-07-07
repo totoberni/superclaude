@@ -3,7 +3,6 @@ name: test-scaffold
 description: "Generate pytest boilerplate for untested Python modules."
 category: meta
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "<project-path> [module-path]"
 allowed-tools: Bash, Read, Write, Glob, Grep
 ---

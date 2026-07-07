@@ -3,7 +3,6 @@ name: brainstorm
 description: "Design-before-implementation gate for features and architecture."
 category: workflow
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[topic or feature description]"
 allowed-tools: Read, Glob, Grep, Bash
 ---

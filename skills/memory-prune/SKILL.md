@@ -3,7 +3,6 @@ name: memory-prune
 description: "Scan memory matrix for stale or broken entries. Advisory only."
 category: memory
 user-invocable: true
-disable-model-invocation: true
 argument-hint: "[scope: 'all' | 'shared' | 'class' | 'instance']"
 allowed-tools: Read, Bash, Glob, Grep
 ---
