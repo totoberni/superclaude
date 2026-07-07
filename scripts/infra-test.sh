@@ -405,6 +405,30 @@ test_agents() {
     fail "A7 fleet contract" "expected >= 11 w-*.md agents, found $W_COUNT"
   fi
   [ "$FLEET_OK" = true ] && pass "A7 wf-skills fleet ($W_COUNT workers: 1 report-contract each; Skill on 9 reasoning, absent from w-committer/w-explorer)"
+
+  # A8: read-only class write-lock (W0.8). The tools: allowlist alone does
+  # not reliably exclude Write/Edit (w-hostile-reviewer showed Write+Edit
+  # despite a read-only tools: declaration). Each of the 6 read-only classes
+  # must carry a disallowedTools: line excluding both Write and Edit. Guard:
+  # none of the 6 write-capable workers may have Write blocked, so this
+  # check cannot be trivially satisfied by blanket-adding disallowedTools
+  # everywhere. Real failing paths: a read-only class missing the
+  # exclusion, or a write-capable worker wrongly blocked from Write.
+  local RO_LOCK_OK=true roname rof rodt
+  for roname in w-reviewer w-design-reviewer w-explorer w-tester w-committer w-hostile-reviewer; do
+    rof="$AGENT_DIR/$roname.md"
+    [ -f "$rof" ] || { RO_LOCK_OK=false; fail "A8 read-only write-lock" "$roname: agent file not found"; continue; }
+    rodt=$(grep -m1 -E '^disallowedTools:' "$rof" 2>/dev/null)
+    echo "$rodt" | grep -qw Write || { RO_LOCK_OK=false; fail "A8 read-only write-lock" "$roname: disallowedTools missing Write exclusion"; }
+    echo "$rodt" | grep -qw Edit || { RO_LOCK_OK=false; fail "A8 read-only write-lock" "$roname: disallowedTools missing Edit exclusion"; }
+  done
+  for roname in w-implementer w-doc w-refactorer w-merger w-debugger w-planner; do
+    rof="$AGENT_DIR/$roname.md"
+    [ -f "$rof" ] || continue
+    rodt=$(grep -m1 -E '^disallowedTools:' "$rof" 2>/dev/null)
+    echo "$rodt" | grep -qw Write && { RO_LOCK_OK=false; fail "A8 write-capable guard" "$roname: Write wrongly blocked by disallowedTools"; }
+  done
+  [ "$RO_LOCK_OK" = true ] && pass "A8 read-only write-lock (6 classes disallowedTools excludes Write+Edit; 6 write-capable workers unblocked)"
 }
 
 # ═══════════════════════════════════════════════════

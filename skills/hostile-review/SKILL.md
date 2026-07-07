@@ -20,9 +20,12 @@ than plausibility.
 
 **Args**: `hostile-review [--scope methodology|technical|both] [--target <path>] [--reviewer-count 1|2] [--web-search-budget <N>] [--markscheme <path>] [--spec <path>] [--mode A|B]`
 
-**Execution mandate**: always run with **ultrathink AND /effort max**
-engaged. This subcommand is disabled without both. If invoked from a
-context where either is unavailable, escalate rather than proceed.
+**Execution mandate**: run at **maximum reasoning depth**. When dispatched
+as the `w-hostile-reviewer` agent this is guaranteed structurally by its
+`effort: max` frontmatter (doctrine delta 1: prompt thinking keywords are
+retired on adaptive-thinking models; depth is set via `effort:`, never a
+keyword). If invoked in a context where maximum effort cannot be assured,
+escalate rather than proceed shallow.
 
 `--scope` selects the review lens. `methodology` audits scientific
 design (hypotheses, variable isolation, falsifiability, triangulation,
@@ -385,7 +388,7 @@ recommended fix is a concrete action (not "consider X").
 
 ### Workflow
 
-1. Verify ultrathink + /effort max engaged; abort with ESC if not.
+1. Verify maximum effort is in effect (the `w-hostile-reviewer` agent ships `effort: max`); if depth cannot be assured, abort with ESC.
 2. Run the project discovery protocol; state project root,
    artefacts, mode, markscheme, spec, prior reviews at the top of
    your working notes.

@@ -19,7 +19,7 @@ The reviewer-dispatch resolver. Given an artifact class and stakes, it resolves 
 |---|---|---|---|---|
 | `code-small` (<=3 files) | w-reviewer | sonnet | `skills/code-quality/SKILL.md` | adversarial |
 | `code-large` / architectural | w-reviewer | opus | `skills/code-quality/SKILL.md` | adversarial |
-| `design` (frontend) | w-design-reviewer | sonnet (opus cross-page) | `skills/design-review/SKILL.md` | adversarial |
+| `frontend` | w-design-reviewer | sonnet (opus cross-page) | `skills/design-review/SKILL.md` | adversarial |
 | `methodology` / research / reports | `w-hostile-reviewer` (hostile-review gauntlet) | opus | `skills/hostile-review/SKILL.md` (standalone) | adversarial |
 | `infra` (`~/.claude` changes) | w-reviewer | sonnet / opus by scale | `skills/infra-security/SKILL.md` | adversarial |
 | `figures` | figure-validate (no LLM) | n/a | `skills/figure-validate/SKILL.md` | deterministic |
@@ -27,7 +27,7 @@ The reviewer-dispatch resolver. Given an artifact class and stakes, it resolves 
 
 Row notes:
 - `code-large`: opus follows the numeric-budget model split; a large diff exceeds the sonnet call band.
-- `design`: escalate to opus when the scope is cross-page consistency, not a single view.
+- `frontend`: escalate to opus when the scope is cross-page consistency, not a single view.
 - `methodology`: dispatch `w-hostile-reviewer` (it preloads the standalone `skills/hostile-review/SKILL.md` gauntlet via its `skills:` frontmatter), scope both over the changed files. Max-effort depth is satisfied STRUCTURALLY by that agent's `effort: max` frontmatter (doctrine delta 1: depth is structural, never a thinking keyword; keywords are retired on adaptive models). `/research hostile-review` still works via delegation for interactive use.
 - `infra`: sonnet for a small single rule/hook edit; opus for multi-file, settings-surface, or security-surface changes.
 - `figures`: deterministic gate, NO LLM reviewer. Run `/figure-validate`; the `/goal` predicates read the checker output directly. Severity maps via the verdict-schema deterministic-checker row (failed gate), not a VERDICT token.
@@ -60,7 +60,7 @@ Reserved for irreversible gates (DEC-R5). Triggered by `--panel` or by `--stakes
 ## Pre-dispatch announcement (print before Agent calls)
 
 ```
-Artifact-class: <code-small|code-large|design|methodology|infra|figures|test-integrity>
+Artifact-class: <code-small|code-large|frontend|methodology|infra|figures|test-integrity>
 Reviewer:       <w-reviewer|w-design-reviewer|hostile-review|figure-validate (deterministic)>
 Model:          <sonnet|opus>   Budget: <N> calls   maxTurns backstop: <M>
 Rubric:         <path>  (read-by-path | preloaded)

@@ -19,7 +19,7 @@ wf-design is a thin binding of `/converge` on binding **B1** (goal-sealed conver
 
 - **Artifact**: one design document, addressing all 13 steps of the `design` subcommand of `/research` (`research/references/design.md`) for a stated phenomenon.
 - **Producer (per round)**: a single producer worker that drafts (round 1) or revises against the punch list (later rounds) by running the `design` subcommand end to end; a design missing a step is not round-complete.
-- **Reviewer (per round)**: `w-hostile-reviewer`, resolved via `/review-dispatch` on the `methodology` artifact class (never the unrelated `design` row, which resolves to the frontend `w-design-reviewer`), scoped `--scope methodology`; a design has no implementation yet, so the technical gauntlet stays out of scope.
+- **Reviewer (per round)**: `w-hostile-reviewer`, resolved via `/review-dispatch` on the `methodology` artifact class, scoped `--scope methodology`; a design has no implementation yet, so the technical gauntlet stays out of scope.
 
 Loop mechanics (round order, round ledger, two-token protocol, caps, post-compaction requote) are inherited from `/converge`; this file states only the design-specific artifact/producer/reviewer slots and the goal predicate.
 
@@ -49,10 +49,10 @@ Print the block, then stop. The human pastes `/goal` to arm the engine.
 
 ## Constraints
 
-- **NEVER** pass `design` as the `/review-dispatch` artifact class; that row resolves to the frontend `w-design-reviewer`. Use `methodology`.
+- **NEVER** pass any artifact class other than `methodology` to `/review-dispatch` for this loop.
 - **NEVER** let the round-1 reviewer double as the sealing auditor; the seal is always a FRESH `w-hostile-reviewer` pass.
 - **NEVER** widen `--scope` beyond `methodology`; there is no implementation yet for the technical gauntlet to audit.
-- **NEVER** run the reviewer without ultrathink and max effort engaged; `hostile-review` disables itself otherwise.
+- **NEVER** run the seal audit at reduced depth; `w-hostile-reviewer` guarantees maximum depth structurally via its `effort: max` frontmatter (delta 1: thinking keywords are retired on adaptive models).
 - **NEVER** skip any of the 13 `/research design` steps; a design missing one is not round-complete.
 - **NEVER** arm `/goal` yourself; print the block and stop (DEC-R2).
 - **NEVER** invoke wf-design from a `w-*` worker; only meta and orch hold spawn authority.
