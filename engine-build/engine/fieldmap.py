@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -46,7 +47,7 @@ from engine.kernel.contracts import (  # noqa: F401
     _ROLE_FOR_TYPE,
     _role_for_type,
 )
-from engine.ssot import MISSING, SSOT
+from engine.ssot import SSOT
 
 # The generic coverage-classification cluster moved to engine.kernel.resolve
 # (W5.1 kernel extraction). Re-exported here so every pre-Stage-2 importer
@@ -72,15 +73,6 @@ from engine.kernel.resolve import (  # noqa: F401
     _missing_path_guess,
     _profile_answers_work_auth,
 )
-
-# parse_greenhouse's `source` tag (the bucket a question arrived in) -> the
-# canonical Section. Unrecognised sources fall back to STANDARD.
-_SECTION_FOR_SOURCE = {
-    "questions": Section.STANDARD,
-    "location_questions": Section.LOCATION,
-    "compliance": Section.COMPLIANCE_EEOC,
-    "demographic": Section.DEMOGRAPHIC,
-}
 
 # Vendor-native `type` string -> canonical FieldType. Covers the Greenhouse
 # HTTP-schema vocabulary (also what Lever's DOM controls and Ashby's own
@@ -129,72 +121,6 @@ def normalize_type(vendor_native: str) -> str:
     if key in _HIDDEN_TYPES:
         return ""
     return _TYPE_MAP.get(key, FieldType.TEXT)
-
-
-# Greenhouse's location-autocomplete widget (round-1 live-capture finding):
-# the composite question shares one label across three sub-fields keyed
-# `location`/`longitude`/`latitude`. All three are mechanically populated by
-# the portal's JS widget, never typed by the applicant, so they are matched
-# by KEY (the shared label carries no distinguishing text) ahead of the
-# generic label matchers. `location` still resolves to real applicant data
-# (the address); `longitude`/`latitude` are pure portal telemetry.
-_LOCATION_WIDGET_KEY = "location"
-_PORTAL_WIDGET_KEYS = {"longitude", "latitude"}
-
-# Greenhouse's paste-in resume/cover-letter textareas (`resume_text`,
-# `cover_letter_text`) share their label ("Resume"/"Resume/CV") with the
-# sibling FILE upload field, so label keyword matching alone cannot
-# distinguish them: they are matched by KEY, ahead of the generic label
-# matchers, same as `_LOCATION_WIDGET_KEY` above. Each maps to the ordered
-# SSOT dotted paths tried in turn; the first that resolves in the SSOT wins.
-_KEY_TEXT_PATHS = {
-    "resume_text": ("canned_answers.resume_text", "documents.cv_text"),
-    "cover_letter_text": ("canned_answers.cover_letter_text",
-                          "canned_answers.cover_letter"),
-}
-
-def greenhouse_questions_url(slug: str, job_id: str) -> str:
-    """The sanctioned schema endpoint (R-WT-8 D3): one GET, questions=true."""
-    return ("https://boards-api.greenhouse.io/v1/boards/"
-            f"{slug}/jobs/{job_id}?questions=true")
-
-
-def capture_greenhouse(slug: str, job_id: str, opener=None, *,
-                       timeout_s: float = 20, user_agent: str = UA,
-                       now: Callable[[], str] | None = None) -> FieldMap:
-    """Capture one Greenhouse posting's field map via the questions endpoint.
-
-    `opener` is any object exposing `.open(request, timeout=...)` (a urllib
-    opener in production, a fake in tests); a single polite GET with the honest
-    fetch-layer User-Agent is all the read costs. The response is the standard
-    Greenhouse job payload with a `questions` array (plus `location_questions`,
-    `compliance`, and a separate `demographic_questions` block); every one of
-    those becomes a Field, tagged by the section it came from.
-    """
-    opener = opener or urllib.request.build_opener()
-    url = greenhouse_questions_url(slug, job_id)
-    request = urllib.request.Request(url, headers={
-        "User-Agent": user_agent,
-        "Accept": "application/json",
-    })
-    response = opener.open(request, timeout=timeout_s)
-    raw = json.loads(_read_body_text(response))
-    return parse_greenhouse(raw, slug, job_id, now=now)
-
-
-def parse_greenhouse(raw: dict, slug: str, job_id: str, *,
-                     now: Callable[[], str] | None = None) -> FieldMap:
-    """Map a questions=true payload onto the canonical FieldMap (no I/O)."""
-    captured_at = (now or _utc_now_iso)()
-    posting_id = str(raw.get("id") or job_id)
-    fields: list[Field] = []
-    for section in ("questions", "location_questions", "compliance"):
-        source = "questions" if section == "questions" else section
-        for question in raw.get(section) or []:
-            fields.extend(_fields_from_question(question, source))
-    fields.extend(_fields_from_demographic(raw.get("demographic_questions")))
-    return FieldMap(vendor="greenhouse", posting_id=posting_id,
-                    captured_at=captured_at, fields=fields)
 
 
 # -- Workable schema capture (W5.4) --------------------------------------------
@@ -356,133 +282,20 @@ def coverage(fieldmap: FieldMap, ssot: SSOT, profile: dict,
     tests) keeps today's Greenhouse-widget behaviour. Stage 2/3 moves callers
     onto the kernel + registry injection and drops this shim. The kernel import
     is call-time to avoid an import cycle at fieldmap load.
+
+    The default resolver is read as a MODULE attribute (not a bare global) so it
+    resolves through the PEP 562 `__getattr__` re-export at the bottom of this
+    file -- the symbol now lives in `engine.providers.greenhouse.resolve`. A bare
+    `GREENHOUSE_WIDGET_RESOLVER` load would NameError (module `__getattr__` is not
+    consulted for a plain global lookup) and would also bypass a
+    `monkeypatch.setattr(fieldmap, "GREENHOUSE_WIDGET_RESOLVER", ...)` seam.
     """
     from engine.kernel.resolve import coverage as _kernel_coverage
-    return _kernel_coverage(
-        fieldmap, ssot, profile,
-        vendor_resolver=(vendor_resolver if vendor_resolver is not None
-                         else GREENHOUSE_WIDGET_RESOLVER))
-
-
-def _location_widget_path(fld: Field, ssot: SSOT) -> str | None:
-    """The Greenhouse location-autocomplete widget's `location` sub-field is
-    mechanically populated (never typed by the applicant): resolve it via the
-    identity address directly, ahead of the generic label matchers (its label
-    is shared with the manual-only `longitude`/`latitude` siblings, so label
-    keyword matching alone cannot distinguish it)."""
-    if fld.key.lower() != _LOCATION_WIDGET_KEY:
-        return None
-    # The real seeded SSOT (v1.4) keys this as identity.current_location;
-    # identity.address is kept as a legacy fallback for schema drift.
-    for candidate in ("identity.current_location", "identity.address"):
-        if ssot.get(candidate) is not MISSING:
-            return candidate
-    return None
-
-
-def _key_text_widget_path(fld: Field, ssot: SSOT) -> str | None:
-    """The Greenhouse `resume_text`/`cover_letter_text` paste textareas' label
-    ("Resume"/"Resume/CV") is shared with the sibling FILE upload field, so
-    label keyword matching alone cannot distinguish them: resolve by KEY
-    instead, same pattern as `_location_widget_path`. Returns None (MISSING)
-    when the SSOT carries neither candidate path -- never fabricated; the
-    owner seeds `canned_answers` then re-runs."""
-    candidates = _KEY_TEXT_PATHS.get(fld.key.lower())
-    if candidates is None:
-        return None
-    for candidate in candidates:
-        if ssot.get(candidate) is not MISSING:
-            return candidate
-    return None
-
-
-class _GreenhouseWidgetResolver:
-    """Greenhouse portal-widget resolver (moves to providers/greenhouse/resolve.py in Stage 2).
-
-    The `vendor_resolver` (spec 3.4) the kernel classifier consults for
-    Greenhouse's location-autocomplete `location` field, the paste-in
-    `resume_text`/`cover_letter_text` textareas, and the `longitude`/`latitude`
-    portal-telemetry fields. Each method MIRRORS the exact membership test the
-    pre-extraction `engine.fieldmap`/`engine.fill` code used: `manual_reason`
-    keeps `fld.key.lower()` (the old `_manual_only_reason` portal branch) and
-    `hidden_widget` keeps `(fld.key or "").lower()` (the old `_is_hidden_field`)."""
-    def location_path(self, fld, ssot): return _location_widget_path(fld, ssot)
-    def key_text_path(self, fld, ssot): return _key_text_widget_path(fld, ssot)
-    def manual_reason(self, fld):
-        return "portal-widget" if fld.key.lower() in _PORTAL_WIDGET_KEYS else ""
-    def hidden_widget(self, fld):
-        return (fld.key or "").lower() in _PORTAL_WIDGET_KEYS
-
-
-GREENHOUSE_WIDGET_RESOLVER = _GreenhouseWidgetResolver()
-
-
-def _fields_from_question(question: dict, source: str) -> list[Field]:
-    label = question.get("label", "")
-    required = bool(question.get("required", False))
-    section = _SECTION_FOR_SOURCE.get(source, Section.STANDARD)
-    decline_allowed = section in _DECLINE_SECTIONS
-    out: list[Field] = []
-    for sub in question.get("fields") or []:
-        field_type = sub.get("type", "input_text")
-        if field_type in _HIDDEN_TYPES:
-            continue  # input_hidden: portal tracking, never a user field
-        out.append(Field(
-            key=sub.get("name", ""),
-            label=label,
-            type=field_type,
-            required=False if decline_allowed else required,
-            options=_option_labels(sub.get("values")),
-            source=source,
-            locator=Locator(role=_role_for_type(field_type), name=label),
-            step_index=0,
-            conditional_on=None,
-            decline_allowed=decline_allowed,
-            norm_type=normalize_type(field_type),
-            section=section,
-        ))
-    return out
-
-
-def _fields_from_demographic(block) -> list[Field]:
-    """The demographic block is a separate object with its own question shape
-    (`answer_options`, type on the question). Captured but always manual-only,
-    and (W5) always `decline_allowed=True, required=False` regardless of what
-    the raw payload's own `required` flag says (R-WT-8 8: never auto-answered,
-    never blocking)."""
-    if not isinstance(block, dict):
-        return []
-    out: list[Field] = []
-    for question in block.get("questions") or []:
-        field_type = question.get("type", "multi_value_single_select")
-        out.append(Field(
-            key=f"demographic_{question.get('id', '')}",
-            label=question.get("label", ""),
-            type=field_type,
-            required=False,
-            options=_option_labels(question.get("answer_options")),
-            source="demographic",
-            locator=Locator(role=_role_for_type(field_type),
-                            name=question.get("label", "")),
-            step_index=0,
-            conditional_on=None,
-            decline_allowed=True,
-            norm_type=normalize_type(field_type),
-            section=Section.DEMOGRAPHIC,
-        ))
-    return out
-
-
-def _option_labels(values) -> list[str]:
-    if not isinstance(values, list):
-        return []
-    labels: list[str] = []
-    for value in values:
-        if isinstance(value, dict):
-            labels.append(str(value.get("label", value.get("value", ""))))
-        else:
-            labels.append(str(value))
-    return labels
+    if vendor_resolver is None:
+        vendor_resolver = getattr(sys.modules[__name__],
+                                  "GREENHOUSE_WIDGET_RESOLVER")
+    return _kernel_coverage(fieldmap, ssot, profile,
+                            vendor_resolver=vendor_resolver)
 
 
 def _read_body_text(response) -> str:
@@ -492,3 +305,53 @@ def _read_body_text(response) -> str:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# -- greenhouse capture + widget-resolver re-exports (W5.1 Stage 2a dedupe) ----
+# The Greenhouse schema capture/parse code MOVED to
+# `engine.providers.greenhouse.capture` and the portal-widget coverage resolver
+# to `engine.providers.greenhouse.resolve` (single-source: each name is now
+# defined ONCE, in the greenhouse package). They are re-exported here via a LAZY
+# module `__getattr__` (PEP 562), exactly mirroring `engine.providers.base`, so
+# every pre-Stage-2 importer keeps resolving them via `engine.fieldmap`
+# unchanged:
+#   * `engine.fill`'s load-time `from engine.fieldmap import
+#     GREENHOUSE_WIDGET_RESOLVER, capture_greenhouse` (a from-import IS attribute
+#     access, so it triggers this __getattr__);
+#   * `registry._capture_greenhouse`'s call-time `from engine.fieldmap import
+#     capture_greenhouse`;
+#   * this module's own `coverage()` default-resolver lookup, done as a MODULE
+#     attribute (`getattr(sys.modules[__name__], ...)`) precisely so it routes
+#     here -- a bare global would NameError;
+#   * the tests' `from engine.fieldmap import capture_greenhouse,
+#     parse_greenhouse` and `monkeypatch.setattr(fieldmap, "capture_greenhouse",
+#     ...)` (setattr binds a REAL attribute that shadows this __getattr__;
+#     teardown restores, after which __getattr__ serves the moved object again).
+# The import is DEFERRED to attribute-access time (NEVER at fieldmap load), so it
+# cannot cycle with `greenhouse.capture`, which does a load-time `from
+# engine.fieldmap import normalize_type, _HIDDEN_TYPES, _read_body_text,
+# _utc_now_iso` of the GENERIC helpers that stay defined here.
+
+_GREENHOUSE_CAPTURE_NAMES = frozenset({
+    "capture_greenhouse", "parse_greenhouse", "greenhouse_questions_url",
+    "_SECTION_FOR_SOURCE", "_fields_from_question", "_fields_from_demographic",
+    "_option_labels",
+})
+
+_GREENHOUSE_RESOLVE_NAMES = frozenset({
+    "GREENHOUSE_WIDGET_RESOLVER", "_GreenhouseWidgetResolver",
+    "_location_widget_path", "_key_text_widget_path",
+    "_KEY_TEXT_PATHS", "_LOCATION_WIDGET_KEY", "_PORTAL_WIDGET_KEYS",
+})
+
+
+def __getattr__(name):
+    if name in _GREENHOUSE_CAPTURE_NAMES:
+        import importlib
+        return getattr(
+            importlib.import_module("engine.providers.greenhouse.capture"), name)
+    if name in _GREENHOUSE_RESOLVE_NAMES:
+        import importlib
+        return getattr(
+            importlib.import_module("engine.providers.greenhouse.resolve"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
