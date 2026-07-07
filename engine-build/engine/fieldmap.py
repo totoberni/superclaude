@@ -28,15 +28,11 @@ and EEO/demographic fields are always manual-only and never auto-answered
 
 from __future__ import annotations
 
-import json
 import re
 import sys
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable
 
-from engine.fetch import UA
 from engine.kernel.contracts import (  # noqa: F401
     SCHEMA_VERSION,
     Field,
@@ -123,155 +119,6 @@ def normalize_type(vendor_native: str) -> str:
     return _TYPE_MAP.get(key, FieldType.TEXT)
 
 
-# -- Workable schema capture (W5.4) --------------------------------------------
-# Workable is greenhouse-CLASS: its per-posting apply schema is a public,
-# unauthenticated GET (no browser), so capture lives here beside
-# `capture_greenhouse` (NOT in browse.py -- there is no DOM to parse). The
-# response is a LIST of sections `[{name, fields:[...]}]`; each field carries a
-# stable vendor-native `type` string (frozen from the SPA bundle) that gets its
-# own role/canonical maps below (Workable's vocabulary is disjoint from
-# Greenhouse's `input_text`/`multi_value_*`, so `normalize_type` is not reused).
-
-# Workable native `type` -> ARIA role for the a11y locator hint. A `boolean`
-# renders as a yes/no radio fieldset (`fieldset[data-ui=QA_n]`), so its role is
-# "radio" -- which routes it to the fill()'s checkbox/radio HUMAN HAND-OFF, the
-# same Turnstile/hCaptcha defence Lever uses. An UNRECOGNISED type falls back
-# to "combobox" -- a HAND-OFF role, NOT a text box -- because never-send bias
-# means an unrecognised control is safer handed to a human than blindly typed
-# as free text; this DIVERGES from `_role_for_type`'s textbox fallback, whose
-# closed Greenhouse/Ashby vocabulary treats an unmapped entry as a genuine bug
-# rather than a live SPA widget this wave never sampled.
-_WORKABLE_ROLE_FOR_TYPE = {
-    "text": "textbox", "email": "textbox", "phone": "textbox",
-    "paragraph": "textbox", "date": "textbox", "number": "textbox",
-    "boolean": "radio", "file": "button",
-    "dropdown": "combobox", "multiple": "listbox",
-}
-
-# Workable native `type` -> canonical FieldType (kept separate from the shared
-# `_TYPE_MAP`, whose keys are the Greenhouse/Ashby vocabulary). `group` has no
-# scalar canonical type: a group is flattened into its subfields (below), so no
-# emitted Field is ever typed "group".
-_WORKABLE_TYPE_MAP = {
-    "text": FieldType.TEXT, "email": FieldType.EMAIL, "phone": FieldType.PHONE,
-    "paragraph": FieldType.LONGTEXT, "date": FieldType.DATE,
-    "number": FieldType.NUMBER, "boolean": FieldType.BOOLEAN,
-    "file": FieldType.FILE, "dropdown": FieldType.SINGLE_SELECT,
-    "multiple": FieldType.MULTI_SELECT,
-}
-
-
-def workable_form_url(job_id: str) -> str:
-    """The public per-posting apply-form schema endpoint (job_id IS the
-    shortcode): one GET, no auth, the full typed field schema."""
-    return f"https://apply.workable.com/api/v1/jobs/{job_id}/form"
-
-
-def capture_workable(slug: str, job_id: str, opener=None, *,
-                     timeout_s: float = 20, user_agent: str = UA,
-                     now: Callable[[], str] | None = None) -> FieldMap:
-    """Capture one Workable posting's field map via the public form endpoint.
-
-    `opener` is any object exposing `.open(request, timeout=...)` (a urllib
-    opener in production, a fake in tests), exactly like `capture_greenhouse`;
-    `slug` is accepted for signature parity but the schema URL is keyed on the
-    shortcode alone. The response is an array of sections, each with a typed
-    `fields` list mapped onto the canonical FieldMap by `parse_workable`.
-    """
-    opener = opener or urllib.request.build_opener()
-    url = workable_form_url(job_id)
-    request = urllib.request.Request(url, headers={
-        "User-Agent": user_agent,
-        "Accept": "application/json",
-    })
-    response = opener.open(request, timeout=timeout_s)
-    raw = json.loads(_read_body_text(response))
-    return parse_workable(raw, slug, job_id, now=now)
-
-
-def parse_workable(raw: list, slug: str, job_id: str, *,
-                   now: Callable[[], str] | None = None) -> FieldMap:
-    """Map a Workable form payload (list of sections) onto the canonical
-    FieldMap (no I/O). posting_id is the shortcode (the payload carries no id).
-
-    A `group` field (education/experience) is FLATTENED into its subfields,
-    keyed `<group>.<sub>` and marked non-fill (Part-1 hand-off, the group's
-    "+ Add" is never opened). A subfield is required only when BOTH the group
-    and the subfield are required, so an OPTIONAL group never contributes a
-    blocking required field (the group container itself is not emitted).
-    """
-    captured_at = (now or _utc_now_iso)()
-    fields: list[Field] = []
-    for section in raw or []:
-        if not isinstance(section, dict):
-            continue
-        for spec in section.get("fields") or []:
-            fields.extend(_workable_fields_from(spec))
-    return FieldMap(vendor="workable", posting_id=str(job_id),
-                    captured_at=captured_at, fields=fields)
-
-
-def _workable_fields_from(spec: dict) -> list[Field]:
-    """One raw Workable field -> one Field, or (for a group) its flattened
-    subfields. Section is CUSTOM for a job question (`QA_*`) or account
-    attribute (`CA_*`), STANDARD for every fixed id."""
-    if not isinstance(spec, dict):
-        return []
-    field_id = spec.get("id", "")
-    section = (Section.CUSTOM if str(field_id).startswith(("QA_", "CA_"))
-               else Section.STANDARD)
-    if (spec.get("type") or "") == "group":
-        group_required = bool(spec.get("required", False))
-        subs: list[Field] = []
-        for sub in spec.get("fields") or []:
-            subs.append(_workable_field(sub, section,
-                                        key_prefix=f"{field_id}.",
-                                        gate_required=group_required))
-        return subs
-    return [_workable_field(spec, section)]
-
-
-def _workable_field(spec: dict, section: str, *, key_prefix: str = "",
-                    gate_required: bool | None = None) -> Field:
-    native = spec.get("type", "text")
-    required = bool(spec.get("required", False))
-    if gate_required is not None:
-        # A group subfield only binds when the group itself is filled.
-        required = gate_required and required
-    accept = spec.get("supportedFileTypes")
-    return Field(
-        key=f"{key_prefix}{spec.get('id', '')}",
-        label=spec.get("label", ""),
-        type=native,
-        required=required,
-        options=_workable_choice_labels(spec.get("choices")),
-        source="workable_form",
-        locator=Locator(role=_workable_role_for_type(native),
-                        name=spec.get("label", "")),
-        step_index=0,
-        conditional_on=None,
-        decline_allowed=False,
-        max_length=spec.get("maxLength"),
-        accept_types=list(accept) if isinstance(accept, list) else None,
-        norm_type=_WORKABLE_TYPE_MAP.get(native, ""),
-        section=section,
-    )
-
-
-def _workable_role_for_type(native: str) -> str:
-    # Never-send bias: an unrecognised control is handed off, not blindly typed.
-    return _WORKABLE_ROLE_FOR_TYPE.get(native, "combobox")
-
-
-def _workable_choice_labels(choices) -> list[str]:
-    """Option labels for a Workable dropdown/multiple: `choices[].body` (the
-    SPA's own choice shape). No fixture exercises this yet -- the sampled forms
-    carry no dropdown/multiple field -- so it is defensive parity for capture."""
-    if not isinstance(choices, list):
-        return []
-    return [str(c.get("body", "")) for c in choices if isinstance(c, dict)]
-
-
 def coverage(fieldmap: FieldMap, ssot: SSOT, profile: dict,
              vendor_resolver=None) -> CoverageReport:
     """Classify every REQUIRED field of `fieldmap` against the SSOT (shim).
@@ -344,6 +191,23 @@ _GREENHOUSE_RESOLVE_NAMES = frozenset({
     "_KEY_TEXT_PATHS", "_LOCATION_WIDGET_KEY", "_PORTAL_WIDGET_KEYS",
 })
 
+# W5.1 Stage 2b: the Workable schema capture/parse code MOVED to
+# `engine.providers.workable.capture` (single-source: each name is now defined
+# ONCE, in the workable package) and is re-exported here via the SAME lazy
+# `__getattr__`, so `registry._capture_workable`'s call-time `from
+# engine.fieldmap import capture_workable` and the tests' `from engine.fieldmap
+# import capture_workable, parse_workable` / `monkeypatch.setattr(fieldmap,
+# "capture_workable", ...)` keep resolving via `engine.fieldmap` unchanged. The
+# import is DEFERRED to attribute-access time, so it cannot cycle with
+# `workable.capture`, which does a load-time `from engine.fieldmap import
+# _read_body_text, _utc_now_iso` of the GENERIC helpers that stay defined here.
+_WORKABLE_CAPTURE_NAMES = frozenset({
+    "capture_workable", "parse_workable", "workable_form_url",
+    "_WORKABLE_ROLE_FOR_TYPE", "_WORKABLE_TYPE_MAP",
+    "_workable_fields_from", "_workable_field", "_workable_role_for_type",
+    "_workable_choice_labels",
+})
+
 
 def __getattr__(name):
     if name in _GREENHOUSE_CAPTURE_NAMES:
@@ -354,4 +218,8 @@ def __getattr__(name):
         import importlib
         return getattr(
             importlib.import_module("engine.providers.greenhouse.resolve"), name)
+    if name in _WORKABLE_CAPTURE_NAMES:
+        import importlib
+        return getattr(
+            importlib.import_module("engine.providers.workable.capture"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
