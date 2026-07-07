@@ -44,6 +44,7 @@ from engine.fieldmap import (
     MISSING_STATUS,
     FieldMap,
 )
+from engine.kernel.resolve import coverage
 from engine.match import Scorer
 from engine.notify import (
     FakeTransport,
@@ -53,7 +54,7 @@ from engine.notify import (
     publish_digest,
 )
 from engine.profile_map import profile_from_real_ssot
-from engine.providers import registry
+from engine.providers import _registry, registry
 from engine.queue_sm import QueueStateMachine
 from engine.ssot import MISSING, SSOT
 
@@ -281,6 +282,22 @@ def _fieldmap_targets(queue, discovered_index, cap) -> list[tuple]:
     return [(item, discovered_index[item.identity_key]) for item in selected]
 
 
+def _coverage_with_vendor_resolver(fieldmap: FieldMap, ssot: SSOT,
+                                   profile: dict):
+    """Classify a field map's coverage through the kernel, injecting the
+    vendor's portal-widget resolver at the PIPELINE seam (spec 3.4).
+
+    The registry supplies the resolver per vendor: greenhouse contributes its
+    location/paste-textarea/telemetry widget resolver; every other vendor (and
+    an unregistered vendor) classifies with the kernel's no-op resolver. An
+    unknown vendor never crashes the run path -- `PROVIDERS.get` returns None,
+    so `coverage` falls back to its no-op default.
+    """
+    spec = _registry.PROVIDERS.get(fieldmap.vendor)
+    resolver = spec.vendor_resolver() if spec and spec.vendor_resolver else None
+    return coverage(fieldmap, ssot, profile, vendor_resolver=resolver)
+
+
 def _capture_one(item, posting, store, ssot, profile, opener) -> str:
     """Capture or reuse one field map for any capture-supported vendor.
 
@@ -298,7 +315,7 @@ def _capture_one(item, posting, store, ssot, profile, opener) -> str:
         store.put_fieldmap(vendor, posting.job_id, posting.updated_ts,
                            fieldmap.to_dict(), fieldmap.captured_at)
         bucket = "captured"
-    report = fieldmap.coverage(ssot, profile)
+    report = _coverage_with_vendor_resolver(fieldmap, ssot, profile)
     _attach_coverage(store, item, report)
     return bucket
 
@@ -618,7 +635,7 @@ def _resolve_field_data(drafted, store, ssot, profile, breakdown):
     """
     fieldmap = _lookup_fieldmap(store, drafted)
     if fieldmap is not None:
-        report = fieldmap.coverage(ssot, profile)
+        report = _coverage_with_vendor_resolver(fieldmap, ssot, profile)
         return _field_data_from_coverage(report, ssot), {
             "summary": report.summary_line(),
             "warnings": breakdown.get("ats_warnings") or [],
