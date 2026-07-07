@@ -4,12 +4,17 @@
 # Purpose: log worker exit + outcome. Pairs with the Agent-tool spawn record in
 # agent-outcome.sh (PostToolUse) — together they bracket every worker's lifetime.
 #
-# Two logs are written (fail-safe, never blocks):
+# Three writes happen here (fail-safe, never blocks), across two log files:
 #   1. _spawns.log      — legacy EXIT row, format unchanged for backward-compat
 #                         with statusline-telemetry.sh + spawn-log-summary.sh.
 #   2. _spawns-rich.log — rich EXIT row keyed on agent_id for the future
 #                         statusline-subagent-monitor (correlates to the SPAWN
 #                         row that agent-outcome.sh wrote with the same agent_id).
+#   3. _spawns.log      : STOP forensics row (wf-skills W1.6), a third row
+#                         type appended to the SAME file as (1). Marker STOP
+#                         (not EXIT) keeps existing consumers untouched; see
+#                         the STOP-row block near the end of this script for
+#                         column layout and the agent_id/duration derivation.
 #
 # DISCOVERED SubagentStop stdin schema (CC 2.1.159 zod, authoritative):
 #   hook_event_name        "SubagentStop"
@@ -79,5 +84,49 @@ printf '%s\t%s\t%s\tEXIT\t\t%s\n' \
   "$agent_type" \
   "$outcome" \
   >> "$rich_log" 2>/dev/null || true
+
+# ── STOP forensics row (_spawns.log) : wf-skills W1.6 ─────────────────────
+# Adds a third row type to the SAME _spawns.log file. Marker is STOP (not
+# EXIT) so statusline-telemetry.sh's col4=="EXIT" swarm-count logic and
+# spawn-log-summary.sh's col2/3 reads both stay untouched by this row type.
+# Columns 1-4 mirror the legacy EXIT row's positions (ts, parent, agent_type,
+# marker); columns 5-8 are new for this row type:
+#   <ts> <parent=""> <agent_type> STOP <agent_id> <duration_s> <status> <transcript_path>
+# agent_id falls back to the literal string "unknown" for THIS row only (the
+# rest of the script keeps its existing blank-default behavior unchanged).
+# duration_s is derived by pairing on agent_id against the SPAWN row that
+# agent-outcome.sh wrote to _spawns-rich.log (the only existing writer that
+# has agent_id at spawn time; 45-spawn-log.sh's START row in _spawns.log has
+# none, per its own comment, so pairing cannot happen inside _spawns.log
+# itself). status reuses the $outcome heuristic derived above; the envelope
+# carries no dedicated stop-reason field. Every step is defensive: any
+# missing piece collapses that column to empty, the row is still written,
+# exit stays 0.
+agent_id_display="$agent_id"
+[ -z "$agent_id_display" ] && agent_id_display="unknown"
+
+transcript_path=$(echo "$input" | jq -r '.agent_transcript_path // .transcript_path // ""' 2>/dev/null) || transcript_path=""
+
+duration_s=""
+if [ -n "$agent_id" ] && [ -f "$rich_log" ]; then
+  spawn_ts=$(awk -F'\t' -v aid="$agent_id" '$2==aid && $4=="SPAWN"{t=$1} END{print t}' "$rich_log" 2>/dev/null) || spawn_ts=""
+  if [ -n "$spawn_ts" ]; then
+    spawn_epoch=$(date -u -d "$spawn_ts" +%s 2>/dev/null) || spawn_epoch=""
+    stop_epoch=$(date -u -d "$ts" +%s 2>/dev/null) || stop_epoch=""
+    if [ -n "$spawn_epoch" ] && [ -n "$stop_epoch" ] && [ "$stop_epoch" -ge "$spawn_epoch" ] 2>/dev/null; then
+      duration_s=$(( stop_epoch - spawn_epoch ))
+    fi
+  fi
+fi
+
+printf '%s\t%s\t%s\tSTOP\t%s\t%s\t%s\t%s\n' \
+  "$ts" \
+  "" \
+  "$agent_type" \
+  "$agent_id_display" \
+  "$duration_s" \
+  "$outcome" \
+  "$transcript_path" \
+  >> "$log_file" 2>/dev/null || true
 
 exit 0

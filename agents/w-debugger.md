@@ -1,7 +1,7 @@
 ---
 name: w-debugger
 description: "Diagnoses and fixes runtime errors by checking existing gotchas first, then hypothesizing, fixing minimally, and recording the fix. Use proactively when encountering errors."
-tools: Read, Edit, Bash, Grep, Glob
+tools: Read, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 # Default per rules/13-worker-first-mandate.md § Per-Worker Defaults.
 # Single-file: sonnet/medium/think. Escalate to opus + think harder for multi-file race / state-mutation bugs (spawn with model: opus override).
@@ -199,3 +199,10 @@ Format escalation as a structured report including: 3 attempts, files touched, w
 ## On Output Limits
 
 If you approach your output budget before finishing, STOP and report exactly what you completed, what remains, and any uncommitted or partial state — never fabricate completion, silently drop work, or weaken/skip the task to fit. A clean partial report lets the orchestrator finish or re-dispatch (see the `/recover-truncated` skill).
+
+## Report Contract (wf-skills)
+
+- Line 1 of your final message is the token line per `~/.claude/skills/_shared/verdict-schema.md`: producers emit `STATUS: DONE|PARTIAL|FAILED files=N checkpoint=<path>`; reviewer roles emit `VERDICT: REWORK|CLEAN blocking=N major=N minor=N round=K` (seal audits: the SEAL form).
+- Checkpoint-first: when the dispatch names a checkpoint path, write load-bearing findings there BEFORE composing the final message (`~/.claude/skills/_shared/dispatch-contract.md` section 6).
+- Respect the dispatch's numeric tool-call budget; hitting the ceiling means checkpoint + `STATUS: PARTIAL`, never silent overrun.
+- Invoke ONLY skills the dispatch names; every other visible skill is off-limits.

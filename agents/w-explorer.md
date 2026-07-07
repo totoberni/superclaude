@@ -72,3 +72,8 @@ For single findings, concise prose with citations is fine:
 > The boid update loop is at `src/sim/example.cu:204` — kernel `update_positions` reads from `pos_in`, writes to `pos_out`, called once per frame from `main.cpp:312`.
 
 End with a verdict line: `FOUND` (with N hits), `PARTIAL` (some hits, some gaps), or `NOT_FOUND` (with patterns tried).
+
+## Report Contract (wf-skills)
+
+- Line 1 of your final message is the token line per `~/.claude/skills/_shared/verdict-schema.md`: producers emit `STATUS: DONE|PARTIAL|FAILED files=N checkpoint=<path>`; reviewer roles emit `VERDICT: REWORK|CLEAN blocking=N major=N minor=N round=K` (seal audits: the SEAL form).
+- Respect the dispatch's numeric tool-call budget; hitting the ceiling means checkpoint + `STATUS: PARTIAL`, never silent overrun.

@@ -66,9 +66,13 @@ Execute each component and capture its /100 score.
 
 Run `/hook-health` at the appropriate tier. Capture the `/100` score.
 
+`score_hook` additionally scores a **subagent-stop ledger-hook facet** (wf-skills W1.6; `hook-health.sh` predates the hook). `hooks/subagent-stop.sh` must exist, be `bash -n` clean, and contain the STOP forensics row writer (a `printf` emitting a literal `\tSTOP\t` column). Bounded penalty (cap 6): adds an assertion, only lowers the hook score on regression, never relaxes a `hook-health` criterion.
+
 #### 1b. Skill Health (13%)
 
 Run `/skill-health all`. Capture the `/100` score.
+
+`score_skill` additionally scores a **`_shared` rubric-block facet** (wf-skills W1.2). The 8 shared blocks (`verdict-schema`, `dispatch-contract`, `helper-prompt`, `retro-evidence`, `diff-target`, `discovery-protocol`, `search-budget`, `memory-distill`) are not skills (no SKILL.md) so `skill-health.sh` cannot see them: each must exist and carry a `Consumed by:` line. Bounded penalty (cap 8, `+1` per missing block, `+1` per block lacking `Consumed by:`); adds an assertion, only lowers on regression.
 
 #### 1c. Memory Health (18%)
 
@@ -110,6 +114,8 @@ Inline scoring — no separate skill needed:
 | Deny rules >= 5 | 15 | `jq '.permissions.deny \| length' ~/.claude/settings.json` |
 | No orphan agents | 10 | Agent file without matching comms dir (excluding workers/base) |
 | No broken symlinks | 10 | `find ~/.claude/agents/ -maxdepth 1 -type l ! -exec test -e {} \; -print` |
+
+`score_settings` additionally applies a **wf-skills grants + fleet report-contract facet** (W1.1 / W1.7) on top of the 100-point award structure above (structure untouched; penalty applied on top, floored at 0). `meta.md` must grant SendMessage/Skill/WebSearch/WebFetch and `orch.md` SendMessage/Skill on their `tools:` lines; each `w-*.md` must carry exactly one `## Report Contract (wf-skills)` section. Bounded penalty (cap 10): adds an assertion, only lowers the score on regression, never relaxes or reweights an existing criterion.
 
 ```bash
 CLAUDE="$HOME/.claude"

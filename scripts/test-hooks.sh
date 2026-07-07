@@ -1149,6 +1149,35 @@ else
   fail "P7.4 subagent-stop.sh" "rc=$P74_RC stderr=$(cat "$SCRATCH/iso.stderr" 2>/dev/null)"
 fi
 
+# P7.4a: subagent-stop.sh STRUCTURE (wf-skills W1.6): bash -n clean AND contains the
+#        STOP forensics row writer. The STOP row is a printf whose format carries a
+#        literal '\tSTOP\t' column (marker STOP, not EXIT, so statusline-telemetry's
+#        col4=="EXIT" swarm-count logic stays untouched). Pure static check.
+SUBSTOP_STRUCT_OK=true
+bash -n "$SUBSTOP_HOOK" 2>/dev/null || SUBSTOP_STRUCT_OK=false
+grep -qE 'printf .*\\tSTOP\\t' "$SUBSTOP_HOOK" 2>/dev/null || SUBSTOP_STRUCT_OK=false
+if [ "$SUBSTOP_STRUCT_OK" = true ]; then
+  pass "P7.4a subagent-stop.sh (bash -n clean + STOP forensics row writer present)"
+else
+  fail "P7.4a subagent-stop.sh" "bash -n failed or STOP-row writer missing"
+fi
+
+# P7.4b: subagent-stop.sh BEHAVIOR (wf-skills W1.6): a full SubagentStop envelope
+#        appends a STOP forensics row (marker STOP, keyed on agent_id) to _spawns.log
+#        in ADDITION to the legacy EXIT row. Runs under ISO_HOME so the production
+#        ~/.claude/comms/_spawns.log is NEVER touched (the hook's log path is
+#        $HOME-relative — env override is the sanctioned redirect, same as P7.3).
+rm -f "$ISO_HOME/.claude/comms/_spawns.log" 2>/dev/null
+P74B_IN='{"hook_event_name":"SubagentStop","session_id":"hooktest-ss-074b","agent_id":"stopfor074b","agent_type":"w-tester","last_assistant_message":"VERDICT: CLEAN blocking=0 major=0 minor=0 round=1"}'
+run_iso_hook "$SUBSTOP_HOOK" "$P74B_IN"
+P74B_RC=$?
+if iso_failsafe_ok "$P74B_RC" \
+   && grep -qP '\tSTOP\t.*stopfor074b' "$ISO_HOME/.claude/comms/_spawns.log" 2>/dev/null; then
+  pass "P7.4b subagent-stop.sh (STOP forensics row written to _spawns.log, exit 0)"
+else
+  fail "P7.4b subagent-stop.sh" "rc=$P74B_RC no STOP row for agent_id (log=$(cat "$ISO_HOME/.claude/comms/_spawns.log" 2>/dev/null))"
+fi
+
 # P7.5: stop.sh — Stop event → snapshots ephemeral state, exit 0.
 STOP_HOOK="$HOOK_DIR/stop.sh"
 run_iso_hook "$STOP_HOOK" '{"session_id":"hooktest-stop-075","hook_event_name":"Stop"}'

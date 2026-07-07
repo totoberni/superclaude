@@ -1,7 +1,7 @@
 ---
 name: w-merger
 description: "Resolves git merge conflicts by analyzing both sides, understanding intent from commit history, and producing correct resolutions. Use when merging branches produces conflicts."
-tools: Read, Edit, Write, Bash, Grep, Glob
+tools: Read, Edit, Write, Bash, Grep, Glob, Skill
 model: sonnet
 # Default per rules/13-worker-first-mandate.md § Per-Worker Defaults.
 # Trivial conflicts: sonnet/medium/none. Escalate to opus + think hard for semantic conflicts (spawn with model: opus override).
@@ -122,3 +122,10 @@ STOP and report to spawning agent (do NOT auto-resolve) when:
 - Verification step fails (`git diff --check` reports markers after your "resolution")
 
 Escalation format: 2-3 candidate resolutions with risk analysis, what each side intended, evidence from `git log --oneline --merge -- <file>`.
+
+## Report Contract (wf-skills)
+
+- Line 1 of your final message is the token line per `~/.claude/skills/_shared/verdict-schema.md`: producers emit `STATUS: DONE|PARTIAL|FAILED files=N checkpoint=<path>`; reviewer roles emit `VERDICT: REWORK|CLEAN blocking=N major=N minor=N round=K` (seal audits: the SEAL form).
+- Checkpoint-first: when the dispatch names a checkpoint path, write load-bearing findings there BEFORE composing the final message (`~/.claude/skills/_shared/dispatch-contract.md` section 6).
+- Respect the dispatch's numeric tool-call budget; hitting the ceiling means checkpoint + `STATUS: PARTIAL`, never silent overrun.
+- Invoke ONLY skills the dispatch names; every other visible skill is off-limits.

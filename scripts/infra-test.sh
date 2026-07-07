@@ -356,6 +356,55 @@ test_agents() {
     fi
   done
   [ "$ALL_SIZE" = true ] && pass "A5 orch agents under 300 lines"
+
+  # A6: wf-skills delegation grants (W1.1). meta.md must grant SendMessage, Skill,
+  # WebSearch, WebFetch on its tools line; orch.md must grant SendMessage, Skill.
+  # Real failing path: a frontmatter rewrite that drops any grant fails here.
+  local GRANTS_OK=true META_TOOLS ORCH_TOOLS g
+  META_TOOLS=$(grep -m1 -E '^tools:' "$AGENT_DIR/meta.md" 2>/dev/null)
+  ORCH_TOOLS=$(grep -m1 -E '^tools:' "$AGENT_DIR/orch.md" 2>/dev/null)
+  for g in SendMessage Skill WebSearch WebFetch; do
+    echo "$META_TOOLS" | grep -qw "$g" || { GRANTS_OK=false; fail "A6 grants" "meta.md tools missing $g"; }
+  done
+  for g in SendMessage Skill; do
+    echo "$ORCH_TOOLS" | grep -qw "$g" || { GRANTS_OK=false; fail "A6 grants" "orch.md tools missing $g"; }
+  done
+  [ "$GRANTS_OK" = true ] && pass "A6 wf-skills grants (meta: SendMessage/Skill/WebSearch/WebFetch; orch: SendMessage/Skill)"
+
+  # A7: wf-skills fleet contract (W1.7). Each w-*.md must carry EXACTLY ONE
+  # "## Report Contract (wf-skills)" section; the Skill tool must be on the tools
+  # line of the 9 reasoning workers and ABSENT from w-committer and w-explorer
+  # (read-only / low-reasoning classes must not gain Skill). Real failing paths:
+  # a dropped/duplicated contract section, a missing Skill grant on a reasoning
+  # worker, or Skill leaking onto a read-only class.
+  local FLEET_OK=true W_COUNT=0 wf wname wcc wtl
+  local REASONING=" w-reviewer w-design-reviewer w-doc w-implementer w-debugger w-tester w-merger w-refactorer w-planner "
+  local NOSKILL=" w-committer w-explorer "
+  for wf in "$AGENT_DIR"/w-*.md; do
+    [ -f "$wf" ] || continue
+    [ -L "$wf" ] && continue
+    W_COUNT=$((W_COUNT + 1))
+    wname=$(basename "$wf" .md)
+    wcc=$(grep -c '^## Report Contract (wf-skills)$' "$wf" 2>/dev/null)
+    if [ "$wcc" != "1" ]; then
+      FLEET_OK=false
+      fail "A7 fleet contract" "$wname: expected exactly 1 report-contract section, found $wcc"
+    fi
+    wtl=$(grep -m1 -E '^tools:' "$wf" 2>/dev/null)
+    case "$REASONING" in
+      *" $wname "*)
+        echo "$wtl" | grep -qw Skill || { FLEET_OK=false; fail "A7 fleet Skill grant" "$wname (reasoning worker): Skill missing from tools"; } ;;
+    esac
+    case "$NOSKILL" in
+      *" $wname "*)
+        echo "$wtl" | grep -qw Skill && { FLEET_OK=false; fail "A7 fleet Skill grant" "$wname (read-only class): Skill must be ABSENT from tools"; } ;;
+    esac
+  done
+  if [ "$W_COUNT" -lt 11 ]; then
+    FLEET_OK=false
+    fail "A7 fleet contract" "expected >= 11 w-*.md agents, found $W_COUNT"
+  fi
+  [ "$FLEET_OK" = true ] && pass "A7 wf-skills fleet ($W_COUNT workers: 1 report-contract each; Skill on 9 reasoning, absent from w-committer/w-explorer)"
 }
 
 # ═══════════════════════════════════════════════════
@@ -369,9 +418,15 @@ test_skills() {
   local SKILL_COUNT=0
   for skill_dir in "$SKILL_DIR"/*/; do
     [ -d "$skill_dir" ] || continue
-    SKILL_COUNT=$((SKILL_COUNT + 1))
     local NAME
     NAME=$(basename "$skill_dir")
+    # Underscore-prefixed dirs are structural support libraries, NOT skills, and have
+    # no SKILL.md by design (e.g. _shared holds the 8 wf-skills rubric blocks; _archive
+    # holds retired skills). They are validated by their own dedicated checks (S6 covers
+    # _shared). Mirrors the _archive skip already used in test_agents/test_comms. Every
+    # REAL skill dir is still fully required to have a SKILL.md below.
+    case "$NAME" in _*) continue ;; esac
+    SKILL_COUNT=$((SKILL_COUNT + 1))
     if [ ! -f "$skill_dir/SKILL.md" ]; then
       ALL_EXIST=false
       fail "S1 SKILL.md exists" "$NAME: missing SKILL.md"
@@ -464,6 +519,53 @@ test_skills() {
     fi
   done
   [ "$ALL_AGENTONLY" = true ] && pass "S5 agent-only skills all referenced"
+
+  # S6: wf-skills _shared rubric-block integrity (W1.2). The 8 shared blocks must all
+  # exist, each must declare a "Consumed by:" provenance line, and none may contain an
+  # em-dash (U+2014) or en-dash (U+2013) byte (writing-style rule). Real failing paths:
+  # a deleted block, a block missing its Consumed-by pointer, or a stray dash byte.
+  local SHARED_DIR="$SKILL_DIR/_shared"
+  local SHARED_BLOCKS="verdict-schema dispatch-contract helper-prompt retro-evidence diff-target discovery-protocol search-budget memory-distill"
+  local SHARED_OK=true sb sbf
+  for sb in $SHARED_BLOCKS; do
+    sbf="$SHARED_DIR/$sb.md"
+    if [ ! -f "$sbf" ]; then
+      SHARED_OK=false
+      fail "S6 _shared integrity" "$sb.md: missing"
+      continue
+    fi
+    grep -q 'Consumed by:' "$sbf" 2>/dev/null || { SHARED_OK=false; fail "S6 _shared integrity" "$sb.md: no 'Consumed by:' line"; }
+    if grep -qP '\xe2\x80[\x93\x94]' "$sbf" 2>/dev/null; then
+      SHARED_OK=false
+      fail "S6 _shared integrity" "$sb.md: contains em-dash/en-dash byte"
+    fi
+  done
+  [ "$SHARED_OK" = true ] && pass "S6 _shared integrity (8 blocks exist, Consumed-by present, dash-clean)"
+
+  # S7: wf-skills new loop-driver skills (W1.4/W1.5). converge + review-dispatch must
+  # exist with frontmatter carrying name/description/user-invocable, must NOT carry a
+  # disable-model-invocation key (DEC-R3 flip), and must be em/en-dash clean. Real
+  # failing paths: a missing skill, a dropped required key, a re-added flip key, a dash.
+  local NEW_SKILLS="converge review-dispatch"
+  local NEWSK_OK=true ns nsf nsfm
+  for ns in $NEW_SKILLS; do
+    nsf="$SKILL_DIR/$ns/SKILL.md"
+    if [ ! -f "$nsf" ]; then
+      NEWSK_OK=false
+      fail "S7 new skills" "$ns/SKILL.md: missing"
+      continue
+    fi
+    nsfm=$(sed -n '2,/^---$/p' "$nsf" 2>/dev/null)
+    echo "$nsfm" | grep -qE '^name:'            || { NEWSK_OK=false; fail "S7 new skills" "$ns: frontmatter missing name:"; }
+    echo "$nsfm" | grep -qE '^description:'      || { NEWSK_OK=false; fail "S7 new skills" "$ns: frontmatter missing description:"; }
+    echo "$nsfm" | grep -qE '^user-invocable:'   || { NEWSK_OK=false; fail "S7 new skills" "$ns: frontmatter missing user-invocable:"; }
+    echo "$nsfm" | grep -qE '^disable-model-invocation:' && { NEWSK_OK=false; fail "S7 new skills" "$ns: disable-model-invocation must be absent (DEC-R3)"; }
+    if grep -qP '\xe2\x80[\x93\x94]' "$nsf" 2>/dev/null; then
+      NEWSK_OK=false
+      fail "S7 new skills" "$ns: contains em-dash/en-dash byte"
+    fi
+  done
+  [ "$NEWSK_OK" = true ] && pass "S7 new skills (converge + review-dispatch: name/description/user-invocable, no flip key, dash-clean)"
 }
 
 # ═══════════════════════════════════════════════════
@@ -886,6 +988,67 @@ test_skm() {
 }
 
 # ═══════════════════════════════════════════════════
+# WF: wf-skills Scripts Tests (comms + swarm + decontaminate)
+# ═══════════════════════════════════════════════════
+# New comms/swarm/firewall scripts landed by the wf-skills campaign (W1.3). All
+# behavioral probes are hermetic: fixtures live under a throwaway $TMPDIR dir and
+# the production broker DB / comms ledgers are NEVER touched or written.
+test_wfscripts() {
+  section "wf-skills Scripts Tests (WF)"
+
+  local WF_SCRIPTS="comms/hcom-send.sh comms/broker-queries.sh decontaminate.sh swarm/recover-worker.sh"
+
+  # WF1: all four scripts exist, are executable, and pass bash -n.
+  local WF1_OK=true s sp
+  for s in $WF_SCRIPTS; do
+    sp="$SCRIPT_DIR/$s"
+    if [ ! -f "$sp" ]; then WF1_OK=false; fail "WF1 scripts" "$s: missing"; continue; fi
+    [ -x "$sp" ] || { WF1_OK=false; fail "WF1 scripts" "$s: not executable"; }
+    bash -n "$sp" 2>/dev/null || { WF1_OK=false; fail "WF1 scripts" "$s: bash -n failed"; }
+  done
+  [ "$WF1_OK" = true ] && pass "WF1 wf-skills scripts (4 exist, executable, bash -n clean)"
+
+  local WF_TMP
+  WF_TMP=$(mktemp -d "${TMPDIR:-/tmp}/infratest-wf.XXXXXX" 2>/dev/null)
+
+  # WF2: broker-queries.sh refuses an unrecognized verb with exit 1 (documented
+  # read-only contract: "Any other verb is refused"). Hermetic: runs under a
+  # throwaway HOME with a STUB broker.db so the default (verb-refusal) branch is
+  # exercised WITHOUT reading the production broker (sqlite3 is never invoked for a
+  # bogus verb, so the stub file's contents are irrelevant).
+  local WF2_HOME="$WF_TMP/bh"
+  mkdir -p "$WF2_HOME/.claude/comms"
+  : > "$WF2_HOME/.claude/comms/.broker.db"
+  HOME="$WF2_HOME" bash "$SCRIPT_DIR/comms/broker-queries.sh" __infratest_bogus_verb__ >/dev/null 2>&1
+  local WF2_RC=$?
+  if [ "$WF2_RC" -eq 1 ]; then
+    pass "WF2 broker-queries.sh (unrecognized verb refused, exit 1)"
+  else
+    fail "WF2 broker-queries.sh" "bogus verb exit $WF2_RC (expected 1)"
+  fi
+
+  # WF3: decontaminate.sh firewall grep — a temp file containing a forbidden token
+  # exits 1; a clean temp file exits 0. Fixtures MUST live outside ~/.claude/ (in
+  # $TMPDIR), because decontaminate.sh EXEMPTS anything under ~/.claude/ — a fixture
+  # there would false-pass. Never writes into the repo or any production ledger.
+  local WF_FIX="$WF_TMP/fix"
+  mkdir -p "$WF_FIX"
+  printf 'this line references agent-memory internals\n' > "$WF_FIX/dirty.txt"
+  printf 'this is ordinary clean project prose\n' > "$WF_FIX/clean.txt"
+  bash "$SCRIPT_DIR/decontaminate.sh" "$WF_FIX/dirty.txt" >/dev/null 2>&1
+  local WF3_DIRTY=$?
+  bash "$SCRIPT_DIR/decontaminate.sh" "$WF_FIX/clean.txt" >/dev/null 2>&1
+  local WF3_CLEAN=$?
+  if [ "$WF3_DIRTY" -eq 1 ] && [ "$WF3_CLEAN" -eq 0 ]; then
+    pass "WF3 decontaminate.sh (forbidden-token file exit 1, clean file exit 0)"
+  else
+    fail "WF3 decontaminate.sh" "dirty=$WF3_DIRTY (expect 1), clean=$WF3_CLEAN (expect 0)"
+  fi
+
+  rm -rf "$WF_TMP" 2>/dev/null
+}
+
+# ═══════════════════════════════════════════════════
 # Run selected tests
 # ═══════════════════════════════════════════════════
 
@@ -904,9 +1067,10 @@ elif [ -n "$COMPONENT" ]; then
     comms|C)            test_comms ;;
     matrix|memory|M)    test_matrix ;;
     skm|SK)             test_skm ;;
+    wfscripts|wf|WF)    test_wfscripts ;;
     *)
       echo "Unknown component: $COMPONENT"
-      echo "Valid: hooks, settings, agents, skills, rules, comms, matrix, skm"
+      echo "Valid: hooks, settings, agents, skills, rules, comms, matrix, skm, wfscripts"
       exit 2
       ;;
   esac
@@ -920,6 +1084,7 @@ else
   test_comms
   test_matrix
   test_skm
+  test_wfscripts
 fi
 
 END_TIME=$(date +%s)

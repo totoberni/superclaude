@@ -110,13 +110,66 @@ score_hook() {
   local s="$SCRIPTS/hook-health.sh"
   if [ ! -f "$s" ]; then echo "hook-health.sh missing"; echo "SCORE: 0/100"; return; fi
   # Depth invariant: always run hook-health at its deepest.
-  bash "$s" --deep
+  local hk_out hk_score
+  hk_out=$(bash "$s" --deep)
+  hk_score=$(printf '%s\n' "$hk_out" | extract_score)
+
+  # ── subagent-stop swarm-ledger hook facet (wf-skills W1.6) ──
+  # hook-health.sh predates the SubagentStop ledger hook, so its integrity is scored
+  # here (symmetric with score_mem's .memory.db facet). The hook must exist, be bash -n
+  # clean, and contain the STOP forensics row writer (a printf emitting a literal
+  # '\tSTOP\t' column). This ADDS an assertion and only LOWERS the hook score when the
+  # surface regresses (missing hook / broken syntax / dropped STOP writer); it never
+  # relaxes or reweights any existing hook-health criterion. Bounded penalty (cap 6).
+  local ss_hook="$CLAUDE/hooks/subagent-stop.sh" ssh_penalty=0 ssh_detail
+  if [ ! -f "$ss_hook" ]; then
+    ssh_detail="MISSING -> -6"; ssh_penalty=6
+  else
+    local ssh_syntax=1 ssh_block=1
+    bash -n "$ss_hook" >/dev/null 2>&1 || { ssh_syntax=0; ssh_penalty=$((ssh_penalty + 3)); }
+    grep -qE 'printf .*\\tSTOP\\t' "$ss_hook" 2>/dev/null || { ssh_block=0; ssh_penalty=$((ssh_penalty + 3)); }
+    ssh_detail="exists, bash-n=$ssh_syntax, STOP-writer=$ssh_block -> -$ssh_penalty"
+  fi
+  [ "$ssh_penalty" -gt 6 ] && ssh_penalty=6
+  local final_hook=$((hk_score - ssh_penalty))
+  [ "$final_hook" -lt 0 ] && final_hook=0
+
+  printf '%s\n' "$hk_out" | grep -v '^SCORE:'
+  echo "Hook subagent-stop facet: $ssh_detail (hook-health=$hk_score)"
+  echo "SCORE: $final_hook/100"
 }
 
 score_skill() {
   local s="$SCRIPTS/skill-health.sh"
   if [ ! -f "$s" ]; then echo "skill-health.sh missing"; echo "SCORE: 0/100"; return; fi
-  bash "$s" all
+  local sk_out sk_score
+  sk_out=$(bash "$s" all)
+  sk_score=$(printf '%s\n' "$sk_out" | extract_score)
+
+  # ── _shared rubric-block presence facet (wf-skills W1.2) ──
+  # skill-health.sh scores per-skill SKILL.md structure; the 8 shared rubric blocks
+  # under skills/_shared/ are NOT skills (no SKILL.md), so they are invisible to it.
+  # Score their presence + Consumed-by provenance here. This ADDS an assertion and only
+  # LOWERS the skill score when the surface regresses (a deleted block or one missing
+  # its Consumed-by pointer); it never relaxes a skill-health criterion. Bounded penalty
+  # (cap 8): +1 per missing block, +1 per block lacking a Consumed-by line.
+  local shared_dir="$CLAUDE/skills/_shared" shp_penalty=0 shp_missing=0 shp_noprov=0 blk blkf
+  for blk in verdict-schema dispatch-contract helper-prompt retro-evidence diff-target discovery-protocol search-budget memory-distill; do
+    blkf="$shared_dir/$blk.md"
+    if [ ! -f "$blkf" ]; then
+      shp_missing=$((shp_missing + 1))
+    elif ! grep -q 'Consumed by:' "$blkf" 2>/dev/null; then
+      shp_noprov=$((shp_noprov + 1))
+    fi
+  done
+  shp_penalty=$((shp_missing + shp_noprov))
+  [ "$shp_penalty" -gt 8 ] && shp_penalty=8
+  local final_skill=$((sk_score - shp_penalty))
+  [ "$final_skill" -lt 0 ] && final_skill=0
+
+  printf '%s\n' "$sk_out" | grep -v '^SCORE:'
+  echo "Skill _shared facet: missing=$shp_missing, no-Consumed-by=$shp_noprov (of 8) -> -$shp_penalty (skill-health=$sk_score)"
+  echo "SCORE: $final_skill/100"
 }
 
 score_mem() {
@@ -437,7 +490,34 @@ score_settings() {
   BROKEN=$(find "$CLAUDE/agents/" -maxdepth 1 -type l ! -exec test -e {} \; -print 2>/dev/null | wc -l)
   [ "$BROKEN" -eq 0 ] && SCORE=$((SCORE + 10))
 
-  echo "Settings+Agents detail: jsonOK, frontmatter=$VALID/$TOTAL, models=$MODELS_OK/$MODELS_TOTAL, deny=$DENY, orphans=$ORPHANS, brokenSymlinks=$BROKEN, sandboxOK=$SANDBOX_OK, laxSecrets=$LAX_SECRETS"
+  # ── wf-skills grants + fleet report-contract facet (W1.1 / W1.7) ──
+  # This ADDS an assertion to the agents component and only LOWERS the score when the
+  # surface regresses (a dropped delegation grant or a missing/duplicated report-contract
+  # section); it never relaxes or reweights any existing criterion. The 100-point award
+  # structure above is untouched; the penalty is applied on top and floored at 0.
+  # meta.md must grant SendMessage/Skill/WebSearch/WebFetch; orch.md SendMessage/Skill;
+  # each w-*.md must carry EXACTLY ONE "## Report Contract (wf-skills)" section. Bounded
+  # penalty (cap 10).
+  local wf_penalty=0 wf_grants_bad=0 wf_contract_bad=0 g mt ot wfa wcc
+  mt=$(grep -m1 -E '^tools:' "$CLAUDE/agents/meta.md" 2>/dev/null)
+  ot=$(grep -m1 -E '^tools:' "$CLAUDE/agents/orch.md" 2>/dev/null)
+  for g in SendMessage Skill WebSearch WebFetch; do
+    echo "$mt" | grep -qw "$g" || wf_grants_bad=$((wf_grants_bad + 1))
+  done
+  for g in SendMessage Skill; do
+    echo "$ot" | grep -qw "$g" || wf_grants_bad=$((wf_grants_bad + 1))
+  done
+  for wfa in "$CLAUDE"/agents/w-*.md; do
+    [ -f "$wfa" ] || continue
+    wcc=$(grep -c '^## Report Contract (wf-skills)$' "$wfa" 2>/dev/null)
+    [ "$wcc" = "1" ] || wf_contract_bad=$((wf_contract_bad + 1))
+  done
+  wf_penalty=$((wf_grants_bad + wf_contract_bad))
+  [ "$wf_penalty" -gt 10 ] && wf_penalty=10
+  SCORE=$((SCORE - wf_penalty))
+  [ "$SCORE" -lt 0 ] && SCORE=0
+
+  echo "Settings+Agents detail: jsonOK, frontmatter=$VALID/$TOTAL, models=$MODELS_OK/$MODELS_TOTAL, deny=$DENY, orphans=$ORPHANS, brokenSymlinks=$BROKEN, sandboxOK=$SANDBOX_OK, laxSecrets=$LAX_SECRETS, wfGrantsBad=$wf_grants_bad, wfContractBad=$wf_contract_bad, wfPenalty=-$wf_penalty"
   echo "SCORE: $SCORE/100"
 }
 
