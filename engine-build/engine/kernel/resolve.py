@@ -372,12 +372,6 @@ _PHOTO_LABEL_RE = re.compile(
 # `avatar`/`photo` keys that merely share a stray token.
 _COVER_LETTER_RE = re.compile(r"cover[\s_-]*letter", re.I)
 
-# Posting-language tokens recognised as Italian. Retained only for the
-# `_is_italian` helper (re-exported through `engine.fill`); the CV/photo choice
-# no longer consults posting language -- see `_select_cv`, the owner-ratified
-# structural rule (2026-07-07).
-_ITALIAN_LANGS = frozenset({"it", "it-it", "italian", "italiano"})
-
 
 def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
                    assets: FillAssets | None = None,
@@ -419,7 +413,7 @@ def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
     has_photo_field = _form_has_photo_field(fieldmap)
     for fld in fieldmap.fields:
         if _is_upload_field(fld):
-            _resolve_upload(fld, resolved, assets, posting_lang, has_photo_field)
+            _resolve_upload(fld, resolved, assets, has_photo_field)
             continue
         if (fld.type or "").lower() == "boolean":
             _resolve_boolean(fld, resolved, ssot, profile, resolver)
@@ -476,7 +470,7 @@ _COVER_LETTER_SKIP_REASON = (
 
 
 def _resolve_upload(fld, resolved: ResolvedValues, assets: FillAssets | None,
-                    posting_lang: str, has_photo_field: bool) -> None:
+                    has_photo_field: bool) -> None:
     if assets is None:
         # Pre-override contract: no assets -> file fields are skipped, not filled.
         resolved.skipped.append((fld.key, "file-upload"))
@@ -516,10 +510,6 @@ def _select_cv(assets: FillAssets, has_photo_field: bool):
     return ("cv-ats", assets.cv_ats,
             "photo field present; plain ATS CV, photo attached to the photo "
             "field")
-
-
-def _is_italian(posting_lang: str) -> bool:
-    return str(posting_lang or "").strip().lower() in _ITALIAN_LANGS
 
 
 # -- checkbox (boolean) resolution ---------------------------------------------

@@ -12,10 +12,10 @@ canonical dotted path, `engine.providers.ashby.capture`):
                    Turnstile checkbox/radio HUMAN HAND-OFF)
   - `.capture`  -- graphql schema capture/parse (moved out of `engine.browse`)
 
-Ashby has NO `.resolve` submodule: `resolve_values` INHERITS greenhouse's
-hole-fix and structural CV/photo choice (a load-bearing safety rule with ONE home
-in `greenhouse.resolve`), so `.fill.resolve_values` just delegates there rather
-than duplicating it -- exactly as workable does. The `.discover` adapter move
+Ashby has NO `.resolve` submodule: `.fill.resolve_values` delegates to the
+kernel's `engine.kernel.resolve.resolve_values`, which carries the hole-fix e
+structural CV/photo choice (a load-bearing safety rule single-sourced in the
+kernel), so no vendor duplicates it -- exactly as lever/workable do. The `.discover` adapter move
 lands in Stage 2e WITH the eager-light `_registry.py`, because the CURRENT
 `registry.py` loads at `engine.providers.__init__` time and from-imports the
 adapter out of `engine.discover`; the adapter's plugin home is only reachable

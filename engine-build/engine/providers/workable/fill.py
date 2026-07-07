@@ -31,10 +31,11 @@ it earns its own module rather than reusing one wholesale:
    lands in `required_unfilled` -> NOT_COMPLETE, never a silent skip and never a
    reckless auto-click that could trip Turnstile mid-form.
 
-INHERITS FROM greenhouse: `resolve_values` -- the hole-fix and structural CV/photo
-choice (an image/photo upload field present on the FORM -> the ATSI CV variant +
-photo; absent -> the plain ATS CV). Workable's `avatar` field is exactly such a
-photo field, so a Workable form that exposes it takes the ATSI variant. The rule
+CV/PHOTO: `resolve_values` delegates to `engine.kernel.resolve.resolve_values`
+-- the hole-fix e structural CV/photo choice (an image/photo upload field present
+on the FORM -> the plain ATS CV and the photo attaches; absent -> the
+embedded-photo ATSI CV variant). Workable's `avatar` field is exactly such a
+photo field, so a Workable form that exposes it takes the plain ATS CV. The rule
 keys purely on the FORM's structure (`fill._form_has_photo_field`), never posting
 text, so it is single-sourced in greenhouse and delegated to here rather than
 duplicated -- a load-bearing safety rule with one home.
@@ -59,8 +60,8 @@ LAZY-IMPORT INVARIANT (mirrors greenhouse.py / lever.py / base.py / registry.py)
 this module must not import patchright / `engine.browse` at load time so the daily
 poller (which imports `engine.providers` -> only `protocol` + `registry`) stays
 browser-free. `engine.fill`'s private helpers are imported lazily inside the
-functions that need them. Importing `engine.providers.greenhouse` at load time is
-safe: greenhouse itself is browser-free.
+functions that need them. Workable imports NO sibling vendor package
+(import-disjoint, W5.1 Stage 3a): the CV/photo rule comes from the kernel.
 """
 
 from __future__ import annotations

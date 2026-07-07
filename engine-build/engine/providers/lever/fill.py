@@ -43,9 +43,10 @@ completeness SEMANTICS differ, for the two reasons Lever is a distinct reference
    skip and never a reckless auto-click. Native `<select>` is unaffected:
    `select_option` is not a click and hCaptcha does not intercept it.
 
-INHERITS FROM greenhouse: `resolve_values` -- the hole-fix and structural CV/photo
-choice (an image/photo upload field present on the FORM -> the ATSI CV variant +
-photo; absent -> the plain ATS CV). That rule is vendor-agnostic (it is keyed on
+CV/PHOTO: `resolve_values` delegates to `engine.kernel.resolve.resolve_values`
+-- the hole-fix e structural CV/photo choice (an image/photo upload field present
+on the FORM -> the plain ATS CV and the photo attaches to that field; absent ->
+the embedded-photo ATSI CV variant). That rule is vendor-agnostic (it is keyed on
 `fill._form_has_photo_field`, a form-structure signal, never posting text, per
 anti-injection finding 5), so it is single-sourced in greenhouse and delegated
 to here rather than duplicated -- a load-bearing safety rule with one home.
@@ -63,9 +64,9 @@ LAZY-IMPORT INVARIANT (mirrors greenhouse.py / base.py / registry.py): this
 module must not import patchright / `engine.browse` at load time so the daily
 poller (which imports `engine.providers` -> only `protocol` + `registry`) stays
 browser-free. `engine.fill`'s private helpers are imported lazily inside the
-functions that need them, matching base.py's `_fill()` accessor pattern.
-Importing `engine.providers.greenhouse` at load time is safe: greenhouse itself
-is browser-free (it imports only base / registry / the fill dataclasses).
+functions that need them, matching base.py's `_fill()` accessor pattern. Lever
+imports NO sibling vendor package (import-disjoint, W5.1 Stage 3a): the CV/photo
+rule comes from the kernel, not from greenhouse.
 
 SEEDED FIELD-NAME REFERENCE (workpls lever.js, Apache-2.0; W5 spec section 3):
 Lever's stable native submission names are `name`, `email`, `phone`,
