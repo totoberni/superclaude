@@ -22,7 +22,7 @@ session-env/
 shell-snapshots/
 paste-cache/
 downloads/
-nudge/
+/nudge/
 tasks/
 todos/
 teams/
