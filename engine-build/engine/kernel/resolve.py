@@ -18,10 +18,11 @@ through a duck-typed `vendor_resolver` (methods `location_path`, `key_text_path`
 `manual_reason`, `hidden_widget`). The default `_NOOP_RESOLVER` is a vendor with
 no quirks; `engine.fieldmap.GREENHOUSE_WIDGET_RESOLVER` supplies the Greenhouse
 behaviour and is injected by the `engine.fieldmap.coverage` /
-`engine.fill.resolve_values` / `engine.fill._completeness` shims until Stage 2
-moves callers onto the kernel + provider registry directly.
+`engine.fill.resolve_values` / `engine.fill._completeness` shims. Stage 2
+relocates the adapter to the greenhouse plugin; Stage 3 moves callers onto the
+kernel + registry-built injection and dissolves those shims.
 
-Layering: imports only stdlib + `engine.kernel.*` + `engine.ssot` (the ssot line).
+Layering: imports only stdlib + `engine.kernel.*`.
 Nothing from `engine.fieldmap` / `engine.fill` / `engine.providers` / pipeline
 ever enters here -- enforced by the kernel-layering invariant test with NO
 allowlist entry for this module.

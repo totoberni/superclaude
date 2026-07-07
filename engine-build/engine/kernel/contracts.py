@@ -4,10 +4,12 @@ The dataclasses/enums shared by every vendor plugin and by the kernel's own
 fill/fieldmap/discover modules. This is the base of the kernel: at LOAD time it
 imports only the standard library, so any provider or kernel module can depend
 on it without pulling in classification/automation logic. One documented,
-transitional CALL-TIME seam remains (`FieldMap.coverage` delegates to
-`engine.fieldmap.coverage`; see that method) until W5.1 Stage 2 moves the
-generic `coverage()` classifier into `engine.kernel.resolve`, after which this
-module references nothing outside the kernel.
+transitional CALL-TIME seam remains: `FieldMap.coverage` delegates to the
+`engine.fieldmap.coverage` shim (which default-injects the Greenhouse widget
+resolver for today's method callers; see the method comment). The classifier
+itself already lives in `engine.kernel.resolve` (moved in W5.1 Stage 1); the
+seam dies in Stage 3 when callers inject a registry-built vendor_resolver,
+after which this module references nothing outside the kernel.
 
 Moved verbatim from `engine.fieldmap` / `engine.fill` / `engine.discover`
 (W5.1 stage 0); each origin module now re-exports these names via a shim
