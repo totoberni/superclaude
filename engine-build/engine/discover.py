@@ -16,50 +16,11 @@ from __future__ import annotations
 
 import html
 import re
-from dataclasses import dataclass, field
-from typing import Protocol
 
+from engine.kernel.contracts import Posting, SourceAdapter  # noqa: F401
 from engine.store import Store
 
 
-@dataclass
-class Posting:
-    vendor: str
-    company_slug: str
-    job_id: str
-    title: str
-    locations: list[str]
-    remote_flag: bool
-    comp: str | None
-    posted_ts: str | None
-    updated_ts: str | None
-    url: str
-    # Matching needs posting text; the spec's minimal field list plus this one
-    # description field (fed by content=true / descriptionPlain) drives match.py.
-    description: str = ""
-    listed: bool = True
-    unverified: bool = False
-    # ToS-readable greenhouse fields (jobs/{id}?questions=true shape); safe
-    # defaults so every existing construction site and the other adapters
-    # (Lever/Ashby/Workable) keep working unchanged. Only GreenhouseAdapter
-    # populates these today.
-    departments: list[str] = field(default_factory=list)
-    offices: list[str] = field(default_factory=list)
-    requisition_id: str | None = None
-    application_deadline: str | None = None
-    company_name: str | None = None
-
-    def identity_key(self) -> str:
-        """`company|role|url` per 7.4 (papers would key on DOI/arXiv instead)."""
-        return f"{self.company_slug}|{self.title}|{self.url}"
-
-
-class SourceAdapter(Protocol):
-    vendor: str
-    is_authoritative: bool
-
-    def parse(self, raw, company_slug: str) -> list[Posting]:
-        ...
 
 
 class GreenhouseAdapter:

@@ -31,58 +31,27 @@ from __future__ import annotations
 import json
 import re
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 
 from engine.fetch import UA
+from engine.kernel.contracts import (  # noqa: F401
+    SCHEMA_VERSION,
+    Field,
+    FieldMap,
+    FieldType,
+    Locator,
+    Section,
+    _ROLE_FOR_TYPE,
+    _role_for_type,
+)
 from engine.ssot import MISSING, SSOT
-
-SCHEMA_VERSION = "2"
 
 # The three classification verdicts a required field can receive.
 ANSWERABLE = "answerable"
 MISSING_STATUS = "missing"
 MANUAL_ONLY = "manual-only"
-
-
-class FieldType:
-    """The unified FieldSchema type vocabulary (W5 angle-5 spec, section 3).
-
-    `Field.norm_type` (schema_version 2+) carries one of these, independent of
-    the vendor-native `type` string kept in `Field.type` for backward
-    compatibility with fill.py/coverage's existing string matching.
-    """
-
-    TEXT = "TEXT"
-    EMAIL = "EMAIL"
-    PHONE = "PHONE"
-    URL = "URL"
-    NUMBER = "NUMBER"
-    DATE = "DATE"
-    LONGTEXT = "LONGTEXT"
-    SINGLE_SELECT = "SINGLE_SELECT"
-    MULTI_SELECT = "MULTI_SELECT"
-    BOOLEAN = "BOOLEAN"
-    FILE = "FILE"
-
-
-class Section:
-    """The unified FieldSchema section vocabulary (W5 angle-5 spec, section 3).
-
-    `Field.section` (schema_version 2+) classifies where a field came from.
-    COMPLIANCE_EEOC/DEMOGRAPHIC/VOLUNTARY fields are never auto-answered
-    (R-WT-8 8) and are marked `decline_allowed=True, required=False` at
-    capture time.
-    """
-
-    STANDARD = "STANDARD"
-    CUSTOM = "CUSTOM"
-    LOCATION = "LOCATION"
-    COMPLIANCE_EEOC = "COMPLIANCE_EEOC"
-    DEMOGRAPHIC = "DEMOGRAPHIC"
-    VOLUNTARY = "VOLUNTARY"
-
 
 # Sections that are always declinable and never block a fill/coverage run.
 _DECLINE_SECTIONS = frozenset({
@@ -96,20 +65,6 @@ _SECTION_FOR_SOURCE = {
     "location_questions": Section.LOCATION,
     "compliance": Section.COMPLIANCE_EEOC,
     "demographic": Section.DEMOGRAPHIC,
-}
-
-# Greenhouse field `type` string -> ARIA role for the a11y locator hint. The
-# HTTP questions endpoint carries no DOM, so the locator is a best-effort role
-# name that the (later) browser layer can reuse; the label is the accessible
-# name. Unknown types fall back to a text box.
-_ROLE_FOR_TYPE = {
-    "input_text": "textbox",
-    "input_file": "button",
-    "textarea": "textbox",
-    "multi_value_single_select": "combobox",
-    "multi_value_multi_select": "listbox",
-    "boolean": "checkbox",
-    "yes_no": "combobox",
 }
 
 # Vendor-native `type` string -> canonical FieldType. Covers the Greenhouse
@@ -264,119 +219,6 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
      ["canned_answers.accommodations"]),
     (("name",), ["identity.name", "identity.full_name"]),
 ]
-
-
-@dataclass
-class Locator:
-    role: str
-    name: str
-
-
-@dataclass
-class Field:
-    key: str
-    label: str
-    type: str
-    required: bool
-    options: list[str]
-    source: str
-    locator: Locator
-    step_index: int | None = None
-    conditional_on: dict | None = None
-    # -- W5 additive extension (schema_version 2): every new field defaults so
-    # every existing construction site (browse.py, tests, fixtures) keeps
-    # working unchanged, and every v1-shaped cached FieldMap deserializes via
-    # these same defaults (see `from_dict`).
-    decline_allowed: bool = False
-    max_length: int | None = None
-    accept_types: list[str] | None = None
-    norm_type: str = ""
-    section: str = "STANDARD"
-
-    def to_dict(self) -> dict:
-        return {
-            "key": self.key,
-            "label": self.label,
-            "type": self.type,
-            "required": self.required,
-            "options": list(self.options),
-            "source": self.source,
-            "locator": {"role": self.locator.role, "name": self.locator.name},
-            "step_index": self.step_index,
-            "conditional_on": self.conditional_on,
-            "decline_allowed": self.decline_allowed,
-            "max_length": self.max_length,
-            "accept_types": (list(self.accept_types)
-                            if self.accept_types is not None else None),
-            "norm_type": self.norm_type,
-            "section": self.section,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "Field":
-        """Reconstruct a `Field` from a dict of either shape.
-
-        Tolerant by construction (`.get(key, <dataclass default>)` for every
-        W5 field): a schema_version-1 cached row that never carried
-        decline_allowed/max_length/accept_types/norm_type/section
-        deserializes cleanly via these defaults, no store-side migration or
-        version branch needed.
-        """
-        locator = data.get("locator") or {}
-        accept_types = data.get("accept_types")
-        raw_step = data.get("step_index")
-        return cls(
-            key=data["key"],
-            label=data["label"],
-            type=data["type"],
-            required=bool(data["required"]),
-            options=list(data.get("options") or []),
-            source=data["source"],
-            locator=Locator(role=locator.get("role", ""),
-                            name=locator.get("name", "")),
-            step_index=int(raw_step) if raw_step is not None else None,
-            conditional_on=data.get("conditional_on"),
-            decline_allowed=bool(data.get("decline_allowed", False)),
-            max_length=data.get("max_length"),
-            accept_types=(list(accept_types) if accept_types is not None
-                         else None),
-            norm_type=data.get("norm_type", ""),
-            section=data.get("section", "STANDARD"),
-        )
-
-
-@dataclass
-class FieldMap:
-    vendor: str
-    posting_id: str
-    captured_at: str
-    fields: list[Field] = field(default_factory=list)
-    schema_version: str = SCHEMA_VERSION
-
-    def to_dict(self) -> dict:
-        return {
-            "vendor": self.vendor,
-            "posting_id": self.posting_id,
-            "schema_version": self.schema_version,
-            "captured_at": self.captured_at,
-            "fields": [f.to_dict() for f in self.fields],
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "FieldMap":
-        return cls(
-            vendor=data["vendor"],
-            posting_id=str(data["posting_id"]),
-            captured_at=data["captured_at"],
-            schema_version=data.get("schema_version", SCHEMA_VERSION),
-            fields=[Field.from_dict(f) for f in data.get("fields", [])],
-        )
-
-    def required_fields(self) -> list[Field]:
-        return [f for f in self.fields if f.required]
-
-    def coverage(self, ssot: SSOT, profile: dict) -> "CoverageReport":
-        return coverage(self, ssot, profile)
 
 
 @dataclass
@@ -804,10 +646,6 @@ def _option_labels(values) -> list[str]:
         else:
             labels.append(str(value))
     return labels
-
-
-def _role_for_type(field_type: str) -> str:
-    return _ROLE_FOR_TYPE.get(field_type, "textbox")
 
 
 def _read_body_text(response) -> str:

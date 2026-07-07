@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -67,6 +66,13 @@ from engine.fieldmap import (
     _classify_field,
     _missing_path_guess,
     capture_greenhouse,
+)
+from engine.kernel.contracts import (  # noqa: F401
+    FieldValue,
+    FillAssets,
+    FillReport,
+    FillSafetyError,
+    ResolvedValues,
 )
 from engine.providers import registry
 from engine.ssot import MISSING, SSOT
@@ -171,186 +177,6 @@ _ITALIAN_LANGS = frozenset({"it", "it-it", "italian", "italiano"})
 _PHOTO_EXT_ORDER = (".png", ".jpeg", ".jpg")
 
 
-class FillSafetyError(RuntimeError):
-    """A safety invariant of the dry run was about to be violated.
-
-    Raised (never swallowed) when a click would hit a submit-like control, when
-    the page navigated during the fill (possible submission/redirect), or when
-    any other STOP-SHORT-OF-APPLYING guard trips. Distinct from a per-field fill
-    error (which is fail-soft): a FillSafetyError aborts the whole fill.
-    """
-
-
-# -- upload assets -------------------------------------------------------------
-
-@dataclass
-class FillAssets:
-    """The whitelisted upload assets: the two CVs, the profile photo, and an
-    optional cover-letter document.
-
-    Every path is optional and runtime-verified: `verified()` drops any path
-    that does not exist on disk to None, so an absent asset becomes a skip
-    ("asset missing: <name>") rather than a crash (fail-soft, per the owner
-    override). The upload whitelist is EXACTLY these resolved paths;
-    `_safe_upload` refuses to upload anything else.
-    """
-    cv_ats: Path | None = None
-    cv_atsi: Path | None = None
-    photo: Path | None = None
-    cover_letter: Path | None = None
-
-    def verified(self) -> "FillAssets":
-        """A copy whose non-existent asset paths are collapsed to None."""
-        return FillAssets(cv_ats=_existing(self.cv_ats),
-                          cv_atsi=_existing(self.cv_atsi),
-                          photo=_existing(self.photo),
-                          cover_letter=_existing(self.cover_letter))
-
-    def is_whitelisted(self, path) -> bool:
-        """True iff `path` resolves to one of the (existing) asset paths."""
-        target = _resolved(path)
-        if target is None:
-            return False
-        return any(_resolved(asset) == target
-                   for asset in (self.cv_ats, self.cv_atsi, self.photo,
-                                 self.cover_letter)
-                   if asset is not None)
-
-
-def _existing(path) -> Path | None:
-    if path is None:
-        return None
-    candidate = Path(path).expanduser()
-    return candidate if candidate.exists() else None
-
-
-def _resolved(path) -> Path | None:
-    if path is None:
-        return None
-    try:
-        return Path(path).expanduser().resolve()
-    except (OSError, RuntimeError):
-        return None
-
-
-# -- resolved fill values ------------------------------------------------------
-
-@dataclass
-class FieldValue:
-    """One concrete field to fill: the rendered value plus the locator hints and
-    type needed to reach and drive the control (fill_form gets no fieldmap).
-
-    For an upload field the `value` is the chosen asset `Path`; `asset` records
-    which asset ("cv-ats" | "cv-atsi" | "photo") and `upload_reason` records why
-    (owner calibration signal for the CV selection rule)."""
-    key: str
-    label: str
-    type: str
-    locator: Locator
-    value: str | bool | list | Path
-    asset: str | None = None
-    upload_reason: str | None = None
-
-
-@dataclass
-class ResolvedValues:
-    """The deterministic output of `resolve_values`: the fillable fields (with
-    the metadata fill_form needs) plus the fields skipped with their reasons.
-
-    `.values` exposes the documented `dict[str, str|bool|list]` key->value view;
-    fill_form consumes the richer `.fields`/`.skipped` directly.
-    """
-    fields: list[FieldValue] = field(default_factory=list)
-    skipped: list[tuple[str, str]] = field(default_factory=list)
-
-    @property
-    def values(self) -> dict[str, str | bool | list]:
-        return {fv.key: fv.value for fv in self.fields}
-
-
-@dataclass
-class FillReport:
-    """The evidence of one fill, with a completeness denominator (criterion 1).
-
-    `fillable_total` (Y) is every non-hidden field on the field map; `filled`
-    (X) is how many were actually populated AND readback-CONFIRMED (uploads
-    included) -- a value the page silently rejected, or an upload a custom
-    widget swallowed without ever wiring the native input, never increments X.
-    `required_unfilled` (Z) lists every required field left unfilled for an
-    UNJUSTIFIED reason -- this INCLUDES a required file-upload field whose
-    asset is missing or was never attached, AND a required field whose
-    readback did not confirm the value (a value the page silently rejected),
-    so a mandatory answer or CV/photo that never made it onto the page can
-    never read as done. A REQUIRED field whose SSOT answer resolves to
-    empty/whitespace is likewise a gap (nothing landed), never a confirmed
-    fill. `justified_skips` counts non-hidden fields left unfilled for a
-    justified reason: an EEO/demographic skip ONLY when the field is a GENUINE
-    demographic field (a demographic / EEOC / voluntary section, or
-    decline_allowed=True -- regardless of requiredness, decline is always
-    allowed there) -- a REQUIRED field is never EEO-justified merely because
-    its label carries an EEO keyword when it is not really a demographic-
-    section field -- or a file-upload/asset-missing skip on an OPTIONAL field
-    only. `complete` is True iff there are no required gaps (Z == 0); an
-    optional field left unfilled for any other reason does not, by itself,
-    force NOT COMPLETE -- the X/Y counts already surface that partial coverage,
-    and a required gap is the hard fail.
-    """
-    vendor: str
-    company: str
-    posting_id: str
-    fillable_total: int
-    filled: int
-    required_unfilled: list[dict]
-    justified_skips: int
-    uploads: list[dict]
-    skipped: list[tuple[str, str]]
-    readback_mismatches: list[dict]
-    validation_errors: list[dict]
-    url_unchanged: bool
-    screenshot: str
-    ts: str
-
-    @property
-    def complete(self) -> bool:
-        return not self.required_unfilled
-
-    def caption(self) -> str:
-        """The owner-mandated notification caption (criterion 1), exact shape:
-
-            <Vendor> (<company>): X/Y fields filled, Z required unfilled - COMPLETE
-
-        with "NOT COMPLETE" whenever Z > 0 (a required field -- including a
-        required file-upload with a missing asset, or ANY required field whose
-        readback did not confirm the value took -- was left unfilled for a
-        non-justified reason). An optional field left unfilled does not, on
-        its own, flip this to NOT COMPLETE. The evidence publisher sends THIS
-        as the ntfy message, so the verdict rides the notification the owner
-        reads.
-        """
-        status = "COMPLETE" if self.complete else "NOT COMPLETE"
-        return (f"{self.vendor.capitalize()} ({self.company}): "
-                f"{self.filled}/{self.fillable_total} fields filled, "
-                f"{len(self.required_unfilled)} required unfilled - {status}")
-
-    def to_dict(self) -> dict:
-        return {
-            "vendor": self.vendor,
-            "company": self.company,
-            "posting_id": self.posting_id,
-            "fillable_total": self.fillable_total,
-            "filled": self.filled,
-            "required_unfilled": list(self.required_unfilled),
-            "justified_skips": self.justified_skips,
-            "uploads": list(self.uploads),
-            "complete": self.complete,
-            "caption": self.caption(),
-            "skipped": [[key, reason] for key, reason in self.skipped],
-            "readback_mismatches": self.readback_mismatches,
-            "validation_errors": self.validation_errors,
-            "url_unchanged": self.url_unchanged,
-            "screenshot": self.screenshot,
-            "ts": self.ts,
-        }
 
 
 # -- deterministic value resolution --------------------------------------------
