@@ -75,28 +75,7 @@ from engine.kernel.capture_toolkit import (  # noqa: F401
     _node_text, _VOID_TAGS, _dig, _response_url, _now, _utc_now_iso,
 )
 
-ASHBY_SOURCE = "ashby_graphql"
 LEVER_SOURCE = "lever_dom"
-
-# The SPA response we intercept: the substring that marks Ashby's own typed-form
-# graphql call among every response the posting page fires.
-_ASHBY_GRAPHQL_MARKER = "non-user-graphql"
-
-# Ashby ApiJobPosting field `type` -> canonical FieldMap type. The a11y role is
-# then derived from the canonical type via fieldmap's single source of truth
-# (_role_for_type), so browser and HTTP captures never drift on role naming.
-_ASHBY_TYPE_MAP = {
-    "String": "input_text",
-    "LongText": "textarea",
-    "Email": "input_text",
-    "Phone": "input_text",
-    "Number": "input_text",
-    "Boolean": "boolean",
-    "ValueSelect": "multi_value_single_select",
-    "MultiValueSelect": "multi_value_multi_select",
-    "File": "input_file",
-    "Date": "input_text",
-}
 
 # Lever base-field `name` -> canonical human label (round-3 finding): the live
 # apply page renders every base field TWICE, an invisible mirror carrying the
@@ -123,32 +102,8 @@ _LEVER_BASE_LABELS = {
 }
 
 
-def ashby_application_url(slug: str, job_id: str) -> str:
-    return f"https://jobs.ashbyhq.com/{slug}/{job_id}/application"
-
-
 def lever_apply_url(slug: str, job_id: str) -> str:
     return f"https://jobs.lever.co/{slug}/{job_id}/apply"
-
-
-def capture_ashby(slug: str, job_id: str, browser_factory=None, *,
-                  now: Callable[[], str] | None = None) -> FieldMap:
-    """Capture one Ashby posting's field map via graphql response interception.
-
-    Loads the posting page once, intercepts the `non-user-graphql` response that
-    carries the ApiJobPosting form schema, and maps its field definitions onto
-    the canonical FieldMap (`source="ashby_graphql"`). `browser_factory` is an
-    injectable returning a context manager that yields a page (a real headless
-    chromium page in production, a fake in tests); None builds the real one.
-    """
-    factory = browser_factory or _default_browser_page
-    url = ashby_application_url(slug, job_id)
-    with factory() as page:
-        captured: list = []
-        page.on("response", lambda response: _maybe_capture(captured, response))
-        page.goto(url, wait_until="networkidle", timeout=_TIMEOUT_MS)
-        posting = _select_ashby_schema(captured, slug, job_id)
-    return _parse_ashby(posting, slug, job_id, now=now)
 
 
 def capture_lever(slug: str, job_id: str, browser_factory=None, *,
@@ -166,188 +121,6 @@ def capture_lever(slug: str, job_id: str, browser_factory=None, *,
         page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT_MS)
         html_source = page.content()
     return _parse_lever(html_source, slug, job_id, now=now)
-
-
-# -- Ashby graphql parse -------------------------------------------------------
-
-def _maybe_capture(captured: list, response) -> None:
-    if _ASHBY_GRAPHQL_MARKER in _response_url(response):
-        captured.append(response)
-
-
-def _select_ashby_schema(responses: list, slug: str, job_id: str) -> dict:
-    """Pick the intercepted graphql response carrying the ApiJobPosting form.
-
-    The typed schema lives at `data.jobPosting.applicationForm` (live-confirmed
-    2026-07-03); `data.jobPosting.applicationFormDefinition` is probed second
-    as a one-release fallback for postings still served the pre-migration
-    shape. Whichever key is present and truthy on a response's `jobPosting`
-    wins. If none of the matching-URL responses carry either key, the key set
-    actually seen on each is recorded so the raise below names both paths
-    tried alongside exactly what shape came back.
-    """
-    seen_keys: list[list[str]] = []
-    for response in responses:
-        try:
-            body = response.json()
-        except Exception:
-            continue
-        posting = _dig(body, "data", "jobPosting")
-        if not isinstance(posting, dict):
-            continue
-        seen_keys.append(sorted(posting.keys()))
-        if posting.get("applicationForm") or posting.get("applicationFormDefinition"):
-            return posting
-    raise CaptureShapeError(
-        f"ashby: no {_ASHBY_GRAPHQL_MARKER!r} response for {slug}/{job_id} "
-        "carried data.jobPosting.applicationForm or the fallback "
-        "data.jobPosting.applicationFormDefinition "
-        f"(saw {len(responses)} matching-URL response(s); jobPosting keys "
-        f"seen: {seen_keys}); the graphql shape has drifted or the form "
-        "never loaded")
-
-
-def _parse_ashby(posting: dict, slug: str, job_id: str, *,
-                 now: Callable[[], str] | None = None) -> FieldMap:
-    form = posting.get("applicationForm")
-    if isinstance(form, dict) and form:
-        fields = _parse_ashby_form_render(form, slug, job_id)
-    else:
-        definition = posting.get("applicationFormDefinition")
-        definition = definition if isinstance(definition, dict) else {}
-        fields = _parse_ashby_form_definition(definition, slug, job_id)
-    if not fields:
-        raise CaptureShapeError(
-            f"ashby: the form for {slug}/{job_id} yielded zero visible fields")
-    posting_id = str(posting.get("id") or job_id)
-    return FieldMap(vendor="ashby", posting_id=posting_id,
-                    captured_at=_now(now), fields=fields)
-
-
-def _parse_ashby_form_render(form: dict, slug: str, job_id: str) -> list[Field]:
-    """Parse the live `FormRender` shape: `sections[].fieldEntries[]`.
-
-    `isRequired`/`isHidden` live on the entry, not the nested `field`; a
-    deactivated field is dropped alongside an explicitly hidden entry. A
-    hidden section is skipped whole and does not consume a `step_index` slot
-    (only visible sections count as steps).
-    """
-    sections = form.get("sections")
-    if not isinstance(sections, list):
-        raise CaptureShapeError(
-            f"ashby: applicationForm.sections missing or not a list "
-            f"for {slug}/{job_id}")
-    fields: list[Field] = []
-    step_index = 0
-    for section in sections:
-        if section.get("isHidden"):
-            continue
-        for entry in section.get("fieldEntries") or []:
-            field_def = entry.get("field")
-            if not isinstance(field_def, dict):
-                raise CaptureShapeError(
-                    f"ashby: a form entry in section "
-                    f"{section.get('title')!r} for {slug}/{job_id} has no "
-                    "nested 'field' object")
-            if entry.get("isHidden") or field_def.get("isDeactivated"):
-                continue
-            title = (field_def.get("title") or field_def.get("humanReadablePath")
-                     or "")
-            fields.append(_build_ashby_field(
-                key=field_def.get("path", ""),
-                title=title,
-                raw_type=field_def.get("type"),
-                required=bool(entry.get("isRequired", False)),
-                options=_ashby_options(field_def),
-                step_index=step_index,
-            ))
-        step_index += 1
-    return fields
-
-
-def _parse_ashby_form_definition(definition: dict, slug: str, job_id: str) -> list[Field]:
-    """Fallback for postings still served the pre-migration
-    `applicationFormDefinition` shape (one-release grace period; drop this
-    once no live posting exercises it). `isRequired`/`isHidden` live on the
-    nested `field` itself here, and the shape carries no step concept, so
-    every field stays `step_index=0` as before."""
-    sections = definition.get("sections")
-    if not isinstance(sections, list):
-        raise CaptureShapeError(
-            f"ashby: applicationFormDefinition.sections missing or not a list "
-            f"for {slug}/{job_id}")
-    fields: list[Field] = []
-    for section in sections:
-        for entry in section.get("fields") or []:
-            field_def = entry.get("field")
-            if not isinstance(field_def, dict):
-                raise CaptureShapeError(
-                    f"ashby: a form entry in section "
-                    f"{section.get('title')!r} for {slug}/{job_id} has no "
-                    "nested 'field' object")
-            if field_def.get("isHidden"):
-                continue
-            fields.append(_build_ashby_field(
-                key=field_def.get("path", ""),
-                title=field_def.get("title", ""),
-                raw_type=field_def.get("type"),
-                required=bool(field_def.get("isRequired", False)),
-                options=_ashby_options(field_def),
-                step_index=0,
-            ))
-    return fields
-
-
-def _build_ashby_field(*, key: str, title: str, raw_type, required: bool,
-                       options: list[str], step_index: int) -> Field:
-    field_type, role = _ashby_field_type(raw_type)
-    return Field(
-        key=key,
-        label=title,
-        type=field_type,
-        required=required,
-        options=options,
-        source=ASHBY_SOURCE,
-        locator=Locator(role=role, name=title),
-        step_index=step_index,
-        conditional_on=None,
-    )
-
-
-def _ashby_field_type(raw_type) -> tuple[str, str]:
-    """Canonical (type, role) for a raw Ashby field `type` string.
-
-    Known types route through the pinned map and fieldmap's shared
-    `_role_for_type`, so browser and HTTP captures never drift on role naming.
-    An unrecognised type is not fatal (Ashby adds field types over time): it
-    is passed through lowercased with role "textbox" rather than raising.
-    """
-    canonical = _ASHBY_TYPE_MAP.get(raw_type)
-    if canonical is not None:
-        return canonical, _role_for_type(canonical)
-    return str(raw_type or "").lower(), "textbox"
-
-
-def _ashby_options(field_def: dict) -> list[str]:
-    """Enumerated option labels for a select-type field.
-
-    `selectableValues` is usually a direct sibling of `type` on the field, but
-    some field shapes carry it nested under `metadata` instead; both
-    locations are checked defensively.
-    """
-    values = field_def.get("selectableValues")
-    if not isinstance(values, list):
-        metadata = field_def.get("metadata")
-        values = metadata.get("selectableValues") if isinstance(metadata, dict) else None
-    if not isinstance(values, list):
-        return []
-    labels: list[str] = []
-    for value in values:
-        if isinstance(value, dict):
-            labels.append(str(value.get("label", value.get("value", ""))))
-        else:
-            labels.append(str(value))
-    return labels
 
 
 # -- Lever DOM parse -----------------------------------------------------------
@@ -628,3 +401,43 @@ def _checkbox_label(checkbox: "_Node") -> str:
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (text or "").lower()).strip("_") or "field"
+
+
+# -- ashby capture re-exports (W5.1 Stage 2c dedupe) ---------------------------
+# The Ashby graphql capture/parse code MOVED to `engine.providers.ashby.capture`
+# (single-source: each name is now defined ONCE, in the ashby package). Its
+# transitive closure is DISJOINT from the Lever DOM parse that stays here, so
+# NOTHING was left shared: the Ashby path reads the intercepted graphql JSON and
+# touches none of browse.py's label/text/tree helpers (all generic
+# browser/HTML infra it uses is single-sourced in `engine.kernel.capture_toolkit`
+# / `engine.kernel.contracts`, imported straight from the kernel there). The
+# moved names are re-exported here via a LAZY module `__getattr__` (PEP 562),
+# mirroring the `engine.fieldmap` / `engine.providers.base` greenhouse shims, so
+# every pre-Stage-2 importer keeps resolving them via `engine.browse` unchanged:
+#   * `registry._capture_ashby` / `_apply_ashby`'s call-time `browse.capture_
+#     ashby` / `browse.ashby_application_url` module-attribute lookups;
+#   * `engine.fill._capture`'s call-time `from engine.browse import capture_ashby`
+#     (a from-import IS attribute access, so it triggers this __getattr__);
+#   * the tests' `from engine.browse import ASHBY_SOURCE, capture_ashby`,
+#     `browse._parse_ashby`, and `monkeypatch.setattr(browse, "capture_ashby",
+#     ...)` (setattr binds a REAL attribute that shadows this __getattr__;
+#     teardown restores, after which __getattr__ serves the moved object again).
+# The import is DEFERRED to attribute-access time (NEVER at browse load), which
+# keeps `import engine.browse` from eagerly pulling the ashby package (and keeps
+# browse's browser-free load invariant intact); it also cannot cycle should the
+# ashby package ever reach back into `engine.browse`.
+_ASHBY_CAPTURE_NAMES = frozenset({
+    "capture_ashby", "ashby_application_url", "ASHBY_SOURCE",
+    "_ASHBY_GRAPHQL_MARKER", "_ASHBY_TYPE_MAP", "_maybe_capture",
+    "_select_ashby_schema", "_parse_ashby", "_parse_ashby_form_render",
+    "_parse_ashby_form_definition", "_build_ashby_field", "_ashby_field_type",
+    "_ashby_options",
+})
+
+
+def __getattr__(name):
+    if name in _ASHBY_CAPTURE_NAMES:
+        import importlib
+        return getattr(
+            importlib.import_module("engine.providers.ashby.capture"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
