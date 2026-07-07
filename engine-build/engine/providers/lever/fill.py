@@ -48,7 +48,7 @@ CV/PHOTO: `resolve_values` delegates to `engine.kernel.resolve.resolve_values`
 on the FORM -> the plain ATS CV and the photo attaches to that field; absent ->
 the embedded-photo ATSI CV variant). That rule is vendor-agnostic (it is keyed on
 `fill._form_has_photo_field`, a form-structure signal, never posting text, per
-anti-injection finding 5), so it is single-sourced in greenhouse and delegated
+anti-injection finding 5), so it is single-sourced in the kernel and delegated
 to here rather than duplicated -- a load-bearing safety rule with one home.
 
 OVERRIDES greenhouse: the whole `fill()` field-driving body (native path, no
@@ -109,7 +109,7 @@ def apply_url(slug: str, job_id: str) -> str:
     return registry.resolve(vendor).apply_url_fn(slug, job_id)
 
 
-# -- value resolution: INHERITED from greenhouse (hole-fix e CV/photo choice) ---
+# -- value resolution: from the kernel (hole-fix e CV/photo choice) ------------
 # The structural CV/photo rule is vendor-agnostic (keyed on the form's own
 # upload-field shape via `fill._form_has_photo_field`, never posting text), so it
 # has ONE home -- the generic kernel.resolve.resolve_values -- and Lever

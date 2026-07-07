@@ -37,7 +37,7 @@ on the FORM -> the plain ATS CV and the photo attaches; absent -> the
 embedded-photo ATSI CV variant). Workable's `avatar` field is exactly such a
 photo field, so a Workable form that exposes it takes the plain ATS CV. The rule
 keys purely on the FORM's structure (`fill._form_has_photo_field`), never posting
-text, so it is single-sourced in greenhouse and delegated to here rather than
+text, so it is single-sourced in the kernel and delegated to here rather than
 duplicated -- a load-bearing safety rule with one home.
 
 FIELD-DRIVING SPECIFICS (W5.4 spec PART B):
@@ -94,7 +94,7 @@ def apply_url(slug: str, job_id: str) -> str:
     return registry.resolve(vendor).apply_url_fn(slug, job_id)
 
 
-# -- value resolution: INHERITED from greenhouse (hole-fix e CV/photo choice) ---
+# -- value resolution: from the kernel (hole-fix e CV/photo choice) ------------
 # The structural CV/photo rule is vendor-agnostic (keyed on the form's own
 # upload-field shape via `fill._form_has_photo_field`, never posting text), so it
 # has ONE home -- the generic kernel.resolve.resolve_values -- and Workable
