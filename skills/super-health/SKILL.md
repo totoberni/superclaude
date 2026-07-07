@@ -73,6 +73,8 @@ Run `/skill-health all`. Capture the `/100` score.
 
 `score_skill` additionally scores a **`_shared` rubric-block facet** (wf-skills W1.2). The 8 shared blocks (`verdict-schema`, `dispatch-contract`, `helper-prompt`, `retro-evidence`, `diff-target`, `discovery-protocol`, `search-budget`, `memory-distill`) are not skills (no SKILL.md) so `skill-health.sh` cannot see them: each must exist and carry a `Consumed by:` line. Bounded penalty (cap 8, `+1` per missing block, `+1` per block lacking `Consumed by:`); adds an assertion, only lowers on regression.
 
+`score_skill` also scores a **DEC-R3 flip + destructive-gate facet** (wf-skills W3.5), chained after the `_shared` facet. `skill-health.sh` checks per-skill frontmatter but has no notion of the 2026-07-07 DEC-R3 flip (`disable-model-invocation` deleted from all skills so every skill is model-invocable + loop-able) or the destructive-tier `## Unattended-context gate` requirement on `skills/push`, `skills/session-reaper`, `skills/handoff`. Reads every `skills/*/SKILL.md` directly off disk (not via git, so gitignored `skills/nudge/SKILL.md` is included) for a re-added `disable-model-invocation: true`, and checks each destructive skill for exactly one gate heading plus a `description:` starting "Use when the user explicitly". Bounded penalty (cap 8, `+1` per flip regression, `+1` per destructive skill with a missing/duplicated gate or an unguarded description); adds an assertion, only lowers on regression, never relaxes an existing criterion.
+
 #### 1c. Memory Health (18%)
 
 Run `/mem-health`. Capture the `/100` score.

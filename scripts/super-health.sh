@@ -167,9 +167,44 @@ score_skill() {
   local final_skill=$((sk_score - shp_penalty))
   [ "$final_skill" -lt 0 ] && final_skill=0
 
+  # ── DEC-R3 flip + destructive-gate facet (wf-skills W3.5) ──
+  # skill-health.sh's Criterion 1 checks name/description/user-invocable per skill
+  # but has no notion of the 2026-07-07 DEC-R3 flip (disable-model-invocation
+  # deleted from all skills) or the destructive-tier "Unattended-context gate"
+  # requirement on skills/push, skills/session-reaper, skills/handoff. Score that
+  # here. This ADDS an assertion and only LOWERS the skill score when the surface
+  # regresses (the flip key re-added, or a destructive skill's gate/guard
+  # removed); it never relaxes or reweights any existing skill-health criterion.
+  # Bounded penalty (cap 8): +1 per skill re-introducing disable-model-invocation:
+  # true (read directly off disk, so gitignored skills/nudge/SKILL.md is
+  # included), +1 per destructive skill missing exactly one gate heading, +1 per
+  # destructive skill whose description is no longer guarded.
+  local flip_hits=0 flip_list="" gate_bad=0 gate_list="" fskf ds2 dsf2 dsfm2 dsgc2
+  for fskf in "$CLAUDE"/skills/*/SKILL.md; do
+    [ -f "$fskf" ] || continue
+    grep -q '^disable-model-invocation: true$' "$fskf" 2>/dev/null && { flip_hits=$((flip_hits + 1)); flip_list="$flip_list $(basename "$(dirname "$fskf")")"; }
+  done
+  for ds2 in push session-reaper handoff; do
+    dsf2="$CLAUDE/skills/$ds2/SKILL.md"
+    if [ ! -f "$dsf2" ]; then
+      gate_bad=$((gate_bad + 1)); gate_list="$gate_list $ds2(missing)"; continue
+    fi
+    dsgc2=$(grep -c '^## Unattended-context gate$' "$dsf2" 2>/dev/null)
+    if [ "$dsgc2" -ne 1 ]; then
+      gate_bad=$((gate_bad + 1)); gate_list="$gate_list $ds2(gate=$dsgc2)"; continue
+    fi
+    dsfm2=$(sed -n '2,/^---$/p' "$dsf2" 2>/dev/null)
+    echo "$dsfm2" | grep -qE '^description: *"?Use when the user explicitly' || { gate_bad=$((gate_bad + 1)); gate_list="$gate_list $ds2(unguarded)"; }
+  done
+  local flip_penalty=$((flip_hits + gate_bad))
+  [ "$flip_penalty" -gt 8 ] && flip_penalty=8
+  local final_skill2=$((final_skill - flip_penalty))
+  [ "$final_skill2" -lt 0 ] && final_skill2=0
+
   printf '%s\n' "$sk_out" | grep -v '^SCORE:'
   echo "Skill _shared facet: missing=$shp_missing, no-Consumed-by=$shp_noprov (of 8) -> -$shp_penalty (skill-health=$sk_score)"
-  echo "SCORE: $final_skill/100"
+  echo "Skill DEC-R3 flip facet: flip-regressions=$flip_hits${flip_list:+ ($flip_list)}, gate-issues=$gate_bad${gate_list:+ ($gate_list)} -> -$flip_penalty"
+  echo "SCORE: $final_skill2/100"
 }
 
 score_mem() {

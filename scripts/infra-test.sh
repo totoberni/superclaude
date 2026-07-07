@@ -576,6 +576,44 @@ test_skills() {
     fi
   done
   [ "$NEWSK_OK" = true ] && pass "S7 new skills (converge + review-dispatch: name/description/user-invocable, no flip key, dash-clean)"
+
+  # S8: wf-skills DEC-R3 flip invariant (W3.5). The 2026-07-07 flip deleted
+  # disable-model-invocation: true from all skills so every skill is model-
+  # invocable + loop-able; the invariant is that the key never reappears with
+  # value true on any skills/*/SKILL.md. Read directly off disk (not via git)
+  # so gitignored skills/nudge/SKILL.md (.gitignore:25 nudge/) is still covered.
+  # Real failing path: any skill (existing or new) re-introducing the key.
+  local FLIP_OK=true
+  local FLIP_HITS
+  FLIP_HITS=$(grep -rl '^disable-model-invocation: true$' "$SKILL_DIR"/*/SKILL.md 2>/dev/null)
+  if [ -n "$FLIP_HITS" ]; then
+    FLIP_OK=false
+    fail "S8 DEC-R3 flip invariant" "disable-model-invocation: true re-introduced in: $(echo "$FLIP_HITS" | tr '\n' ' ')"
+  fi
+  [ "$FLIP_OK" = true ] && pass "S8 DEC-R3 flip invariant (zero skills carry disable-model-invocation: true, incl. gitignored nudge)"
+
+  # S9: wf-skills destructive-tier unattended-context gate (W3.5). Each of
+  # skills/push, skills/session-reaper, skills/handoff must carry EXACTLY ONE
+  # "## Unattended-context gate" heading AND a description: field starting
+  # with "Use when the user explicitly" (guards these destructive skills now
+  # that DEC-R3 made every skill model-invocable + loop-able). Real failing
+  # paths: a gate section deleted or duplicated, or a description that no
+  # longer explicitly guards.
+  local DESTRUCTIVE_SKILLS="push session-reaper handoff"
+  local DESTR_OK=true ds dsf dsfm dsgc
+  for ds in $DESTRUCTIVE_SKILLS; do
+    dsf="$SKILL_DIR/$ds/SKILL.md"
+    if [ ! -f "$dsf" ]; then
+      DESTR_OK=false
+      fail "S9 destructive gates" "$ds/SKILL.md: missing"
+      continue
+    fi
+    dsgc=$(grep -c '^## Unattended-context gate$' "$dsf" 2>/dev/null)
+    [ "$dsgc" -eq 1 ] || { DESTR_OK=false; fail "S9 destructive gates" "$ds: expected exactly 1 'Unattended-context gate' heading, found $dsgc"; }
+    dsfm=$(sed -n '2,/^---$/p' "$dsf" 2>/dev/null)
+    echo "$dsfm" | grep -qE '^description: *"?Use when the user explicitly' || { DESTR_OK=false; fail "S9 destructive gates" "$ds: description does not start with 'Use when the user explicitly'"; }
+  done
+  [ "$DESTR_OK" = true ] && pass "S9 destructive gates (push/session-reaper/handoff: exactly 1 gate heading + guarded description)"
 }
 
 # ═══════════════════════════════════════════════════

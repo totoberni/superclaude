@@ -1252,7 +1252,7 @@ fi
   OUT=$(mod_thinking_nudge 2>&1)
   RC=$?
   [ $RC -eq 0 ] || exit 1
-  echo "$OUT" | grep -qi "matrix prescribes" || exit 1
+  echo "$OUT" | grep -qi "no-ops on adaptive" || exit 1
   exit 0
 ) 2>/dev/null
 P711_RC=$?
