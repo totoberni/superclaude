@@ -450,24 +450,25 @@ def test_greenhouse_module_satisfies_provider_protocol():
 # =============================================================================
 
 
-def test_cv_becomes_atsi_and_photo_attached_when_form_has_photo_field(
+def test_cv_stays_ats_and_photo_attached_when_form_has_photo_field(
         tmp_path):
-    # questions.json's fieldmap carries a "Profile picture" upload field, so
-    # the structural signal fires: resume -> cv-atsi, headshot -> photo.
+    # questions.json's fieldmap carries a "Profile picture" upload field, so the
+    # structural signal fires: resume -> plain ATS CV, headshot -> the photo.
     fieldmap = _fieldmap()
     values = _resolved_values(fieldmap, tmp_path=tmp_path)
     by_key = {fv.key: fv for fv in values.fields}
 
-    assert by_key["resume"].asset == "cv-atsi"
-    assert Path(by_key["resume"].value).name == "cv-atsi.pdf"
+    assert by_key["resume"].asset == "cv-ats"
+    assert Path(by_key["resume"].value).name == "cv-ats.pdf"
     assert "photo field present" in by_key["resume"].upload_reason
     assert by_key["headshot"].asset == "photo"
     assert Path(by_key["headshot"].value).name == "Me.png"
 
 
-def test_cv_stays_ats_when_form_has_no_photo_field(tmp_path):
-    # A fieldmap with no photo/image upload field at all: hole-fix e's
-    # negative branch, keyed purely on the form's own structural shape.
+def test_cv_becomes_atsi_when_form_has_no_photo_field(tmp_path):
+    # A fieldmap with no photo/image upload field at all: the negative branch,
+    # keyed purely on the form's own structural shape, embeds the photo via the
+    # ATSI CV variant (nowhere else to carry the portrait).
     fieldmap = FieldMap(vendor="greenhouse", posting_id="1",
                         captured_at=_PINNED, fields=[
         Field(key="resume", label="Resume/CV", type="input_file",
@@ -476,7 +477,7 @@ def test_cv_stays_ats_when_form_has_no_photo_field(tmp_path):
     ])
     values = _resolved_values(fieldmap, tmp_path=tmp_path)
     fv = values.fields[0]
-    assert fv.asset == "cv-ats"
+    assert fv.asset == "cv-atsi"
     assert "no photo field" in fv.upload_reason
 
 

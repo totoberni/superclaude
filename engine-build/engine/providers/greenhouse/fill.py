@@ -69,7 +69,9 @@ from engine.kernel.contracts import (
 # cluster (below) calls bare, exactly as it did when it lived in providers/base
 # (base re-exports these same kernel names). Not monkeypatched anywhere.
 from engine.kernel.fill_toolkit import _locator_text, _normalize_name, type_human
+from engine.kernel.resolve import resolve_values as _kernel_resolve_values
 from engine.providers import base, registry
+from engine.providers.greenhouse.resolve import GREENHOUSE_WIDGET_RESOLVER
 
 vendor = "greenhouse"
 
@@ -99,52 +101,35 @@ def apply_url(slug: str, job_id: str) -> str:
     return registry.resolve(vendor).apply_url_fn(slug, job_id)
 
 
-# -- value resolution: hole-fix e (structural CV/photo choice) -----------------
-# `fill.resolve_values` already renders every field to a concrete FieldValue
-# (including a CV upload, per the W4 language-proxy rule). The W5 spec's
-# hole-fix e SUPERSEDES that language proxy with a purely structural signal:
-# if the form exposes an image/photo upload field (a form property, read from
-# the schema -- never posting text), the company is judged formal/large, so
-# the ATSI (CV + photo) variant is used and the photo is attached; otherwise
-# the plain ATS CV is used. This function calls the existing `fill.
-# resolve_values` unchanged (all its other classification stays authoritative:
-# text/select/boolean rendering, EEO/demographic exclusion, missing-field
-# skips) and then overrides ONLY the already-resolved CV FieldValue(s) to
-# match the structural rule. No fill.py code is modified for this: the
-# override is a pure post-process of the ResolvedValues this function itself
-# produces, using the FillAssets abstraction fill.py already exposes.
+# -- value resolution: delegate to the vendor-agnostic kernel resolver ---------
+# The CV/photo choice is the owner-ratified STRUCTURAL rule now living in the
+# kernel (`kernel.resolve._select_cv`): a form with a dedicated photo/portrait
+# upload field carries the real photo on that field, so the plain ATS CV is
+# uploaded; a form with none gets the embedded-photo ATSI variant. It keys purely
+# on the form's own upload-field shape (`kernel.resolve._form_has_photo_field`,
+# read from the vendor schema captured at `capture()` time, never the posting's
+# free text -- an attacker-independent structural signal per anti-injection
+# finding 5) and is posting-language independent. Greenhouse contributes only its
+# portal-widget resolver (`GREENHOUSE_WIDGET_RESOLVER`); there is no vendor-side
+# post-process any more.
 
 
 def resolve_values(fieldmap: FieldMap, ssot, profile: dict, *,
                    assets: FillAssets | None = None,
                    posting_lang: str = "en") -> ResolvedValues:
-    """`fill.resolve_values` plus the hole-fix and structural CV/photo override.
+    """Render every field to a concrete fill value via the vendor-agnostic kernel
+    resolver, injecting Greenhouse's portal-widget resolver.
 
-    A field is judged an image/photo upload the same way `fill.
-    _form_has_photo_field` already judges it: an upload-type field whose
-    LABEL reads as a portrait ask (EN + IT). The label is part of the vendor
-    FORM SCHEMA (captured at `capture()` time from Greenhouse's own question
-    definitions), never the job posting's free text, so this stays an
-    attacker-independent structural signal per anti-injection finding 5.
+    The CV/photo choice (owner-ratified structural rule) and all other
+    classification -- text/select/boolean rendering, EEO/demographic exclusion,
+    missing-field skips -- live in `kernel.resolve.resolve_values`. Greenhouse's
+    location-autocomplete `location` field, the paste-in `resume_text`/
+    `cover_letter_text` textareas, and the `longitude`/`latitude` telemetry are
+    reconnected through the injected `GREENHOUSE_WIDGET_RESOLVER`.
     """
-    from engine import fill as _fill
-
-    resolved = _fill.resolve_values(fieldmap, ssot, profile, assets=assets,
-                                    posting_lang=posting_lang)
-    if assets is None:
-        return resolved
-    has_photo_field = _fill._form_has_photo_field(fieldmap)
-    wanted = (("cv-atsi", assets.cv_atsi,
-              "photo field present on the form (ATSI variant, hole-fix e)")
-             if has_photo_field else
-             ("cv-ats", assets.cv_ats,
-              "no photo field on the form (plain ATS variant, hole-fix e)"))
-    wanted_asset, wanted_path, wanted_reason = wanted
-    for fv in resolved.fields:
-        if fv.asset in ("cv-ats", "cv-atsi") and wanted_path is not None:
-            fv.value, fv.asset, fv.upload_reason = (
-                wanted_path, wanted_asset, wanted_reason)
-    return resolved
+    return _kernel_resolve_values(
+        fieldmap, ssot, profile, assets=assets, posting_lang=posting_lang,
+        vendor_resolver=GREENHOUSE_WIDGET_RESOLVER)
 
 
 # -- fill(): the Provider contract's ordered sequence ---------------------------

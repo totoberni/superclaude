@@ -394,26 +394,26 @@ def test_parse_workable_dropdown_multiple_and_number_types_and_choice_labels():
 # =============================================================================
 
 
-def test_resolve_values_inherits_cv_atsi_and_photo_when_avatar_present(tmp_path):
-    # powerlines exposes an `avatar` (Photo) upload field -> the inherited
-    # structural signal fires: resume becomes cv-atsi and the photo attaches.
+def test_resolve_values_inherits_cv_ats_and_photo_when_avatar_present(tmp_path):
+    # powerlines exposes an `avatar` (Photo) upload field -> the structural
+    # signal fires: resume is the plain ATS CV and the photo attaches.
     fieldmap = _fieldmap("form-57CFF1B2AF.json", "57CFF1B2AF")
     values = _resolved_values(fieldmap, tmp_path=tmp_path)
     by_key = {fv.key: fv for fv in values.fields}
-    assert by_key["resume"].asset == "cv-atsi"
+    assert by_key["resume"].asset == "cv-ats"
     assert "photo field present" in by_key["resume"].upload_reason
     assert by_key["avatar"].asset == "photo"
     assert Path(by_key["avatar"].value).name == "Me.png"
 
 
-def test_resolve_values_inherits_cv_ats_when_no_photo_field(tmp_path):
-    # Strip the avatar field -> no photo signal -> the inherited negative branch
-    # picks the plain ATS CV for the resume upload.
+def test_resolve_values_inherits_cv_atsi_when_no_photo_field(tmp_path):
+    # Strip the avatar field -> no photo signal -> the negative branch embeds
+    # the photo via the ATSI CV for the resume upload.
     fieldmap = _fieldmap("form-57CFF1B2AF.json", "57CFF1B2AF")
     fieldmap.fields = [f for f in fieldmap.fields if f.key != "avatar"]
     values = _resolved_values(fieldmap, tmp_path=tmp_path)
     resume = {fv.key: fv for fv in values.fields}["resume"]
-    assert resume.asset == "cv-ats"
+    assert resume.asset == "cv-atsi"
     assert "no photo field" in resume.upload_reason
 
 

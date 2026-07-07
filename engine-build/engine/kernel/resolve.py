@@ -372,8 +372,10 @@ _PHOTO_LABEL_RE = re.compile(
 # `avatar`/`photo` keys that merely share a stray token.
 _COVER_LETTER_RE = re.compile(r"cover[\s_-]*letter", re.I)
 
-# Posting-language tokens that select the photo CV (cv-atsi) as an informality
-# proxy when the form carries no separate candidate-photo field (criterion 2).
+# Posting-language tokens recognised as Italian. Retained only for the
+# `_is_italian` helper (re-exported through `engine.fill`); the CV/photo choice
+# no longer consults posting language -- see `_select_cv`, the owner-ratified
+# structural rule (2026-07-07).
 _ITALIAN_LANGS = frozenset({"it", "it-it", "italian", "italiano"})
 
 
@@ -389,9 +391,10 @@ def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
     dedicated cover-letter document asset when one is present in `FillAssets`
     -- it must NEVER receive the CV instead -- and is otherwise honestly
     SKIPPED (no cover-letter document asset), and every OTHER file field gets
-    a CV picked by the deterministic rule (cv-ats by default; cv-atsi ONLY
-    when the form has no photo field AND `posting_lang` is Italian). With no
-    `assets` (the pre-override default) file fields keep the old
+    a CV picked by the owner-ratified structural rule (cv-ats when the form has
+    a photo field, so the photo attaches separately; cv-atsi when it has none,
+    so the ATSI variant embeds the photo -- posting-language independent). With
+    no `assets` (the pre-override default) file fields keep the old
     "file-upload" skip, so the existing contract holds.
 
     A checkbox (boolean) is resolved by its label intent (`_resolve_boolean`): a
@@ -491,7 +494,7 @@ def _resolve_upload(fld, resolved: ResolvedValues, assets: FillAssets | None,
         asset_name, path, reason = ("cover-letter", assets.cover_letter,
                                     "cover-letter document asset")
     else:
-        asset_name, path, reason = _select_cv(assets, posting_lang, has_photo_field)
+        asset_name, path, reason = _select_cv(assets, has_photo_field)
     if path is None:
         resolved.skipped.append((fld.key, f"asset missing: {asset_name}"))
         return
@@ -500,14 +503,19 @@ def _resolve_upload(fld, resolved: ResolvedValues, assets: FillAssets | None,
         value=path, asset=asset_name, upload_reason=reason))
 
 
-def _select_cv(assets: FillAssets, posting_lang: str, has_photo_field: bool):
-    """The deterministic v1 CV rule (criterion 2): cv-ats by default; cv-atsi
-    ONLY when the form has no separate photo field AND the posting is Italian
-    (informal-company proxy, flagged in the report for owner calibration)."""
-    if not has_photo_field and _is_italian(posting_lang):
+def _select_cv(assets: FillAssets, has_photo_field: bool):
+    """The owner-ratified structural CV rule (2026-07-07): purely form-driven,
+    posting-language INDEPENDENT. A form that HAS a dedicated photo/portrait
+    field carries the real photo on that field, so the plain ATS CV is uploaded
+    (cv-ats); a form with NO photo field has nowhere to carry the portrait, so
+    the embedded-photo ATSI CV variant is uploaded (cv-atsi)."""
+    if not has_photo_field:
         return ("cv-atsi", assets.cv_atsi,
-                "italian posting and no photo field (informal-company proxy)")
-    return "cv-ats", assets.cv_ats, "default (cv-ats always preferred)"
+                "no photo field on the form; embedding the photo via the ATSI "
+                "CV variant")
+    return ("cv-ats", assets.cv_ats,
+            "photo field present; plain ATS CV, photo attached to the photo "
+            "field")
 
 
 def _is_italian(posting_lang: str) -> bool:

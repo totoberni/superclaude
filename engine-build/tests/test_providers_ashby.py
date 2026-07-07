@@ -389,20 +389,22 @@ def test_ashby_module_satisfies_provider_protocol():
 # =============================================================================
 
 
-def test_resolve_values_inherits_cv_ats_when_no_photo_field(tmp_path):
+def test_resolve_values_inherits_cv_atsi_when_no_photo_field(tmp_path):
     # The primary fixture has a resume file input but NO photo/image upload
-    # field -> the inherited hole-fix e negative branch picks the plain ATS CV.
+    # field -> the structural rule's negative branch picks the embedded-photo
+    # ATSI CV (there is nowhere on the form to carry the portrait separately).
     fieldmap = _fieldmap()
     values = _resolved_values(fieldmap, tmp_path=tmp_path)
     resume = {fv.key: fv for fv in values.fields}["_systemfield_resume"]
-    assert resume.asset == "cv-ats"
-    assert Path(resume.value).name == "cv-ats.pdf"
+    assert resume.asset == "cv-atsi"
+    assert Path(resume.value).name == "cv-atsi.pdf"
     assert "no photo field" in resume.upload_reason
 
 
-def test_resolve_values_inherits_cv_atsi_and_photo_when_photo_present(tmp_path):
-    # A field map that DOES carry an image/photo upload field: the inherited
-    # structural signal fires -> resume becomes cv-atsi and the photo attaches.
+def test_resolve_values_inherits_cv_ats_and_photo_when_photo_present(tmp_path):
+    # A field map that DOES carry an image/photo upload field: the structural
+    # signal fires -> resume stays the plain ATS CV and the real photo attaches
+    # separately on the photo field.
     fieldmap = FieldMap(vendor="ashby", posting_id="9001", captured_at=_PINNED,
                         fields=[
         Field(key="_systemfield_resume", label="Resume", type="input_file",
@@ -414,7 +416,7 @@ def test_resolve_values_inherits_cv_atsi_and_photo_when_photo_present(tmp_path):
     ])
     values = _resolved_values(fieldmap, tmp_path=tmp_path)
     by_key = {fv.key: fv for fv in values.fields}
-    assert by_key["_systemfield_resume"].asset == "cv-atsi"
+    assert by_key["_systemfield_resume"].asset == "cv-ats"
     assert "photo field present" in by_key["_systemfield_resume"].upload_reason
     assert by_key["custom_photo"].asset == "photo"
     assert Path(by_key["custom_photo"].value).name == "Me.png"

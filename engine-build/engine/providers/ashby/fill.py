@@ -106,7 +106,8 @@ from typing import Any
 
 from engine.fieldmap import FieldMap
 from engine.fill import FillAssets, FillReport, FillSafetyError, ResolvedValues
-from engine.providers import base, greenhouse, registry
+from engine.kernel.resolve import resolve_values as _kernel_resolve_values
+from engine.providers import base, registry
 
 vendor = "ashby"
 
@@ -132,22 +133,21 @@ def apply_url(slug: str, job_id: str) -> str:
 # -- value resolution: INHERITED from greenhouse (hole-fix e CV/photo choice) ---
 # The structural CV/photo rule is vendor-agnostic (keyed on the form's own
 # upload-field shape via `fill._form_has_photo_field`, never posting text), so it
-# has ONE home -- greenhouse.resolve_values -- and Ashby delegates to it rather
-# than duplicating a load-bearing safety rule.
+# has ONE home -- the generic kernel.resolve.resolve_values -- and Ashby
+# delegates to it rather than duplicating a load-bearing safety rule.
 
 
 def resolve_values(fieldmap: FieldMap, ssot, profile: dict, *,
                    assets: FillAssets | None = None,
                    posting_lang: str = "en") -> ResolvedValues:
-    """Render every field to a concrete fill value, INHERITING greenhouse's
-    hole-fix and structural CV/photo choice verbatim.
-
-    Delegates to `greenhouse.resolve_values` (which wraps `fill.resolve_values`
-    and applies the photo-field-present -> ATSI+photo override). The rule keys
-    purely on the FORM's structure, so it is correct for a graphql-captured
-    Ashby field map exactly as for a schema-captured Greenhouse one."""
-    return greenhouse.resolve_values(fieldmap, ssot, profile, assets=assets,
-                                     posting_lang=posting_lang)
+    """Render every field to a concrete fill value via the kernel's generic
+    resolve engine. Ashby has no portal-widget quirks, so no vendor_resolver is
+    injected (the kernel no-op default). The owner-ratified structural CV/photo
+    rule (plain ATS CV when the form has a photo field, embedded-photo ATSI CV
+    otherwise) is generic in the kernel and keys purely on the FORM's structure,
+    so it is correct for a graphql-captured Ashby field map identically."""
+    return _kernel_resolve_values(fieldmap, ssot, profile, assets=assets,
+                                  posting_lang=posting_lang)
 
 
 # -- fill(): the Provider contract's ordered sequence (schema + controlled-select)

@@ -729,19 +729,23 @@ def _make_assets(tmp_path, *, ats=True, atsi=True, photo=True,
                       cover_letter=make("cover-letter.pdf", cover_letter))
 
 
-def test_cv_default_is_ats(tmp_path, real_ssot_path):
+def test_cv_atsi_when_no_photo_field(tmp_path, real_ssot_path):
     ssot = SSOT.load(real_ssot_path)
     fm = _fieldmap(_field("resume", "Resume", type_="input_file", role="button"))
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot),
                             assets=_make_assets(tmp_path))
     assert len(values.fields) == 1
     fv = values.fields[0]
-    assert fv.asset == "cv-ats"
-    assert Path(fv.value).name == "cv-ats.pdf"
-    assert "default" in fv.upload_reason
+    assert fv.asset == "cv-atsi"
+    assert Path(fv.value).name == "cv-atsi.pdf"
+    assert "no photo field" in fv.upload_reason
 
 
-def test_cv_atsi_when_italian_and_no_photo_field(tmp_path, real_ssot_path):
+def test_cv_atsi_when_no_photo_field_regardless_of_posting_lang(
+        tmp_path, real_ssot_path):
+    # posting_lang no longer influences the CV choice (the owner-ratified rule
+    # is purely form-structural): with no photo field the ATSI CV is uploaded
+    # regardless of the posting language, so `posting_lang="it"` is incidental.
     ssot = SSOT.load(real_ssot_path)
     fm = _fieldmap(_field("resume", "Resume", type_="input_file", role="button"))
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot),
@@ -749,7 +753,7 @@ def test_cv_atsi_when_italian_and_no_photo_field(tmp_path, real_ssot_path):
     fv = values.fields[0]
     assert fv.asset == "cv-atsi"
     assert Path(fv.value).name == "cv-atsi.pdf"
-    assert "italian" in fv.upload_reason
+    assert "no photo field" in fv.upload_reason
 
 
 def test_cv_stays_ats_when_photo_field_present_even_if_italian(
@@ -781,7 +785,7 @@ def test_missing_asset_is_skipped(tmp_path, real_ssot_path):
     fm = _fieldmap(_field("resume", "Resume", type_="input_file", role="button"))
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
     assert values.fields == []
-    assert dict(values.skipped)["resume"] == "asset missing: cv-ats"
+    assert dict(values.skipped)["resume"] == "asset missing: cv-atsi"
 
 
 def test_cover_letter_file_field_is_skipped_never_gets_the_cv(
@@ -789,7 +793,7 @@ def test_cover_letter_file_field_is_skipped_never_gets_the_cv(
     # Regression (live-confirmed on a real greenhouse run): a `resume` file
     # input (required) alongside a `cover_letter` file input (optional) must
     # NOT both resolve to the CV asset -- the cover letter field must be
-    # skipped, never filled with `cv-ats.pdf`.
+    # skipped, never filled with `cv-atsi.pdf`.
     ssot = SSOT.load(real_ssot_path)
     fm = _fieldmap(
         _field("resume", "Resume", type_="input_file", role="button",
@@ -802,12 +806,12 @@ def test_cover_letter_file_field_is_skipped_never_gets_the_cv(
 
     by_key = {fv.key: fv for fv in values.fields}
     assert "resume" in by_key
-    assert by_key["resume"].asset == "cv-ats"
-    assert Path(by_key["resume"].value).name == "cv-ats.pdf"
+    assert by_key["resume"].asset == "cv-atsi"
+    assert Path(by_key["resume"].value).name == "cv-atsi.pdf"
 
     assert "cover_letter" not in by_key
     skip_reason = dict(values.skipped)["cover_letter"]
-    assert "cv-ats" not in skip_reason
+    assert "cv-atsi" not in skip_reason
     assert skip_reason == (
         "optional cover-letter upload; no cover-letter document asset (cover "
         "letter is drafted per-posting in the manual flow)")
@@ -838,7 +842,7 @@ def test_cover_letter_file_field_uploads_the_cover_letter_asset_when_present(
     assert "cover-letter document asset" in fv.upload_reason
     # The sibling resume field is unaffected: still the CV, never the
     # cover-letter document.
-    assert by_key["resume"].asset == "cv-ats"
+    assert by_key["resume"].asset == "cv-atsi"
 
 
 def test_cover_letter_file_field_asset_missing_on_disk_is_skipped(
@@ -1126,9 +1130,10 @@ def test_completeness_upload_counts_and_stays_complete(tmp_path, real_ssot_path)
                        fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
                        now=lambda: _PINNED)
     assert report.filled == 2                 # first_name + the uploaded CV
-    assert report.uploads == [{"key": "resume", "asset": "cv-ats",
-                               "path": str(assets.cv_ats),
-                               "reason": "default (cv-ats always preferred)"}]
+    assert report.uploads == [{"key": "resume", "asset": "cv-atsi",
+                               "path": str(assets.cv_atsi),
+                               "reason": "no photo field on the form; embedding "
+                                         "the photo via the ATSI CV variant"}]
     assert report.complete is True
     assert report.fillable_total == 3
     assert report.justified_skips == 1        # the demographic field
@@ -1168,7 +1173,7 @@ def test_completeness_required_upload_missing_asset_is_required_unfilled(
         _field("resume", "Resume / CV", type_="input_file", role="button"),
     )
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
-    assert dict(values.skipped)["resume"] == "asset missing: cv-ats"
+    assert dict(values.skipped)["resume"] == "asset missing: cv-atsi"
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
@@ -1180,7 +1185,7 @@ def test_completeness_required_upload_missing_asset_is_required_unfilled(
     assert len(report.required_unfilled) == 1
     assert report.required_unfilled[0] == {
         "key": "resume", "label": "Resume / CV",
-        "reason": "asset missing: cv-ats"}
+        "reason": "asset missing: cv-atsi"}
     assert report.justified_skips == 0
     assert report.complete is False
     assert (report.caption()
@@ -1630,7 +1635,7 @@ def test_cv_lands_on_greenhouse_resume_input_via_set_input_files(
                        browser_factory=_factory_for(page), fieldmap=fm,
                        assets=assets, artifacts_dir=tmp_path, now=lambda: _PINNED)
     assert resume_input.set_input_files_calls == 1
-    assert resume_input.uploaded == str(assets.cv_ats)
+    assert resume_input.uploaded == str(assets.cv_atsi)
     assert resume_input.clicks == 0                  # direct upload, no click
     assert report.uploads[0]["key"] == "resume"
     assert report.complete is True
@@ -1648,7 +1653,7 @@ def test_cv_lands_on_lever_resume_upload_input(tmp_path, real_ssot_path):
     fill_form("lever", "globex", "req-77", values,
               browser_factory=_factory_for(page), fieldmap=fm, assets=assets,
               artifacts_dir=tmp_path, now=lambda: _PINNED)
-    assert lever_input.uploaded == str(assets.cv_ats)
+    assert lever_input.uploaded == str(assets.cv_atsi)
     assert decoy.set_input_files_calls == 0          # image input untouched
 
 
