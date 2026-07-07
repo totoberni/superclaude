@@ -882,8 +882,15 @@ def test_reexported_locate_and_upload_delegate_to_fill(monkeypatch):
 
 def test_importing_base_does_not_load_browser_stack():
     # engine.providers.base is the fill-primitive re-export home; importing it must
-    # NOT pull in browse, patchright, or even engine.fill (the wrappers import fill
-    # lazily at call time). Checked in a fresh interpreter.
+    # NOT pull in the browser stack (browse or patchright) -- that is the load-
+    # bearing invariant keeping the daily poller browser-free. base.py's own
+    # wrappers still import engine.fill lazily at call time. As of W5.1 Stage 2e,
+    # though, importing ANY engine.providers.* name runs the package __init__ ->
+    # engine.providers.registry, which sources the four board adapters from their
+    # plugin `.discover` leaves; that eager transit self-registers all vendors and
+    # loads their BROWSER-FREE fill modules (lever/ashby/workable `.fill` import
+    # engine.fill). So engine.fill is now loaded here -- but the browser stack is
+    # not, which is what this test guards. Checked in a fresh interpreter.
     script = (
         "import sys, engine.providers.base; "
         "print('browse' if 'engine.browse' in sys.modules else 'no-browse'); "
@@ -892,4 +899,4 @@ def test_importing_base_does_not_load_browser_stack():
     )
     out = subprocess.run([sys.executable, "-c", script], cwd=_REPO_ROOT,
                          capture_output=True, text=True, check=True)
-    assert out.stdout.split() == ["no-browse", "no-patch", "no-fill"], out.stdout
+    assert out.stdout.split() == ["no-browse", "no-patch", "fill"], out.stdout

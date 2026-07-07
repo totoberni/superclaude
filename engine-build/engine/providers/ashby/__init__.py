@@ -59,4 +59,34 @@ from engine.providers.ashby.fill import (  # noqa: F401
     vendor,
 )
 
-__all__ = ["vendor", "capture", "apply_url", "resolve_values", "fill"]
+# -- Stage 2e self-registration into the eager-light auto-registry -------------
+# The board-JSON adapter is a LEAF module (`engine.kernel.*` only); it is the one
+# name this package needs from `.discover` and is safe to import at load.
+from engine.providers.ashby.discover import AshbyAdapter  # noqa: E402,F401
+
+
+def vendor_resolver():
+    """Ashby has no portal-widget resolver (own controlled-component selects,
+    Turnstile hand-off); the kernel classifier consults none for this vendor."""
+    return None
+
+
+# `_registry` defines `register` before importing the plugins, so this resolves
+# even under re-entrant self-registration. `capture`/`fill` are LAZY (resolved on
+# call) to keep both the registry and this import browser-free; `resolve_values`
+# is the package's own callable (it delegates greenhouse's hole-fix per the
+# module docstring).
+from engine.providers import _registry  # noqa: E402
+
+_registry.register(
+    vendor=vendor,
+    capture=_registry.lazy_call("engine.providers.ashby", "capture"),
+    fill=_registry.lazy_call("engine.providers.ashby", "fill"),
+    apply_url=apply_url,
+    resolve_values=resolve_values,
+    adapter=AshbyAdapter,
+    vendor_resolver=vendor_resolver,
+)
+
+__all__ = ["vendor", "capture", "apply_url", "resolve_values", "fill",
+           "vendor_resolver"]

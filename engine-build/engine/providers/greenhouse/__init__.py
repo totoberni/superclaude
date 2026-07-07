@@ -49,4 +49,37 @@ from engine.providers.greenhouse.fill import (  # noqa: F401
     vendor,
 )
 
-__all__ = ["vendor", "capture", "apply_url", "resolve_values", "fill"]
+# -- Stage 2e self-registration into the eager-light auto-registry -------------
+# The board-JSON adapter is a LEAF module (`engine.kernel.*` only); it is the one
+# name this package needs from `.discover` and is safe to import at load.
+from engine.providers.greenhouse.discover import GreenhouseAdapter  # noqa: E402,F401
+
+
+def vendor_resolver():
+    """Greenhouse's portal-widget resolver: the location-autocomplete `location`
+    field, the paste-in `resume_text`/`cover_letter_text` textareas, and the
+    `longitude`/`latitude` telemetry fields. Imported at CALL time from `.resolve`
+    so this package stays light at import."""
+    from engine.providers.greenhouse.resolve import GREENHOUSE_WIDGET_RESOLVER
+    return GREENHOUSE_WIDGET_RESOLVER
+
+
+# `_registry` defines `register` before it imports the plugins, so this call
+# resolves even when the first import into `engine.providers._registry` arrived
+# THROUGH this package (re-entrant self-registration). `capture`/`fill` are
+# registered LAZILY (resolved on call) to keep both the registry and this import
+# browser-free; `apply_url`/`resolve_values` are the package's own bound callables.
+from engine.providers import _registry  # noqa: E402
+
+_registry.register(
+    vendor=vendor,
+    capture=_registry.lazy_call("engine.providers.greenhouse", "capture"),
+    fill=_registry.lazy_call("engine.providers.greenhouse", "fill"),
+    apply_url=apply_url,
+    resolve_values=resolve_values,
+    adapter=GreenhouseAdapter,
+    vendor_resolver=vendor_resolver,
+)
+
+__all__ = ["vendor", "capture", "apply_url", "resolve_values", "fill",
+           "vendor_resolver"]

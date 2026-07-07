@@ -22,9 +22,13 @@ Two properties are load-bearing and drive the lazy-reference design:
    attribute. The references therefore look the function up on the module object at
    call time, never binding it at import time (the classic import-alias gotcha).
 
-Only `engine.discover` (the board adapters; a leaf module whose own imports never
-loop back here) is safe to import eagerly, which also breaks the latent
-fetch -> providers -> fieldmap -> fetch import cycle.
+The board adapters are imported eagerly from their per-vendor leaf homes
+(`engine.providers.<vendor>.discover`), whose own imports reach only
+`engine.kernel.*` and never loop back here. Sourcing them there (rather than from
+`engine.discover`) is what lets `engine.discover` re-export the adapters FROM the
+plugins without a cycle: after Stage 2e nothing under `engine.providers` imports
+`engine.discover` at load, so the daily-poll import chain
+(fetch -> providers -> ...) never re-enters a half-initialised `engine.discover`.
 """
 
 from __future__ import annotations
@@ -33,12 +37,10 @@ from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urlsplit
 
-from engine.discover import (
-    AshbyAdapter,
-    GreenhouseAdapter,
-    LeverAdapter,
-    WorkableAdapter,
-)
+from engine.providers.ashby.discover import AshbyAdapter
+from engine.providers.greenhouse.discover import GreenhouseAdapter
+from engine.providers.lever.discover import LeverAdapter
+from engine.providers.workable.discover import WorkableAdapter
 
 
 # -- endpoint builders (board poll URLs) ---------------------------------------
