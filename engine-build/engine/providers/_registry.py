@@ -19,12 +19,14 @@ loads and self-registers all four vendors; by the time control returns from
 Crucially this module does NOT import the plugins at its own bottom. It would be
 the classic re-entrant self-registration pattern -- but one vendor's `__init__`
 is reachable (via `engine.fieldmap`'s lazy `__getattr__` shim for
-`GREENHOUSE_WIDGET_RESOLVER`) WHILE `engine.fill` is still mid-import; a cascade
-from that vendor into the OTHER vendors' `.fill` (which import their dataclasses
-from `engine.fill`, unlike greenhouse which reads `engine.kernel.contracts`) then
-re-enters the half-initialised `engine.fill` and raises. Letting each vendor
-register itself in isolation -- with no cross-plugin cascade from `register()` --
-sidesteps that entirely.
+`GREENHOUSE_WIDGET_RESOLVER`) WHILE `engine.fill` is still mid-import; before the
+Stage-4 repoint (when the non-greenhouse `.fill` modules still imported their
+dataclasses from `engine.fill` -- all four now read `engine.kernel.contracts`) a
+cascade from that vendor into the others re-entered the half-initialised
+`engine.fill` and raised. Letting each vendor register itself in isolation --
+with no cross-plugin cascade from `register()` -- sidesteps that hazard class
+entirely, and the pinned `VENDOR_ORDER` walk in `engine.providers.__init__`
+depends on registration not cascading.
 
 EAGER: after any `engine.providers.*` import, `PROVIDERS` holds all four vendors.
 LIGHT: no browser module is loaded. `capture`/`fill` are registered as LAZY
@@ -60,9 +62,9 @@ class ProviderSpec:
                         LAZY (`lazy_call`).
         apply_url       public apply-page URL builder, (slug, job_id) -> str
                         (browser-free; bound directly, not lazy).
-        resolve_values  value-resolution callable (the vendor's own; the browser
-                        vendors' delegates greenhouse's hole-fix per their plugin
-                        docstrings). Bound directly.
+        resolve_values  value-resolution callable (the vendor's own; every
+                        vendor delegates the hole-fix e CV/photo rule to the
+                        kernel per its plugin docstring). Bound directly.
         adapter         the vendor's board-JSON discover adapter CLASS (from
                         `engine.providers.<vendor>.discover`); None for a stub.
         vendor_resolver zero-arg callable returning the vendor's portal-widget

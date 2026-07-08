@@ -11,9 +11,9 @@ on -- `normalize_type` + `_HIDDEN_TYPES` (the shared vendor-native type mapper),
 `_read_body_text`, `_utc_now_iso` -- STAY in `engine.fieldmap` and are imported
 from there, so there is exactly one definition of each. `engine.fieldmap` keeps
 a lazy re-export shim for every name moved here, so existing importers
-(`engine.fill`, `registry._capture_greenhouse`, the tests) keep resolving them
-via `engine.fieldmap` unchanged, and the `monkeypatch.setattr(fieldmap,
-"capture_greenhouse", ...)` seam still works.
+(`engine.fill`, the tests; the old `registry.py` consumer was deleted in Stage
+3c) keep resolving them via `engine.fieldmap` unchanged, and the
+`monkeypatch.setattr(fieldmap, "capture_greenhouse", ...)` seam still works.
 """
 
 from __future__ import annotations

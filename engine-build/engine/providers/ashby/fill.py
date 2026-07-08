@@ -85,9 +85,9 @@ this module must not import patchright / `engine.browse` at load time so the
 daily poller (which imports `engine.providers` eagerly: `_registry` plus the
 four plugin packages, all browser-free) stays browser-free. Kernel primitives
 are imported at module scope (browser-free by construction); the vendor capture
-submodule is reached at CALL time via `importlib.import_module`. The one
-remaining `engine.fill` import is the top-level dataclass re-export line
-(repoints to `kernel.contracts` in Stage 4).
+submodule is reached at CALL time via `importlib.import_module`. Dataclasses
+come from their canonical kernel home (`kernel.contracts`); this module has
+NO `engine.fill` import at any scope (the Stage 4 repoint is done).
 Ashby imports NO sibling vendor package (import-disjoint, W5.1 Stage 3a): the
 CV/photo rule comes from the kernel, not from greenhouse.
 
@@ -109,7 +109,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from engine.fieldmap import FieldMap
-from engine.fill import FillAssets, FillReport, FillSafetyError, ResolvedValues
+from engine.kernel.contracts import (
+    FillAssets, FillReport, FillSafetyError, ResolvedValues)
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
 from engine.providers import base
 

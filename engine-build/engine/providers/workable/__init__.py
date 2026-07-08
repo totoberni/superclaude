@@ -33,8 +33,9 @@ Kept LIGHT (matching the old module's import cost): importing this package loads
 NO patchright / `engine.browse`; the fill body reaches the kernel's private
 helpers (`kernel.resolve._completeness`,
 `kernel.fill_toolkit._locate_file_input`/`_upload_attached`) and the capture
-body the `engine.fieldmap` seam via CALL-TIME imports; the sole `engine.fill`
-reference is the module-scope dataclass re-export line. This package
+body the `engine.fieldmap` seam via CALL-TIME imports; the package has NO
+`engine.fill` import at any scope (dataclasses come from `kernel.contracts`,
+Stage 4). This package
 SELF-REGISTERS into `engine.providers._registry` at import (Stage 2e-1) -- that
 is how `PROVIDERS` populates.
 """
@@ -73,7 +74,7 @@ def vendor_resolver():
 # `_registry` defines `register` before importing the plugins, so this resolves
 # even under re-entrant self-registration. `capture`/`fill` are LAZY (resolved on
 # call) to keep both the registry and this import browser-free; `resolve_values`
-# is the package's own callable (it delegates greenhouse's hole-fix per the
+# is the package's own callable (it delegates the hole-fix e CV/photo rule to the kernel per the
 # module docstring).
 from engine.providers import _registry  # noqa: E402
 

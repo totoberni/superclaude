@@ -14,8 +14,8 @@ packages below, each of which self-registers into `_registry.PROVIDERS` from its
 own `__init__`. That transit is what makes `_registry.PROVIDERS` fully populated
 after any `engine.providers.*` import (it replaces the old `registry.py`, whose
 discover-adapter imports used to trigger the same self-registration). Vendor
-`__init__`s import `engine.fill` dataclasses (lever/ashby/workable `.fill`), so
-the re-entrant load graph is the same one the old registry drove. The
+`.fill` modules take their dataclasses from `kernel.contracts` (Stage 4), so
+this transit no longer loads `engine.fill` at all. The
 `PROVIDERS` order is PINNED to `VENDOR_ORDER` below (an iteration order only --
 no functional dependency; host matchers are disjoint): registration walks that
 tuple explicitly, and a post-import check raises if a future import-graph edit
