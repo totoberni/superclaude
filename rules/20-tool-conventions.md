@@ -2,6 +2,13 @@
 
 Universal tool-usage patterns learned from past mistakes. Applies to ALL agents.
 
+## Sweep Verification: Full Enumeration, Never Head-Limited
+
+- Context-hygiene head limits (`head_limit`, `| head -N`) are for EXPLORATION only. Any grep whose result gates a claim (absence/presence checks, "class closed"/"all corrected" sweeps, R-3 verification, doc-truthfulness audits) must enumerate the FULL hit list, or use per-file counts (`grep -c`) instead of a truncated match list.
+- Sweep for LINE-WRAPPED token variants in prose: a backtick citation split across a line break defeats single-line patterns. Add an end-of-line variant (`pattern$`) alongside the plain grep.
+- Never write a universal claim ("every X corrected", "zero Y remain") in a commit message or report without a fresh zero-hit class grep at write time.
+- Source: meta 2026-07-07 (cotformer: `head -8` produced a false WANDB_MODE absence claim) + 2026-07-08 (automations W5.1a: `head -12` truthfulness sweep missed a 4th sibling file, 11 citations and 1 line-wrapped token; cost a full hostile-gate REJECT round). Occ=2, promoted. Memory: `meta-verification-grep-discipline`.
+
 ## Single Source of Truth Across Tool Boundaries
 
 - When a value can be computed in two places (bash vs Python, template vs runtime config, client vs server), pick ONE site as canonical. The other must consume the canonical value directly or not exist.
