@@ -1,6 +1,6 @@
 ---
 name: hostile-review
-description: "Use when a draft needs an adversarial truth-seeking stress test before a commit horizon: methodology and technical gauntlets."
+description: "Use when a draft needs an adversarial stress test before commit."
 category: research
 user-invocable: true
 argument-hint: "[--scope methodology|technical|both] [--target <path>] [--reviewer-count 1|2] [--web-search-budget <N>] [--markscheme <path>] [--spec <path>] [--mode A|B]"

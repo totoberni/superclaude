@@ -1,6 +1,6 @@
 ---
 name: wsl-gotchas
-description: "WSL2 pitfalls for process, filesystem, networking, Git. For w-debugger."
+description: "Use when hitting WSL2 pitfalls in process, filesystem, networking, Git."
 category: domain
 user-invocable: false
 ---

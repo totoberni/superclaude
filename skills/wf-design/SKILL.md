@@ -1,6 +1,6 @@
 ---
 name: wf-design
-description: "Use when driving a research experimental design to a hostile-review methodology seal. Meta+orch only."
+description: "Use when driving an experimental design to a hostile-review methodology seal."
 category: workflow
 user-invocable: true
 argument-hint: "<phenomenon> [--rounds N] [--strict]"

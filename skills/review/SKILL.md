@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Invoke w-reviewer on staged changes. Modes: general/infra/security."
+description: "Use when invoking w-reviewer on staged changes, general/infra/security"
 category: workflow
 user-invocable: true
 argument-hint: "[mode] [file-or-commit-range] [--loop]"

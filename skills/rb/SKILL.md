@@ -1,6 +1,6 @@
 ---
 name: rb
-description: "Refresh bootstrap.md from state + directive + pitfalls"
+description: "Use when refreshing bootstrap.md from state, directive and pitfalls"
 category: workflow
 user-invocable: true
 argument-hint: "<orch-name>"

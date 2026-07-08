@@ -1,6 +1,6 @@
 ---
 name: test-infra
-description: "Run infrastructure regression tests. --quick for fast subset."
+description: "Use when running the infrastructure regression tests."
 category: meta
 user-invocable: true
 argument-hint: "[--quick | --component <name>] [--loop]"

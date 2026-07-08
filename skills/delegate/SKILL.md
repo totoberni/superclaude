@@ -1,6 +1,6 @@
 ---
 name: delegate
-description: "Fresh subagent per task with two-stage review. For orch agents."
+description: "Use when delegating a task to a fresh subagent with two-stage review"
 category: orchestration
 user-invocable: false
 ---

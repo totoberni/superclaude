@@ -1,6 +1,6 @@
 ---
 name: gas-patterns
-description: "Google Apps Script conventions and gotchas. For w-debugger."
+description: "Use when working with Google Apps Script conventions and gotchas"
 category: domain
 user-invocable: false
 ---

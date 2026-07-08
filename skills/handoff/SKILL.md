@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: "Use when the user explicitly asks to commission, continue, or decommission a permanent ork, or to hand off the current session."
+description: "Use when the user explicitly asks to commission or decommission an ork"
 category: orchestration
 user-invocable: true
 argument-hint: "[--commission <project> [name]] [--continue] [--decommission [--dry-run] [name]] [<target>]"

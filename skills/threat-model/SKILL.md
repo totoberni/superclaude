@@ -1,6 +1,6 @@
 ---
 name: threat-model
-description: "STRIDE threat analysis: map attack surface, rate, output model."
+description: "Use when running a STRIDE threat analysis to map and rate attack surface."
 category: domain
 user-invocable: true
 argument-hint: "<target-component-or-project> [--<project>] [--rounds N] [--strict]"

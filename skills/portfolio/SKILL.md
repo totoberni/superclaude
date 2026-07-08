@@ -1,6 +1,6 @@
 ---
 name: portfolio
-description: "Cross-orch dashboard: active orchs, status, escalations"
+description: "Use when viewing a cross-orch dashboard of orchs, status and escalations"
 model: haiku
 category: orchestration
 user-invocable: true

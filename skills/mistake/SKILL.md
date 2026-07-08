@@ -1,6 +1,6 @@
 ---
 name: mistake
-description: "Record mistakes and promote recurring patterns to prevention rules."
+description: "Use when recording a mistake or promoting a recurring pattern."
 category: memory
 user-invocable: true
 argument-hint: "[project-name or 'all']"

@@ -1,6 +1,6 @@
 ---
 name: research
-description: "Scientific research: design, literature, hostile-review, report, and friends."
+description: "Use when running scientific research, design, literature, review, report"
 category: domain
 user-invocable: true
 argument-hint: "<design|paper|literature|ablation|hyperparams|reproduce|gap-audit|hostile-review|report|report-publish|report-technical> [args]"

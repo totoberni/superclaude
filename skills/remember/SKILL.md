@@ -1,6 +1,6 @@
 ---
 name: remember
-description: "Meta context save/load: cheaper than compaction"
+description: "Use when saving or loading meta context, cheaper than compaction"
 category: memory
 user-invocable: true
 argument-hint: "[--save] [--deep]"

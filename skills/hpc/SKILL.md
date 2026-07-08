@@ -1,6 +1,6 @@
 ---
 name: hpc
-description: "HPC workflow: generate SLURM scripts, rsync, parse job output."
+description: "Use when generating SLURM scripts, rsync, or parsing job output."
 category: domain
 user-invocable: true
 argument-hint: "<job|sync|status|env> [args]"

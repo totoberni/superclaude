@@ -1,6 +1,6 @@
 ---
 name: memory-search
-description: "Search across all agent memory files for a keyword or topic."
+description: "Use when searching agent memory for a keyword or topic."
 model: haiku
 category: memory
 user-invocable: true

@@ -1,6 +1,6 @@
 ---
 name: nudge
-description: "Quick status probe. /nudge self or /nudge orch-name for cross-agent."
+description: "Use when probing agent status, self or a named orch."
 model: haiku
 category: orchestration
 user-invocable: true

@@ -1,6 +1,6 @@
 ---
 name: health
-description: "Infrastructure health check. /health [component] for specific."
+description: "Use when checking superclaude infrastructure health."
 model: haiku
 category: health
 user-invocable: true

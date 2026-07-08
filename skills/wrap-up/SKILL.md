@@ -1,6 +1,6 @@
 ---
 name: wrap-up
-description: "Post-work bundle: record outcome + /mistake + /good-idea + /remember --save + state/recovery"
+description: "Use when bundling post-work outcome, mistake, good-idea, and recovery."
 category: workflow
 user-invocable: true
 argument-hint: "<project>"

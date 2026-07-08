@@ -1,6 +1,6 @@
 ---
 name: lt-mem
-description: "Memory DB consolidation: re-tier mature entries, prune stale, merge near-dups; propagate to peer when replicated (Step 8)."
+description: "Use when consolidating memory DB; re-tier, prune, merge dups."
 category: memory
 user-invocable: true
 argument-hint: "[--quick | --complete] [--compact | --skip-compact] [--sanitize] [--dry-run] [project <name> | all]"

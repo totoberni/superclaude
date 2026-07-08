@@ -1,6 +1,6 @@
 ---
 name: verify
-description: "Enforce evidence-before-claims. Loaded by orch before writing RPTs."
+description: "Use when enforcing evidence-before-claims before writing an RPT."
 category: workflow
 user-invocable: false
 ---

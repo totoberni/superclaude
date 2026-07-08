@@ -1,6 +1,6 @@
 ---
 name: converge
-description: "Use when converging an artifact through iterate-produce-review rounds to a sealed finish under the /goal engine. Meta+orch only."
+description: "Use when converging an artefact through produce-review rounds to a seal"
 category: delegation
 user-invocable: true
 argument-hint: "<target> [--rounds N] [--strict] [--panel] [--binding B1|B2|B3|B4|B5]"

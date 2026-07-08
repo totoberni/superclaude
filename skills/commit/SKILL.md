@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Creates a conventional commit with auto-detected type and TDD check."
+description: "Use when creating a conventional commit with auto-detected type"
 category: workflow
 user-invocable: true
 argument-hint: "[optional message override]"

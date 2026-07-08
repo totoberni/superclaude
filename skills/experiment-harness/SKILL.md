@@ -1,6 +1,6 @@
 ---
 name: experiment-harness
-description: "Multi-seed experiment runner + passport.yaml claim-provenance verifier."
+description: "Use when running multi-seed experiments and verifying claim provenance"
 category: domain
 user-invocable: true
 argument-hint: "<run|verify> [args]"

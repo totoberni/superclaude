@@ -1,6 +1,6 @@
 ---
 name: push
-description: "Use when the user explicitly asks to enable or disable agent git-push permission."
+description: "Use when the user explicitly asks to toggle agent git-push permission"
 category: workflow
 user-invocable: true
 argument-hint: "{true|false}"

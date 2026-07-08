@@ -1,6 +1,6 @@
 ---
 name: good-idea
-description: "Record effective solutions and patterns for reuse across sessions."
+description: "Use when recording an effective solution or pattern for reuse"
 category: memory
 user-invocable: true
 argument-hint: "[project-name or 'all']"

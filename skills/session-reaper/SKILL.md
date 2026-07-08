@@ -1,6 +1,6 @@
 ---
 name: session-reaper
-description: "Use when the user explicitly asks to inspect or clean up agent sessions (status dashboard, kill zombies, history, cron)."
+description: "Use when the user explicitly asks to inspect or clean up agent sessions"
 model: haiku
 category: orchestration
 user-invocable: true

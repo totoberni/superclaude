@@ -1,6 +1,6 @@
 ---
 name: hook-health
-description: "Score hook subsystem health /100. Syntax, perf, naming, coverage."
+description: "Use when scoring hook subsystem health; syntax, perf, coverage."
 model: haiku
 category: health
 user-invocable: true

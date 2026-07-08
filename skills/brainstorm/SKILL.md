@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: "Design-before-implementation gate for features and architecture."
+description: "Use when gating design before implementing a feature or architecture"
 category: workflow
 user-invocable: true
 argument-hint: "[topic or feature description]"

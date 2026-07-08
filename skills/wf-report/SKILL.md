@@ -1,6 +1,6 @@
 ---
 name: wf-report
-description: "Use when driving a LaTeX report to a sealed finish via /converge: compile gate plus hostile-review SEAL. Meta+orch only."
+description: "Use when driving a LaTeX report to a sealed finish via /converge SEAL."
 category: workflow
 user-invocable: true
 argument-hint: "<report-target> [--rounds N] [--strict] [--publish]"

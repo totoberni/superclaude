@@ -1,6 +1,6 @@
 ---
 name: mem-similar
-description: "Find memories related/near-duplicate to a given one — hybrid semantic + lexical."
+description: "Use when finding memories related or near-duplicate to one."
 category: memory
 user-invocable: true
 allowed-tools: Bash

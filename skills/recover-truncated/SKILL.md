@@ -1,6 +1,6 @@
 ---
 name: recover-truncated
-description: "WORKER-TRUNCATED recovery: narrow re-dispatch + hand-off context. Meta+orch only"
+description: "Use when recovering a truncated worker via narrow re-dispatch and handoff"
 category: orchestration
 user-invocable: true
 argument-hint: "[<description-fragment>] | [--recent] [--writes]"

@@ -1,6 +1,6 @@
 ---
 name: wf-nb-watch
-description: "Use when watching a long notebook run on a fixed poll interval, dispatching a fix on BROKEN or HUNG. Meta+orch only."
+description: "Use when watching a long notebook run, dispatching a fix on BROKEN or HUNG."
 category: workflow
 user-invocable: true
 argument-hint: "<notebook-path> [--interval 10m]"

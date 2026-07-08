@@ -1,6 +1,6 @@
 ---
 name: better-super
-description: "Mine and update superclaude tooling from upstream (two-wave, human-gated)."
+description: "Use when mining and updating superclaude tooling from upstream"
 category: maintenance
 user-invocable: true
 argument-hint: "[--new | --update]"

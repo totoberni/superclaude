@@ -1,6 +1,6 @@
 ---
 name: wf-hygiene
-description: "Use when a scheduled advisory hygiene pass is needed: session status, memory health, stale checkpoints. B4 gardener, Meta+orch only."
+description: "Use when a scheduled hygiene pass checks sessions, memory, checkpoints."
 category: workflow
 user-invocable: true
 argument-hint: "[--interval daily]"

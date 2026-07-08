@@ -1,6 +1,6 @@
 ---
 name: wf-hpc-watch
-description: "Use when monitoring a long-running SLURM job on a fixed poll interval, acting only when its state changes. Meta+orch only."
+description: "Use when polling a long-running SLURM job, acting only on state change."
 category: workflow
 user-invocable: true
 argument-hint: "<job-id|job-name> [--interval 15m]"

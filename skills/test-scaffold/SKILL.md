@@ -1,6 +1,6 @@
 ---
 name: test-scaffold
-description: "Generate pytest boilerplate for untested Python modules."
+description: "Use when generating pytest boilerplate for untested Python modules."
 category: meta
 user-invocable: true
 argument-hint: "<project-path> [module-path]"

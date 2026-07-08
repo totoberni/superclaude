@@ -1,6 +1,6 @@
 ---
 name: topology-producer-reviewer
-description: "Producer-Reviewer dyad: pair worker with reviewer audit. Foreground or BG (W-4)."
+description: "Use when pairing a producer worker with a reviewer audit dyad."
 category: delegation
 user-invocable: true
 argument-hint: "<producer-type> <reviewer-type> [--bg] [--rounds N] <task>"

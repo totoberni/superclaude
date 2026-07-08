@@ -1,6 +1,6 @@
 ---
 name: swarm-dispatch
-description: "Launch parallel w-* batch using W-1/W-4/W-7/W-11 patterns. Meta+orch only."
+description: "Use when launching a parallel w-* batch via W-1/W-4/W-7/W-11 patterns"
 category: delegation
 user-invocable: true
 argument-hint: "<pattern> <task spec>"

@@ -1,6 +1,6 @@
 ---
 name: memory-prune
-description: "Scan memory matrix for stale or broken entries. Advisory only."
+description: "Use when scanning memory for stale or broken entries; advisory."
 category: memory
 user-invocable: true
 argument-hint: "[scope: 'all' | 'shared' | 'class' | 'instance']"

@@ -1,6 +1,6 @@
 ---
 name: nb-monitor
-description: "Run a notebook with live per-cell progress + BROKEN/HUNG/SLOW state."
+description: "Use when running a notebook with live per-cell progress state."
 category: code-quality
 user-invocable: true
 argument-hint: "run NOTEBOOK [--cell-timeout 300] [--kernel-name NAME] [--progress-path PATH] [--heartbeat 0.5] [--allow-errors]"

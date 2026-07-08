@@ -1,6 +1,6 @@
 ---
 name: comms-query
-description: "Ad-hoc SQLite queries against HCOM broker: ESC, stuck orks, latency, orphan DIR."
+description: "Use when running ad-hoc SQLite queries against the HCOM broker"
 model: haiku
 category: comms
 user-invocable: true

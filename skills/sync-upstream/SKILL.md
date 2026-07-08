@@ -1,6 +1,6 @@
 ---
 name: sync-upstream
-description: "Sync upstream Claude Code reference library and diff changes."
+description: "Use when syncing the upstream Claude Code reference library and diffing"
 category: meta
 user-invocable: true
 argument-hint: "[audit]"

@@ -1,6 +1,6 @@
 ---
 name: tdd
-description: "RED-GREEN-REFACTOR cycle for features and bugfixes."
+description: "Use when running a RED-GREEN-REFACTOR cycle for features and bugfixes."
 category: workflow
 user-invocable: true
 argument-hint: "[task-description]"

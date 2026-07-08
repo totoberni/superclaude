@@ -1,6 +1,6 @@
 ---
 name: autocommission
-description: "Spawn ephemeral w-* for one-off task; auto-cleanup on done. Meta+orch only."
+description: "Use when spawning an ephemeral w-* worker for a one-off task"
 category: delegation
 user-invocable: true
 argument-hint: "<task description in quotes>"

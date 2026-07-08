@@ -1,6 +1,6 @@
 ---
 name: fix-issue
-description: "End-to-end GitHub issue fix pipeline. /fix-issue <owner/repo#number>"
+description: "Use when running an end-to-end fix pipeline for a GitHub issue"
 category: workflow
 user-invocable: true
 argument-hint: "<owner/repo#number> or <issue-url> [--loop]"

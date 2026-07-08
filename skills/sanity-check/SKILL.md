@@ -1,6 +1,6 @@
 ---
 name: sanity-check
-description: "Detect test-weakening, scope violations, and drift in orch work."
+description: "Use when auditing an orch's changes for test-weakening or scope drift."
 category: meta
 user-invocable: true
 argument-hint: "<orch-name> [--loop]"
@@ -14,7 +14,7 @@ Sanity-check the changes made by orch **$ARGUMENTS**.
 
 1. Read `~/.claude/comms/$ARGUMENTS/bootstrap.md` to get the orch's repo path, branch, and file scope
 2. Read `~/.claude/comms/$ARGUMENTS/directives.md` to understand what the orch was told to do
-3. Read `~/.claude/plans/vps-migration/state-${ARGUMENTS#orch-<project>-}.md` to see what the orch claims it did
+3. Read `~/.claude/comms/$ARGUMENTS/state.md` (the per-orch state file, colocated with the orch's directives and reports per rules/12) to see what the orch claims it did. If it is absent, fall back to the commit range in the directive and note the missing state file.
 
 ## Identify the changes
 

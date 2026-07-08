@@ -1,6 +1,6 @@
 ---
 name: wf-watchdog
-description: "Use when supervising another converge loop's health: read its round ledger as a heartbeat and escalate on stall or oscillation."
+description: "Use when supervising a converge loop's health and escalating on stall."
 category: workflow
 user-invocable: true
 argument-hint: "<ledger-path> [--interval 10m]"

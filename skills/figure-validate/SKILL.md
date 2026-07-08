@@ -1,6 +1,6 @@
 ---
 name: figure-validate
-description: "Pre-flight figure validator: WCAG-AA contrast, thin lines, low alpha."
+description: "Use when validating figures for WCAG-AA contrast, thin lines, low alpha"
 model: haiku
 category: code-quality
 user-invocable: true

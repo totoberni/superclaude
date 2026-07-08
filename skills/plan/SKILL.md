@@ -1,6 +1,6 @@
 ---
 name: plan
-description: "Create or update a project plan (superclaude or in-project)."
+description: "Use when creating or updating a project plan."
 category: orchestration
 user-invocable: true
 argument-hint: "<project-goal>"

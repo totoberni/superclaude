@@ -1,6 +1,6 @@
 ---
 name: experiment
-description: "Track ML experiments: list, add, compare metrics, suggest next."
+description: "Use when tracking ML experiments to list, add, or compare metrics"
 category: domain
 user-invocable: true
 argument-hint: "<list|add|compare|status|next> [args]"

@@ -1,6 +1,6 @@
 ---
 name: super-health
-description: "Superclaude health /100 across 9 subsystems (always deepest); --complete adds 5-agent audit."
+description: "Use when scoring superclaude health across its 9 subsystems"
 category: health
 user-invocable: true
 argument-hint: "[--complete]"

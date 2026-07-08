@@ -1,6 +1,6 @@
 ---
 name: mem-index
-description: "Browse the v3 memory DB: list entries by tier/type and show DB stats."
+description: "Use when browsing the memory DB by tier or type, with stats."
 model: haiku
 category: memory
 user-invocable: true

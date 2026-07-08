@@ -1,6 +1,6 @@
 ---
 name: mem-health
-description: "Score memory DB health /100. 6 DB-aware criteria + v3 trigger checks."
+description: "Use when scoring memory DB health across DB-aware criteria."
 category: memory
 user-invocable: true
 argument-hint: "[--quick | --verbose]"

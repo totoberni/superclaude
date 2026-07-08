@@ -1,6 +1,6 @@
 ---
 name: wf-wave-monitor
-description: "Use when meta polls active orch health on a schedule, sealing the campaign once all orks report DONE with zero unanswered ESC."
+description: "Use when meta polls orch health on a schedule and seals when all DONE."
 category: workflow
 user-invocable: true
 argument-hint: "[--interval 15m] [--orchs <list|all>]"

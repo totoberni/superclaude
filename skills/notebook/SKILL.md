@@ -1,6 +1,6 @@
 ---
 name: notebook
-description: "Atomic .ipynb edit/execute/validate — kernel-aware, multi-orch-safe, paired-mode"
+description: "Use when doing atomic .ipynb edit, execute, or validate work."
 category: workflow
 user-invocable: true
 disable-model-invocation: false

@@ -1,6 +1,6 @@
 ---
 name: test-cleanup-protocol
-description: "Pre-test environment cleanup: __pycache__, compose host files, git status check"
+description: "Use when cleaning test env before a run; clears pycache, compose, git."
 category: testing
 user-invocable: false
 allowed-tools: Bash, Read, Grep

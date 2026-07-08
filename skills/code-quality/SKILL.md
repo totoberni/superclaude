@@ -1,6 +1,6 @@
 ---
 name: code-quality
-description: "Code quality checklist based on programming principles. For w-reviewer."
+description: "Use when reviewing code quality against programming principles"
 category: meta
 user-invocable: false
 ---

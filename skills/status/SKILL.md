@@ -1,6 +1,6 @@
 ---
 name: status
-description: "Show project status from state files, git status, and plan."
+description: "Use when showing project status from state files, git status and plan"
 model: haiku
 category: orchestration
 user-invocable: true

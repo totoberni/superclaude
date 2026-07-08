@@ -1,6 +1,6 @@
 ---
 name: skill-health
-description: "Score skill subsystem health /100. Frontmatter, refs, descriptions."
+description: "Use when scoring skill subsystem health, frontmatter, refs, descriptions"
 model: haiku
 category: health
 user-invocable: true

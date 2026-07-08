@@ -1,6 +1,6 @@
 ---
 name: pr
-description: "Create a GitHub pull request with structured summary using gh CLI."
+description: "Use when creating a GitHub pull request with a structured summary"
 category: workflow
 user-invocable: true
 argument-hint: "[base-branch]"

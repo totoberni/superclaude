@@ -1,6 +1,6 @@
 ---
 name: swarm-status
-description: "Live snapshot: in-flight workers, BG reviewer queue, active ephemeral agents."
+description: "Use when viewing a live snapshot of in-flight workers and reviewer queue"
 model: haiku
 category: delegation
 user-invocable: true

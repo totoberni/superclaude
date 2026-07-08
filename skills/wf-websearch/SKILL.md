@@ -1,6 +1,6 @@
 ---
 name: wf-websearch
-description: "Use when driving iterative multi-agent web research to a saturation-and-hostile-review seal. Meta+orch only."
+description: "Use when driving multi-agent web research to a saturation seal."
 category: workflow
 user-invocable: true
 argument-hint: "<research question> [--waves N] [--searches-per-wave 5] [--strict]"

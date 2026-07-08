@@ -1,6 +1,6 @@
 ---
 name: promote
-description: "Scan DB for >=3-occurrence autocommission patterns; draft permanent w-*.md."
+description: "Use when promoting a recurring autocommission pattern to a permanent w-*"
 category: delegation
 user-invocable: true
 argument-hint: "[--threshold N] [--dry-run]"

@@ -1,6 +1,6 @@
 ---
 name: pleh
-description: "Spawn parallel help. /pleh = self-help (2x). /pleh agent-name = cross-help (3x)."
+description: "Use when spawning parallel helper agents for self or cross-agent help"
 category: orchestration
 user-invocable: true
 argument-hint: "[target-agent]"

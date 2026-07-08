@@ -1,6 +1,6 @@
 ---
 name: orchestrator-patterns
-description: "Templates and conventions for orchestrated projects."
+description: "Use when applying templates or conventions for orchestrated projects."
 category: meta
 user-invocable: true
 argument-hint: "[project-name]"

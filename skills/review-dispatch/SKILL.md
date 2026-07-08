@@ -1,6 +1,6 @@
 ---
 name: review-dispatch
-description: "Use when resolving the correct adversarial reviewer for an artifact by class and stakes: model, rubric, isolation, verdict contract."
+description: "Use when resolving the correct adversarial reviewer for an artefact"
 category: delegation
 user-invocable: true
 argument-hint: "<artifact-class> <target> [--stakes normal|gate] [--panel]"
