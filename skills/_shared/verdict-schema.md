@@ -39,7 +39,7 @@ The convergence bar has three tiers (a wf-* binding or `/converge` selects one):
 `/goal` takes a natural-language CONDITION (not a pseudo-command). Every wf-* binding emits this shape, specialising the bracketed slots; it never invents a `/goal seal ...` subcommand:
 
 ```
-/goal Accept only when ALL hold: (1) the transcript contains a line beginning "SEAL: ACCEPTED" that the conductor states is quoted verbatim from a FRESH <reviewer> return, is the MOST RECENT such line, and post-dates the last change to <artefact>, reporting blocking=0 major=0 minor=0 <nits=0 at gate/strict>; (2) the producer has separately stated completion (STATUS: DONE); (3) <workflow-specific extra, or omit>. If review rounds exceed <cap>, or total findings do not decrease across 2 consecutive rounds, declare ESCALATE and stop.
+/goal Accept only when ALL hold: (1) the transcript contains a line beginning "SEAL: ACCEPTED" that the conductor states is quoted verbatim from a FRESH <reviewer> return, is the MOST RECENT such line, and post-dates the last change to <artefact>, reporting blocking=0 major=0 <minor=0 nits=0 at gate/strict>; (2) the producer has separately stated completion (STATUS: DONE); (3) <workflow-specific extra, or omit>. If review rounds exceed <cap>, or total findings do not decrease across 2 consecutive rounds, declare ESCALATE and stop.
 ```
 
 Producer-completion (clause 2) and workflow-specific slot (3) by binding: wf-design = clause 2 `STATUS: DONE` from the w-doc producer, slot 3 omitted; wf-report = clause 2 `STATUS: DONE`, slot 3 = "the latest revision compiles clean (latexmk, zero material warnings)"; wf-websearch = clause 2 IS saturation ("a wave surfaced zero new must-read sources"), since a search loop has no separate STATUS: DONE, slot 3 omitted.

@@ -638,6 +638,98 @@ test_skills() {
     echo "$dsfm" | grep -qE '^description: *"?Use when the user explicitly' || { DESTR_OK=false; fail "S9 destructive gates" "$ds: description does not start with 'Use when the user explicitly'"; }
   done
   [ "$DESTR_OK" = true ] && pass "S9 destructive gates (push/session-reaper/handoff: exactly 1 gate heading + guarded description)"
+
+  # S10: wf-skills schedule-driver skills (Wave-3). The 5 scheduled loop-driver skills
+  # (wf-wave-monitor, wf-watchdog, wf-hpc-watch, wf-nb-watch, wf-hygiene) must each exist
+  # with frontmatter carrying name, a description starting "Use when", category: workflow,
+  # user-invocable: true, and NO disable-model-invocation key (DEC-R3), and must share the
+  # R-1 6-section-header template (exactly 6 '## ' headers; the header TEXT varies by
+  # driver, the COUNT does not). Real failing paths: a missing skill, a re-added flip key,
+  # a wrong/absent category, or a header-count mismatch.
+  local SCHED_SKILLS="wf-wave-monitor wf-watchdog wf-hpc-watch wf-nb-watch wf-hygiene"
+  local SCHED_OK=true sks sksf sksfm skshc
+  for sks in $SCHED_SKILLS; do
+    sksf="$SKILL_DIR/$sks/SKILL.md"
+    if [ ! -f "$sksf" ]; then
+      SCHED_OK=false; fail "S10 schedule skills" "$sks/SKILL.md: missing"; continue
+    fi
+    sksfm=$(sed -n '2,/^---$/p' "$sksf" 2>/dev/null)
+    echo "$sksfm" | grep -qE '^name:'                     || { SCHED_OK=false; fail "S10 schedule skills" "$sks: frontmatter missing name:"; }
+    echo "$sksfm" | grep -qE '^description: *"?Use when'   || { SCHED_OK=false; fail "S10 schedule skills" "$sks: description must start with 'Use when'"; }
+    echo "$sksfm" | grep -qE '^category: *workflow'        || { SCHED_OK=false; fail "S10 schedule skills" "$sks: category must be 'workflow'"; }
+    echo "$sksfm" | grep -qE '^user-invocable: *true'      || { SCHED_OK=false; fail "S10 schedule skills" "$sks: user-invocable must be true"; }
+    echo "$sksfm" | grep -qE '^disable-model-invocation:'  && { SCHED_OK=false; fail "S10 schedule skills" "$sks: disable-model-invocation must be absent (DEC-R3)"; }
+    skshc=$(grep -c '^## ' "$sksf" 2>/dev/null)
+    [ "$skshc" -eq 6 ] || { SCHED_OK=false; fail "S10 schedule skills" "$sks: R-1 template needs exactly 6 '## ' headers, found $skshc"; }
+  done
+  [ "$SCHED_OK" = true ] && pass "S10 schedule skills (5 wf-* drivers: Use-when desc, category workflow, user-invocable, no flip key, 6-section R-1 template)"
+
+  # S11: wf-skills family invariants (Wave-3). EVERY skill named wf-* (the 3 flagship
+  # drivers wf-design/wf-report/wf-websearch PLUS the 5 schedule drivers) must carry
+  # category: workflow and must NOT carry a disable-model-invocation key. Discovered by
+  # glob so a future wf-* is covered automatically; the family must number >= 8. Real
+  # failing paths: a wf-* with a non-workflow category, a re-added flip key, or the family
+  # shrinking below 8.
+  local WFFAM_OK=true WF_N=0 wff wffname wfffm
+  for wff in "$SKILL_DIR"/wf-*/SKILL.md; do
+    [ -f "$wff" ] || continue
+    WF_N=$((WF_N + 1))
+    wffname=$(basename "$(dirname "$wff")")
+    wfffm=$(sed -n '2,/^---$/p' "$wff" 2>/dev/null)
+    echo "$wfffm" | grep -qE '^category: *workflow'        || { WFFAM_OK=false; fail "S11 wf-family" "$wffname: category must be 'workflow'"; }
+    echo "$wfffm" | grep -qE '^disable-model-invocation:'  && { WFFAM_OK=false; fail "S11 wf-family" "$wffname: disable-model-invocation must be absent"; }
+  done
+  if [ "$WF_N" -lt 8 ]; then
+    WFFAM_OK=false; fail "S11 wf-family" "expected >= 8 wf-* skills, found $WF_N"
+  fi
+  [ "$WFFAM_OK" = true ] && pass "S11 wf-family ($WF_N wf-* skills: all category workflow, none carry disable-model-invocation)"
+
+  # S12: wf-skills loop-integration sections (Wave-3). The Class-A skills that gained a
+  # /converge binding must retain their loop-integration section. The reviewer/checker/
+  # driver set (heavy) and the light-variant set both carry a "## Loop integration"
+  # heading; research/references/gap-audit.md is itself a /converge DRIVER and carries the
+  # equivalent "### Convergence loop" section instead. Real failing path: a regression
+  # stripping the loop-integration / convergence-loop section from any of them.
+  local LOOP_HEAVY="fix-issue test-infra figure-validate sanity-check review design-review threat-model topology-producer-reviewer delegate hook-health better-super"
+  local LOOP_LIGHT="mistake good-idea memory-prune plan pr brainstorm tdd recover-truncated hpc"
+  local LOOP_OK=true lis lisf
+  for lis in $LOOP_HEAVY $LOOP_LIGHT; do
+    lisf="$SKILL_DIR/$lis/SKILL.md"
+    if [ ! -f "$lisf" ]; then
+      LOOP_OK=false; fail "S12 loop-integration" "$lis/SKILL.md: missing"; continue
+    fi
+    grep -qE '^## Loop integration' "$lisf" || { LOOP_OK=false; fail "S12 loop-integration" "$lis: missing '## Loop integration' section"; }
+  done
+  local GAP_AUDIT="$SKILL_DIR/research/references/gap-audit.md"
+  if [ ! -f "$GAP_AUDIT" ]; then
+    LOOP_OK=false; fail "S12 loop-integration" "research/references/gap-audit.md: missing"
+  else
+    grep -qE '^### Convergence loop' "$GAP_AUDIT" || { LOOP_OK=false; fail "S12 loop-integration" "gap-audit.md: missing '### Convergence loop' converge-driver section"; }
+  fi
+  [ "$LOOP_OK" = true ] && pass "S12 loop-integration (11 heavy + 9 light skills carry '## Loop integration'; gap-audit.md carries '### Convergence loop')"
+
+  # S13: reviewer no-self-seal invariant (Wave-3). The three reviewer skills (review,
+  # design-review, sanity-check) must state they never self-seal and must NOT contain a
+  # positive self-seal construction. Positive check: each carries the literal "never seals
+  # itself". Negative checks: no positive seal-attribution phrase ("is the seal" or "seals
+  # the loop|round|artefact|convergence"), AND every "seals itself" occurrence is the
+  # negated "never seals itself" (occurrence counts must match). Real failing paths: the
+  # no-self-seal statement removed, an unnegated "seals itself" added, or a positive
+  # "... is the seal" construction introduced. Verified clean against current files.
+  local REVIEWERS="review design-review sanity-check"
+  local SEAL_OK=true rvs rvsf rvs_all rvs_neg
+  for rvs in $REVIEWERS; do
+    rvsf="$SKILL_DIR/$rvs/SKILL.md"
+    if [ ! -f "$rvsf" ]; then
+      SEAL_OK=false; fail "S13 no-self-seal" "$rvs/SKILL.md: missing"; continue
+    fi
+    grep -qiE 'never seals itself' "$rvsf" || { SEAL_OK=false; fail "S13 no-self-seal" "$rvs: missing 'never seals itself' invariant"; }
+    grep -qiE 'is the seal|seals the (loop|round|artefact|artifact|convergence)' "$rvsf" && { SEAL_OK=false; fail "S13 no-self-seal" "$rvs: positive self-seal phrase present"; }
+    rvs_all=$(grep -oiE 'seals itself' "$rvsf" | wc -l | tr -d ' ')
+    rvs_neg=$(grep -oiE 'never seals itself' "$rvsf" | wc -l | tr -d ' ')
+    [ "$rvs_all" -eq "$rvs_neg" ] || { SEAL_OK=false; fail "S13 no-self-seal" "$rvs: unnegated 'seals itself' (total=$rvs_all negated=$rvs_neg)"; }
+  done
+  [ "$SEAL_OK" = true ] && pass "S13 no-self-seal (review/design-review/sanity-check: 'never seals itself' present, no positive self-seal construction)"
 }
 
 # ═══════════════════════════════════════════════════

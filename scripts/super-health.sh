@@ -201,10 +201,45 @@ score_skill() {
   local final_skill2=$((final_skill - flip_penalty))
   [ "$final_skill2" -lt 0 ] && final_skill2=0
 
+  # ── Wave-3 schedule-skill + wf-family facet (wf-skills W3 co-evolution) ──
+  # skill-health.sh has no notion of the 5 scheduled loop-driver skills
+  # (wf-wave-monitor, wf-watchdog, wf-hpc-watch, wf-nb-watch, wf-hygiene) or the wf-*
+  # family invariants (category: workflow + no disable-model-invocation). Score them
+  # here, chained after the DEC-R3 flip facet. This ADDS an assertion and only LOWERS
+  # the skill score when the surface regresses (a missing/invalid schedule skill, a
+  # re-added flip key, a header-count drift, or a wf-* dropping category: workflow); it
+  # never relaxes or reweights any existing skill-health criterion. Bounded penalty
+  # (cap 8): +1 per invalid schedule skill (missing / wrong category / re-added flip key
+  # / '## ' header count != 6), +1 per wf-* family invariant breach.
+  local sched_bad=0 sched_list="" wffam_bad=0 wffam_list="" sch1 schf schfm schhc wff1 wffname2 wfffm2
+  for sch1 in wf-wave-monitor wf-watchdog wf-hpc-watch wf-nb-watch wf-hygiene; do
+    schf="$CLAUDE/skills/$sch1/SKILL.md"
+    if [ ! -f "$schf" ]; then
+      sched_bad=$((sched_bad + 1)); sched_list="$sched_list $sch1(missing)"; continue
+    fi
+    schfm=$(sed -n '2,/^---$/p' "$schf" 2>/dev/null)
+    echo "$schfm" | grep -qE '^category: *workflow'       || { sched_bad=$((sched_bad + 1)); sched_list="$sched_list $sch1(cat)"; continue; }
+    echo "$schfm" | grep -qE '^disable-model-invocation:' && { sched_bad=$((sched_bad + 1)); sched_list="$sched_list $sch1(flip)"; continue; }
+    schhc=$(grep -c '^## ' "$schf" 2>/dev/null)
+    [ "$schhc" -eq 6 ] || { sched_bad=$((sched_bad + 1)); sched_list="$sched_list $sch1(h2=$schhc)"; }
+  done
+  for wff1 in "$CLAUDE"/skills/wf-*/SKILL.md; do
+    [ -f "$wff1" ] || continue
+    wffname2=$(basename "$(dirname "$wff1")")
+    wfffm2=$(sed -n '2,/^---$/p' "$wff1" 2>/dev/null)
+    echo "$wfffm2" | grep -qE '^category: *workflow'       || { wffam_bad=$((wffam_bad + 1)); wffam_list="$wffam_list $wffname2(cat)"; }
+    echo "$wfffm2" | grep -qE '^disable-model-invocation:' && { wffam_bad=$((wffam_bad + 1)); wffam_list="$wffam_list $wffname2(flip)"; }
+  done
+  local sched_penalty=$((sched_bad + wffam_bad))
+  [ "$sched_penalty" -gt 8 ] && sched_penalty=8
+  local final_skill3=$((final_skill2 - sched_penalty))
+  [ "$final_skill3" -lt 0 ] && final_skill3=0
+
   printf '%s\n' "$sk_out" | grep -v '^SCORE:'
   echo "Skill _shared facet: missing=$shp_missing, no-Consumed-by=$shp_noprov (of 8) -> -$shp_penalty (skill-health=$sk_score)"
   echo "Skill DEC-R3 flip facet: flip-regressions=$flip_hits${flip_list:+ ($flip_list)}, gate-issues=$gate_bad${gate_list:+ ($gate_list)} -> -$flip_penalty"
-  echo "SCORE: $final_skill2/100"
+  echo "Skill Wave-3 schedule/wf-family facet: schedule-bad=$sched_bad${sched_list:+ ($sched_list)}, wf-family-bad=$wffam_bad${wffam_list:+ ($wffam_list)} -> -$sched_penalty"
+  echo "SCORE: $final_skill3/100"
 }
 
 score_mem() {
