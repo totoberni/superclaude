@@ -52,12 +52,80 @@ claude --agent o-<name>      # Named orch instance (project-specific thin alias)
 | Concept | Location | Purpose |
 |---------|----------|---------|
 | **Rules** | `rules/` | Auto-loaded behavioral constraints. Numbered for order, path-scoped via frontmatter |
-| **Skills** | `skills/` | 30 slash commands — user-invocable or preloaded into agents |
+| **Skills** | `skills/` | ~70 slash commands and workflow skills: user-invocable or model-invocable, every one loop-composable. See [Skills and Workflow Skills](#skills-and-workflow-skills) |
 | **Comms** | `comms/` | Structured message bus: directives (meta->orch), reports (orch->meta), escalations |
 | **Hooks** | `hooks/` | Session timer (35/40/48 min), pre-compaction snapshots, cleanup |
 | **Memory** | `agent-memory/` | Hybrid FTS5 + sqlite-vec SQLite store: shared project gotchas, per-agent instance context, wins. Self-maintains via `/lt-mem` (`memory_db.py compact` = FTS-optimize + vec-rebuild + VACUUM) |
 | **Memory search** | `scripts/memory/memory_db.py` | Hybrid FTS5 + vector retrieval (query-instruction prefix, widened candidate pool, RRF fusion, multi-query union) with a `--name` resolution ladder that refuses ambiguous guesses. Full protocol, search discipline, and get-ladder detail: `rules/12 § Memory Access` |
 | **Two-machine git model** | git (`main`) | Single shared `main`, one machine is SOT and sole pusher, the peer is a pull-only mirror (`git fetch && git reset --hard origin/main`). Machine-local state (`plans/`, `agent-memory/`, live `bin/` wrappers) is gitignored and travels via sync tools, not git |
+
+## Skills and Workflow Skills
+
+Skills are the reusable capabilities under `skills/`: roughly 70 of them, each a Markdown file with frontmatter and a slash name. A skill can be invoked two ways: by the human as a slash command (`/plan`, `/review`, `/tdd`, `/converge`), or by a model mid-task through the Skill tool. Both entry points run the same file. Every skill is now loop-composable: the `disable-model-invocation` flag defaults to false, so any skill can be model-invoked and driven inside a recurring loop, not just typed once by a human. The deep per-skill reference lives in [`skills/README.md`](skills/README.md); this section is the summative entry point plus worked examples.
+
+### The workflow-skill model
+
+A workflow skill converges an artefact: it produces, reviews, and iterates until an independent auditor seals the result. Two engine skills underpin the family:
+
+- **`/converge`** runs the produce-review loop. Each round a producer worker builds or revises the artefact, then a rubric-bound reviewer audits it, and the loop repeats to a sealed finish.
+- **`/review-dispatch`** resolves the correct adversarial reviewer for an artefact class (a LaTeX report routes to `w-hostile-reviewer`, a frontend diff to `w-design-reviewer`), preloading the right rubric and effort.
+
+Two rules keep the loop honest. The **two-token protocol**: every round a reviewer emits one `VERDICT` line (`REWORK` or `CLEAN`, with blocking / major / minor counts); termination comes only from a `SEAL` line emitted by a FRESH auditor that examined the complete final state, never the round reviewer. The **no-pre-approval rule**: a seal binds to a named artefact revision, and any later change to the artefact voids it and forces a fresh seal, so approval never transfers across rounds. Full mechanics (bar levels, conductor context, the round ledger) are documented in [`skills/README.md`](skills/README.md).
+
+### The wf-* family
+
+Each `wf-*` skill is a thin binding that fixes `/converge`'s slots to one domain, then prints a ready-to-paste goal block. Three flagship bindings drive an artefact to a seal; five schedule bindings poll a signal on an interval and act only on a change.
+
+| Skill | Kind | Purpose |
+|-------|------|---------|
+| `wf-design` | flagship | Drive an experimental design to a hostile-review methodology seal (all 13 design steps) |
+| `wf-report` | flagship | Drive a LaTeX report to a sealed finish: dual gate of a clean `latexmk` compile plus a fresh hostile SEAL |
+| `wf-websearch` | flagship | Drive multi-agent web research to a saturation seal (a wave that surfaces no new must-read source) |
+| `wf-wave-monitor` | schedule | Meta polls orch health on an interval, seals when all orks report DONE with zero open escalations |
+| `wf-watchdog` | schedule | Supervise a converge loop's health, escalate on stall or oscillation |
+| `wf-hpc-watch` | schedule | Poll a long-running SLURM job, act only on a state change |
+| `wf-nb-watch` | schedule | Watch a long notebook run, dispatch a fix on a BROKEN or HUNG cell |
+| `wf-hygiene` | schedule | Scheduled hygiene pass over sessions, memory, and checkpoints |
+
+### Usage examples
+
+Every `wf-*` skill follows a print-then-paste flow: the skill configures the loop and PRINTS a `/goal` block (schedule skills print a `/loop` block too), then STOPS. The human pastes the block to arm the external judge. The skill never arms the engine itself, which keeps the judge independent of the producer.
+
+Drive a LaTeX report to a sealed finish:
+
+```
+/wf-report path/to/report.tex
+# then paste the printed /goal block to arm the seal;
+# the loop iterates w-doc against w-hostile-reviewer until a fresh SEAL over a clean compile
+```
+
+Run iterative web research to saturation:
+
+```
+/wf-websearch "what is the current state of retrieval-augmented generation"
+# waves of up to 5 parallel searchers; seals when a wave adds no new source and the synthesis passes a clean hostile SEAL
+```
+
+Design an experiment to a methodology seal:
+
+```
+/wf-design "why does model M show behaviour B under distribution shift"
+# a producer drafts against the 13 design steps; w-hostile-reviewer audits methodology each round
+```
+
+Converge any artefact generically:
+
+```
+/converge path/to/artefact
+# prints the /goal block; paste it, and the produce-review loop runs to a fresh SEAL
+```
+
+Schedule a monitor over a long job:
+
+```
+/wf-hpc-watch 1234567
+# prints a /loop (poll the SLURM job) plus a /goal (seal on terminal state); paste both to arm them
+```
 
 ## Key Scripts
 
