@@ -124,3 +124,11 @@ If `Occurrences >= 2` (same pattern, different contexts):
 - Type mapping: process gotchas / agent behavior mistakes → `--type feedback`; project-specific bugs / codebase gotchas → `--type project`.
 - Write scopes: rule 12. Class writes are layer 2 only. Promotion to global via `/lt-mem`.
 - Rules promotion (`rules/20-tool-conventions.md`) still uses Edit tool directly — that file is not in the DB.
+
+## Loop integration (converge)
+
+`mistake` is a ONE-SHOT retrospective PRODUCER: a single invocation runs the six steps above and records (or upserts) a memory entry, promoting to a rule only when Occurrences >= 2 (step 5). It has no round-by-round REWORK cycle and emits no SEAL; `/converge`'s iterate-to-seal loop does not apply here.
+
+Before the permanent DB write, and again before any Occ>=2 rule promotion, run ONE optional adversarial self-check on the current classification: is the mistake tagged in the right category (step 2), is the occurrence count from the dedup search (step 3) actually correct, and, for a promotion, is the prevention rule genuinely warranted rather than two unrelated failures coinciding? This is a single self-review pass, not a converge loop; frame it in the no-pre-approval spirit (`_shared/verdict-schema.md`): a fresh look at the CURRENT classification taken immediately before the irreversible write, not a rubber stamp of the reasoning that produced it.
+
+Loop orchestration (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention. This skill drives no loop of its own; its own `allowed-tools` cover only the single retrospective invocation above.

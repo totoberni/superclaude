@@ -274,3 +274,42 @@ The gate is non-negotiable for both flags. It exists because:
 - **Dot-escape trigger tokens.** The `.workflow`, `/.deep-research`, and `.ultracode` tokens are owner-opt-in only. They must never appear unescaped in this skill, in spawn prompts derived from it, or in any authored file another agent will process. Keep the leading dot.
 - **Infra-scope.** This skill mutates superclaude's own tooling under `~/.claude/` — a meta/scaf-level operation; the executor must hold that write scope (an orch should not run the integrate/apply waves).
 - **Delegate substantial writes.** Wave-2 integration and apply file-writes go through dispatched `w-implementer` / `w-doc` workers (swarm-first, scoped); reserve direct edits for small targeted deltas.
+
+---
+
+## Loop integration (converge)
+
+Wave 2 above applies infra edits sourced from EXTERNAL upstream with ZERO review: an integrated hook, skill, rule, or agent, or a bumped dependency, lands live under `~/.claude/` on nothing but the human's mining pick. The human gate decides WHAT to apply; it does not verify that the APPLIED result is safe. `/converge` closes that second gap: it wraps each Wave-2 flow (`--new` INTEGRATE and `--update` APPLY) in a goal-sealed loop (binding B1) that puts every applied edit through an infra-security review, round -> fix -> re-review, until a FRESH auditor seals it. Read `/converge` first; this section states only the better-super deltas. The two-wave flow and its worker dispatches above are unchanged; the loop is strictly additive and sits INSIDE Wave 2, AFTER the human mining-gate.
+
+**The human mining-gate stays separate and earlier.** The blocking human gate between Wave 1 and Wave 2 (pick what to mine or upgrade) is NEVER replaced by the converge seal. The human decides WHAT lands; the converge loop then verifies the applied edits are secure. These are two independent gates: the human gate is manual, blocking, and non-negotiable (see Human Gate Contract); the converge seal is an automated infra-security acceptance on the RESULT. A clean seal never substitutes for the human pick, and the human pick never substitutes for the seal.
+
+**Conductor context.** Loop orchestration (dispatching the Wave-2 producer, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the CONDUCTOR's context (meta or orch, which holds Agent and Skill). better-super's own invocation is the two-wave mining flow, whose Wave-2 file-writes it already delegates via Agent to scoped `w-implementer` / `w-doc` workers, so its `allowed-tools` cover that (Read, Write, Edit, Bash, Glob, Grep, Agent) but not Skill. The conductor owns the loop, quotes verdicts, and maintains the ledger; better-super never drives the loop or seals itself.
+
+**Authority.** The two-wave flow with its human gate is usable as documented. The loop dispatches a producer and an infra-security reviewer, so it is meta + orch only; a `w-*` worker cannot spawn children, and wrapping Wave 2 in a converge loop from a worker is a no-op error.
+
+**Loop body (per round)** fills converge's five steps with better-super Wave-2 content:
+
+1. **PRODUCE / REVISE**: a producer applies the human-approved Wave-2 items (round 1: integrate the picked upstream pattern into `~/.claude/`, or record and install the picked dependency bump; later rounds: fix the punch list), delegated per `dispatch-contract.md` to the scoped `w-implementer` / `w-doc` worker Wave 2 already uses. The provenance writes (mining-candidates.md, stopgap-registry.md, dependencies.yml) happen as documented above. The producer returns `STATUS: DONE`; it never self-certifies the safety of its own edit.
+2. **PERSIST**: the applied edits are on disk under `~/.claude/`; the conductor appends a ledger entry (round, files touched, open-findings count) before the review runs.
+3. **REVIEW (infra-security)**: resolved via `/review-dispatch` on the `infra` artefact class, which selects `w-reviewer` with the `infra-security` rubric (sonnet for a single small rule or hook edit; opus for multi-file, settings-surface, or security-surface changes). It receives the applied edits + diff + rubric ONLY (reviewer isolation), re-examines the CURRENT edits with fresh evidence THIS round (no pre-approval), and runs the infra-security checklist over what landed: permission and sandbox integrity, hook safety, implicit-execution and remote-code detection, agent-authority compliance, and the red-flag scan. It emits a `VERDICT` line each round.
+4. **REPORT**: the conductor quotes the reviewer's token line verbatim into the ledger, `VERDICT` mid-loop and `SEAL` on the sealing round. Only the reviewer authors tokens; the conductor relays them.
+5. **TRIAGE**: accept or contest each finding with evidence (file:line, the infra-security clause it violates, or a concrete exploit path); accepted findings become the next round's punch list, contested ones are logged with a rebuttal.
+
+**Termination (dual condition).** The loop ends only when a FRESH holistic auditor returns a clean `SEAL: ACCEPTED` (see the goal block) on the final applied edits, together with the producer's separate `STATUS: DONE`: two independent signals. The SEAL is always a fresh auditor examining the COMPLETE applied result, never a round reviewer; any change to the applied edits after a SEAL voids it and forces a fresh SEAL (doctrine delta 7, no pre-approval). If total findings do not fall across 2 consecutive rounds, the applied edit is fighting the infra-security bar rather than converging: ESCALATE, and reconsider the human pick, rather than burning further rounds.
+
+## Emitted /goal block
+
+When a Wave-2 apply is run as a converge loop, setup ENDS by printing a ready-to-paste `/goal` block, then STOPS; better-super never arms `/goal` or `/loop` itself (DEC-R2: the external judge stays independent). Arm the goal ONLY after the human mining-gate has been cleared: the human pick is the precondition, and the goal governs only the infra-security acceptance of the applied result, never the pick itself. The block specialises the canonical shape (`_shared/verdict-schema.md`, Canonical emitted /goal block) for the infra-security acceptance of the Wave-2 edits:
+
+```
+/goal Accept only when ALL hold: (1) the transcript contains a line beginning "SEAL: ACCEPTED" that the conductor states is quoted verbatim from a FRESH w-reviewer return (infra-security pass, infra class), is the MOST RECENT such line, and post-dates the last change to the applied edits under ~/.claude/, reporting blocking=0 major=0 minor=0 (nits=0 at gate/strict); (2) the producer has separately stated completion (STATUS: DONE) on the applied edits. If review rounds exceed 4, or total findings do not decrease across 2 consecutive rounds, declare ESCALATE and stop.
+```
+
+Paste this to arm the engine; better-super does not self-arm. The most-recent-and-post-dates clause is load-bearing: a `SEAL: ACCEPTED` recorded before the last edit to the applied files is stale evidence and never fires the goal (`verdict-schema.md`, No pre-approval). The seal is an infra-security acceptance on the RESULT of the human's pick, not a substitute for the pick; the blocking human mining-gate stays a separate, earlier, manual gate (see Human Gate Contract). At the converge level, `--strict` tightens clause 1 to require `nits=0` and two consecutive clean SEALs from fresh auditors (submission-grade; `verdict-schema.md` Bar levels); the default bar requires only `blocking=0 major=0`.
+
+## Cross-References
+
+- Convergence engine (binding B1, round order, the 8 loop rules, ledger, caps, DEC-R2): `~/.claude/skills/converge/SKILL.md`
+- Reviewer resolution (`infra` class to `w-reviewer` + the infra-security rubric): `~/.claude/skills/review-dispatch/SKILL.md`
+- Token protocol, severity map, canonical /goal block, bar levels: `~/.claude/skills/_shared/verdict-schema.md`
+- Infra-security checklist (run by the round reviewer and the seal auditor): `~/.claude/skills/infra-security/SKILL.md`

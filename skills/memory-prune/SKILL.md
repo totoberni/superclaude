@@ -128,3 +128,11 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 **Never delete automatically.** Memory entries may look stale but encode hard-won lessons.
 Present findings with context so the user (or Meta) can make informed decisions. When in
 doubt, keep. `memory_db.py prune` is only invoked after explicit human sign-off.
+
+## Loop integration (converge)
+
+memory-prune is a ONE-SHOT advisory scan: a single invocation runs the seven steps above and presents flagged candidates for human decision; it has no round-by-round REWORK cycle and emits no SEAL. `/converge`'s iterate-to-seal loop does not apply here, and the Step 7 human-confirmation gate before any deletion is NEVER replaced by an automated seal.
+
+Before presenting the Step 6 report, run ONE optional adversarial false-positive pass over the flagged table: re-examine each stale/broken/dead candidate against fuller context (recent references, active-project signals, near-duplicate coverage) to catch a memory that looks stale but is still load-bearing. This is a single self-review pass, not a converge loop; the human still confirms every deletion at Step 7.
+
+Loop orchestration (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention. This skill drives no loop of its own; its own `allowed-tools` cover only the single scan-and-report invocation above.

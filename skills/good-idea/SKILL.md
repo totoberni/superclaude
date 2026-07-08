@@ -131,3 +131,11 @@ If `Reusable? = Yes` and seen in 2+ projects:
 - Type mapping: technical wins → `--type project`; process/convention wins → `--type feedback`.
 - Write scopes: rule 12. Class writes are layer 2 only. Promotion to global via `/lt-mem`.
 - Rules promotion (`rules/20-tool-conventions.md`) still uses Edit tool directly — that file is not in the DB.
+
+## Loop integration (converge)
+
+This skill is a ONE-SHOT retrospective producer: it records a win or pattern into memory, then finishes. It is not an iterate-produce-review loop and never seals itself under `/goal` (see `/converge`).
+
+**Optional single self-check** (before the Step 4 DB write, or a Step 5 promotion): re-examine the classification once, fresh. Is the win category correct, is the tier/scope (shared vs class vs global) the right audience, is a promotion claim to a wider tier genuinely warranted rather than assumed. One pass on the classification before the write, not a review round.
+
+**Conductor context** (per `/converge`): loop orchestration, dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, is a conductor concern. This skill does not drive a loop and holds no conductor role.
