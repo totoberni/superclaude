@@ -299,7 +299,7 @@ class _FakeLeverPage:
 # =============================================================================
 
 
-def test_capture_delegates_to_registry_capture_fn(monkeypatch):
+def test_capture_delegates_to_registry_capture(monkeypatch):
     # _registry.get("lever").capture is a call-time lazy_call targeting
     # engine.providers.lever:capture, which lazily imports and calls
     # engine.browse.capture_lever at CALL time; patching that module
@@ -317,7 +317,7 @@ def test_capture_delegates_to_registry_capture_fn(monkeypatch):
     assert _registry.get("lever").capture._target == ("engine.providers.lever", "capture")
 
 
-def test_apply_url_delegates_to_registry_apply_url_fn():
+def test_apply_url_delegates_to_registry_apply_url():
     assert (lever.apply_url("fauxcorp", "9001")
            == "https://jobs.lever.co/fauxcorp/9001/apply")
 

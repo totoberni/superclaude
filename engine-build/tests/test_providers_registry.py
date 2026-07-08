@@ -213,7 +213,7 @@ def test_collect_fieldmap_lever_routes_to_browse_ignoring_opener(monkeypatch):
 
 
 # workable was removed from this list in W5.4 (it is now a supported vendor with a
-# real capture_fn, so run._collect_fieldmap no longer raises for it); the error
+# real capture, so run._collect_fieldmap no longer raises for it); the error
 # path is still covered for a genuinely-unsupported vendor.
 @pytest.mark.parametrize("vendor", ["nope"])
 def test_collect_fieldmap_unsupported_vendor_preserves_error(vendor):

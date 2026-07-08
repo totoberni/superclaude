@@ -8,7 +8,7 @@ it earns its own module rather than reusing one wholesale:
    schema is a public, unauthenticated GET
    (`apply.workable.com/api/v1/jobs/<SHORTCODE>/form`) returning the full typed
    field list with requiredness, so `capture()` delegates to the browser-free
-   `fieldmap.capture_workable` (registered as `PROVIDERS["workable"].capture_fn`),
+   `workable.capture.capture_workable` (registered as `PROVIDERS["workable"].capture`),
    NOT a live-DOM parse. The FieldMap therefore carries an INDEPENDENT schema, so
    completeness uses GREENHOUSE semantics: the schema is the oracle and
    `base.sweep_required` is a cross-check (`_sweep_gaps` below reuses greenhouse's

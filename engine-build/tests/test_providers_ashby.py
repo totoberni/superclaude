@@ -355,7 +355,7 @@ class _FakeAshbyPage:
 # =============================================================================
 
 
-def test_capture_delegates_to_registry_capture_fn(monkeypatch):
+def test_capture_delegates_to_registry_capture(monkeypatch):
     # _registry.get("ashby").capture is a call-time lazy_call targeting
     # engine.providers.ashby:capture, which lazily imports and calls
     # engine.browse.capture_ashby at CALL time; patching that module
@@ -373,7 +373,7 @@ def test_capture_delegates_to_registry_capture_fn(monkeypatch):
     assert _registry.get("ashby").capture._target == ("engine.providers.ashby", "capture")
 
 
-def test_apply_url_delegates_to_registry_apply_url_fn():
+def test_apply_url_delegates_to_registry_apply_url():
     assert (ashby.apply_url("fauxcorp", "9001")
            == "https://jobs.ashbyhq.com/fauxcorp/9001/application")
 

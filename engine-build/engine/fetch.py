@@ -40,7 +40,8 @@ from engine.store import Store
 # in exactly one place while these shims retain their original type and their
 # KeyError-on-unknown behaviour. Any registered stub (supported=False or
 # adapter=None) is excluded from both; with workable un-stubbed (W5.4) the four
-# supported vendors are ("greenhouse", "lever", "ashby", "workable").
+# supported vendors are ("greenhouse", "ashby", "lever", "workable") -- the
+# pinned `engine.providers.VENDOR_ORDER`.
 _VENDORS: tuple[str, ...] = tuple(
     vendor for vendor, spec in _registry.PROVIDERS.items()
     if spec.supported and spec.adapter is not None

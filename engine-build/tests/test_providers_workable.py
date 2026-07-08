@@ -273,7 +273,7 @@ class _FakeWorkablePage:
 # =============================================================================
 
 
-def test_capture_delegates_to_registry_capture_fn(monkeypatch):
+def test_capture_delegates_to_registry_capture(monkeypatch):
     # _registry.get("workable").capture is a call-time lazy_call targeting
     # engine.providers.workable:capture, which lazily imports and calls
     # fieldmap.capture_workable at CALL time; patching that
@@ -291,7 +291,7 @@ def test_capture_delegates_to_registry_capture_fn(monkeypatch):
     assert _registry.get("workable").capture._target == ("engine.providers.workable", "capture")
 
 
-def test_apply_url_delegates_to_registry_apply_url_fn():
+def test_apply_url_delegates_to_registry_apply_url():
     assert (workable.apply_url("foo", "123")
            == "https://apply.workable.com/foo/j/123/apply/")
 

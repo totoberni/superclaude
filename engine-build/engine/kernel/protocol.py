@@ -11,13 +11,13 @@ completeness -- is either registry-level or `providers.base`-level and shared
 by construction.
 
 A conforming provider:
-- `vendor`: the canonical vendor key (matches its `registry.ProviderSpec`).
+- `vendor`: the canonical vendor key (matches its `_registry.ProviderSpec`).
 - `capture(slug, job_id, opener=None) -> FieldMap`: the schema fetch. Every
-  reference implementation delegates this to `registry.resolve(vendor).
-  capture_fn` (the registry already owns the vendor -> capture-function
+  reference implementation delegates this to `_registry.resolve(vendor).
+  capture` (the registry already owns the vendor -> capture-function
   wiring; a provider module never re-derives it).
 - `apply_url(slug, job_id) -> str`: the public apply-page URL. Same
-  delegation pattern via `registry.resolve(vendor).apply_url_fn`.
+  delegation pattern via `_registry.resolve(vendor).apply_url`.
 - `fill(page, fieldmap, values, *, dry_run=True) -> FillReport`: drives an
   ALREADY-NAVIGATED page. Every implementation's ordering is fixed by the W5
   spec's hole-fixes (section 5) and is not a per-provider choice:
@@ -34,7 +34,7 @@ A conforming provider:
     4. cross-check `base.sweep_required(page)` against the fieldmap's
        required-field set via `base.completeness_mismatch`; ANY mismatch
        (either direction) forces the report to `NOT_COMPLETE` (hole-fix d).
-    5. return a `FillReport` (the existing `engine.fill.FillReport`
+    5. return a `FillReport` (the existing `engine.kernel.contracts.FillReport`
        dataclass -- providers never invent a parallel report shape).
   `dry_run` is accepted for interface stability; Part 1 carries no submit
   code path regardless of its value (`install_never_send` is unconditional),
@@ -42,8 +42,9 @@ A conforming provider:
 
 `Provider` is a `typing.Protocol` (structural, not a base class): a provider
 module satisfies it by exposing these three callables at module scope (the
-reference pattern, matching `registry.py`'s free-function style) or on a
-lightweight class -- either shape type-checks against the Protocol.
+reference pattern: free functions at package scope, as every vendor plugin
+package does) or on a lightweight class -- either shape type-checks against
+the Protocol.
 """
 
 from __future__ import annotations
@@ -70,16 +71,16 @@ class Provider(Protocol):
 
     def capture(self, slug: str, job_id: str, opener: Any = None) -> FieldMap:
         """The schema fetch; every reference implementation delegates to the
-        registry's `capture_fn` for this vendor."""
+        registry's `capture` for this vendor."""
         ...
 
     def apply_url(self, slug: str, job_id: str) -> str:
         """The public apply-page URL; delegates to the registry's
-        `apply_url_fn` for this vendor."""
+        `apply_url` for this vendor."""
         ...
 
     def fill(self, page: Any, fieldmap: FieldMap, values: Any,
              *, dry_run: bool = True) -> Any:
         """Drive an already-navigated `page` per the ordering documented on
-        this Protocol; returns an `engine.fill.FillReport`."""
+        this Protocol; returns an `engine.kernel.contracts.FillReport`."""
         ...

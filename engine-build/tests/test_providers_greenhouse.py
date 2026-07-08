@@ -414,7 +414,7 @@ def _resolved_values(fieldmap, *, tmp_path, assets_kwargs=None):
 # =============================================================================
 
 
-def test_capture_delegates_to_registry_capture_fn(monkeypatch):
+def test_capture_delegates_to_registry_capture(monkeypatch):
     # PROVIDERS["greenhouse"].capture is a call-time lazy_call targeting
     # engine.providers.greenhouse:capture, which itself lazily imports and calls
     # engine.fieldmap.capture_greenhouse at CALL time (mirrors
@@ -435,7 +435,7 @@ def test_capture_delegates_to_registry_capture_fn(monkeypatch):
     assert PROVIDERS["greenhouse"].capture._target == ("engine.providers.greenhouse", "capture")
 
 
-def test_apply_url_delegates_to_registry_apply_url_fn():
+def test_apply_url_delegates_to_registry_apply_url():
     assert (greenhouse.apply_url("fakeco", "7701001")
            == "https://boards.greenhouse.io/fakeco/jobs/7701001")
 
