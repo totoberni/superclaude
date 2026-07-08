@@ -53,7 +53,6 @@ def test_importing_registry_loads_no_browser_module():
 
 @pytest.mark.parametrize("first_import", [
     "import engine.providers._registry",
-    "import engine.providers.registry",
     "import engine.providers.greenhouse",
     "import engine.providers.lever",
     "import engine.discover",

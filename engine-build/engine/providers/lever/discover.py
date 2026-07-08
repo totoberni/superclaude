@@ -67,3 +67,12 @@ def _ms_to_iso(ms: int | None) -> str | None:
         return None
     from datetime import datetime, timezone
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+
+
+def lever_endpoint(slug: str, region: str = "us") -> str:
+    """The ONE definition of Lever's board poll URL; `region="eu"` routes to the
+    eu host. The provider registry registers this as `endpoint_fn` and
+    `fetch.endpoint_for` delegates here; byte-identical to the old central
+    `registry.lever_endpoint`."""
+    host = "api.eu.lever.co" if region == "eu" else "api.lever.co"
+    return f"https://{host}/v0/postings/{slug}?mode=json"

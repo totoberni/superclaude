@@ -59,3 +59,11 @@ def _workable_locations(job: dict) -> list[str]:
         if name:
             out.append(name)
     return out
+
+
+def workable_endpoint(slug: str, region: str = "us") -> str:
+    """The ONE definition of Workable's discovery board feed URL (the public
+    account widget: name/description/jobs[]; region ignored). The provider
+    registry registers this as `endpoint_fn` and `fetch.endpoint_for` delegates
+    here; byte-identical to the old central `registry.workable_endpoint`."""
+    return f"https://apply.workable.com/api/v1/widget/accounts/{slug}"

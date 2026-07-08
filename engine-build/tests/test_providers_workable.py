@@ -30,7 +30,7 @@ import engine.fieldmap as fieldmap
 from engine.fieldmap import FieldType, Section, capture_workable, parse_workable
 from engine.fill import FieldValue, FillAssets, FillSafetyError, ResolvedValues
 from engine.profile_map import profile_from_real_ssot
-from engine.providers import base, protocol, registry, workable
+from engine.providers import _registry, base, protocol, workable
 from engine.ssot import SSOT
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "providers" / "workable"
@@ -274,8 +274,9 @@ class _FakeWorkablePage:
 
 
 def test_capture_delegates_to_registry_capture_fn(monkeypatch):
-    # registry._capture_workable (== PROVIDERS["workable"].capture_fn) lazily
-    # imports and calls fieldmap.capture_workable at CALL time; patching that
+    # _registry.get("workable").capture is a call-time lazy_call targeting
+    # engine.providers.workable:capture, which lazily imports and calls
+    # fieldmap.capture_workable at CALL time; patching that
     # module attribute proves capture() rides the SAME registry wiring end to end.
     calls = []
 
@@ -287,7 +288,7 @@ def test_capture_delegates_to_registry_capture_fn(monkeypatch):
     result = workable.capture("powerlines", "57CFF1B2AF", opener="OPENER")
     assert result == "SENTINEL"
     assert calls == [("powerlines", "57CFF1B2AF", "OPENER")]
-    assert registry.resolve("workable").capture_fn is registry._capture_workable
+    assert _registry.get("workable").capture._target == ("engine.providers.workable", "capture")
 
 
 def test_apply_url_delegates_to_registry_apply_url_fn():

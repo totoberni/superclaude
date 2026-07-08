@@ -80,6 +80,15 @@ def workable_form_url(job_id: str) -> str:
     return f"https://apply.workable.com/api/v1/jobs/{job_id}/form"
 
 
+def workable_apply_url(slug: str, job_id: str) -> str:
+    """The public apply-page URL (job_id IS the shortcode). Workable is
+    browser-free, so there is no browse.py apply body to delegate to (cf.
+    greenhouse_apply_url in fill.py, lever/ashby apply URLs in their capture.py);
+    the plugin's `apply_url()` calls this directly. Byte-identical to the old
+    central `registry.workable_apply_url`."""
+    return f"https://apply.workable.com/{slug}/j/{job_id}/apply/"
+
+
 def capture_workable(slug: str, job_id: str, opener=None, *,
                      timeout_s: float = 20, user_agent: str = UA,
                      now: Callable[[], str] | None = None) -> FieldMap:

@@ -108,27 +108,31 @@ from typing import Any
 from engine.fieldmap import FieldMap
 from engine.fill import FillAssets, FillReport, FillSafetyError, ResolvedValues
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
-from engine.providers import base, registry
+from engine.providers import base
 
 vendor = "ashby"
 
 
-# -- capture / apply_url: thin delegation to the registry wiring ---------------
+# -- capture / apply_url: the graphql schema capture + apply-page URL -----------
 
 
 def capture(slug: str, job_id: str, opener: Any = None) -> FieldMap:
-    """The field-map capture: delegates to `registry.PROVIDERS["ashby"].
-    capture_fn` (itself `browse.capture_ashby`, the read-only non-user-graphql
-    `ApiJobPosting` interception). No new capture logic here (Ashby's field map
-    comes from the graphql schema, but this delegation is identical to
-    greenhouse's / lever's)."""
-    return registry.resolve(vendor).capture_fn(slug, job_id, opener)
+    """The field-map capture: `browse.capture_ashby`, the read-only
+    non-user-graphql `ApiJobPosting` interception (Ashby's field map comes from
+    the graphql schema, so `opener` is ignored). Reached via a CALL-TIME lookup
+    on `engine.browse` so importing this module never loads the browser stack and
+    the test monkeypatch seam `monkeypatch.setattr(browse, "capture_ashby", ...)`
+    still routes. No new capture logic here (the provider registry looks this
+    function up lazily as `_registry.get("ashby").capture`)."""
+    from engine import browse
+    return browse.capture_ashby(slug, job_id)
 
 
 def apply_url(slug: str, job_id: str) -> str:
-    """The public apply-page URL: delegates to `registry.PROVIDERS["ashby"].
-    apply_url_fn` (`browse.ashby_application_url`)."""
-    return registry.resolve(vendor).apply_url_fn(slug, job_id)
+    """The public apply-page URL: `browse.ashby_application_url`, imported at CALL
+    time so this module stays browser-free at import."""
+    from engine import browse
+    return browse.ashby_application_url(slug, job_id)
 
 
 # -- value resolution: from the kernel (hole-fix e CV/photo choice) ------------

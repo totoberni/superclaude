@@ -41,7 +41,7 @@ from engine import browse
 from engine.fieldmap import Field, FieldMap, Locator
 from engine.fill import FillAssets, FillSafetyError
 from engine.profile_map import profile_from_real_ssot
-from engine.providers import ashby, protocol, registry
+from engine.providers import _registry, ashby, protocol
 from engine.ssot import SSOT
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "providers" / "ashby"
@@ -356,8 +356,9 @@ class _FakeAshbyPage:
 
 
 def test_capture_delegates_to_registry_capture_fn(monkeypatch):
-    # registry._capture_ashby (== PROVIDERS["ashby"].capture_fn) lazily imports
-    # and calls engine.browse.capture_ashby at CALL time; patching that module
+    # _registry.get("ashby").capture is a call-time lazy_call targeting
+    # engine.providers.ashby:capture, which lazily imports and calls
+    # engine.browse.capture_ashby at CALL time; patching that module
     # attribute proves capture() rides the SAME registry wiring end to end.
     calls = []
 
@@ -369,7 +370,7 @@ def test_capture_delegates_to_registry_capture_fn(monkeypatch):
     result = ashby.capture("fauxcorp", "9001", opener="IGNORED")
     assert result == "SENTINEL"
     assert calls == [("fauxcorp", "9001")]
-    assert registry.resolve("ashby").capture_fn is registry._capture_ashby
+    assert _registry.get("ashby").capture._target == ("engine.providers.ashby", "capture")
 
 
 def test_apply_url_delegates_to_registry_apply_url_fn():

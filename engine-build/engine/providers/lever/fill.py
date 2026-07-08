@@ -87,26 +87,31 @@ from typing import Any
 from engine.fieldmap import FieldMap
 from engine.fill import FillAssets, FillReport, FillSafetyError, ResolvedValues
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
-from engine.providers import base, registry
+from engine.providers import base
 
 vendor = "lever"
 
 
-# -- capture / apply_url: thin delegation to the registry wiring ---------------
+# -- capture / apply_url: the read-only apply-DOM parse + apply-page URL --------
 
 
 def capture(slug: str, job_id: str, opener: Any = None) -> FieldMap:
-    """The field-map capture: delegates to `registry.PROVIDERS["lever"].
-    capture_fn` (itself `browse.capture_lever`, the read-only apply-DOM parse).
-    No new capture logic here (Lever's field map comes from the DOM, not a
-    schema endpoint, but this delegation is identical to greenhouse's)."""
-    return registry.resolve(vendor).capture_fn(slug, job_id, opener)
+    """The field-map capture: `browse.capture_lever`, the read-only apply-DOM
+    parse (Lever's field map comes from the DOM, not a schema endpoint, so
+    `opener` is ignored). Reached via a CALL-TIME lookup on `engine.browse` so
+    importing this module never loads the browser stack and the test monkeypatch
+    seam `monkeypatch.setattr(browse, "capture_lever", ...)` still routes. No new
+    capture logic here (the provider registry looks this function up lazily as
+    `_registry.get("lever").capture`)."""
+    from engine import browse
+    return browse.capture_lever(slug, job_id)
 
 
 def apply_url(slug: str, job_id: str) -> str:
-    """The public apply-page URL: delegates to `registry.PROVIDERS["lever"].
-    apply_url_fn` (`browse.lever_apply_url`)."""
-    return registry.resolve(vendor).apply_url_fn(slug, job_id)
+    """The public apply-page URL: `browse.lever_apply_url`, imported at CALL time
+    so this module stays browser-free at import."""
+    from engine import browse
+    return browse.lever_apply_url(slug, job_id)
 
 
 # -- value resolution: from the kernel (hole-fix e CV/photo choice) ------------

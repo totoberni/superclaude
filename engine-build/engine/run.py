@@ -49,7 +49,7 @@ from engine.notify import (
     publish_digest,
 )
 from engine.profile_map import profile_from_real_ssot
-from engine.providers import _registry, registry
+from engine.providers import _registry
 from engine.queue_sm import QueueStateMachine
 from engine.ssot import MISSING, SSOT
 
@@ -325,15 +325,15 @@ def _collect_fieldmap(vendor: str, posting, opener):
     default-on.
 
     Dispatch is delegated to the provider registry (the single source of truth):
-    each vendor's `capture_fn` normalises the two capture signatures onto
+    each vendor's `capture` normalises the two capture signatures onto
     (slug, job_id, opener) and the registry keeps the browser-vendor references
     lazy, so this delegation preserves both the never-import-playwright invariant
     and the module-attribute monkeypatch seam.
     """
-    spec = registry.PROVIDERS.get(vendor)
-    if spec is None or not spec.supported or spec.capture_fn is None:
+    spec = _registry.PROVIDERS.get(vendor)
+    if spec is None or not spec.supported or spec.capture is None:
         raise ValueError(f"no field-map capture for vendor {vendor!r}")
-    return spec.capture_fn(posting.company_slug, posting.job_id, opener)
+    return spec.capture(posting.company_slug, posting.job_id, opener)
 
 
 _MISSING_LABELS_CAP = 6

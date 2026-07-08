@@ -72,26 +72,31 @@ from typing import Any
 from engine.fieldmap import FieldMap
 from engine.fill import FillAssets, FillReport, FillSafetyError, ResolvedValues
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
-from engine.providers import base, registry
+from engine.providers import base
 
 vendor = "workable"
 
 
-# -- capture / apply_url: thin delegation to the registry wiring ---------------
+# -- capture / apply_url: the public schema GET + apply-page URL ----------------
 
 
 def capture(slug: str, job_id: str, opener: Any = None) -> FieldMap:
-    """The schema fetch: delegates to `registry.PROVIDERS["workable"].capture_fn`
-    (itself `fieldmap.capture_workable`, the public `.../jobs/<shortcode>/form`
-    GET -- browser-free, greenhouse-class). No new capture logic here (this
-    delegation is identical to greenhouse's / lever's)."""
-    return registry.resolve(vendor).capture_fn(slug, job_id, opener)
+    """The schema fetch: `fieldmap.capture_workable`, the public
+    `.../jobs/<shortcode>/form` GET (browser-free, greenhouse-class). Reached via
+    a CALL-TIME lookup on `engine.fieldmap` so importing this module stays light
+    and the test monkeypatch seam `monkeypatch.setattr(fieldmap, "capture_
+    workable", ...)` still routes. No new capture logic here (the provider
+    registry looks this function up lazily as `_registry.get("workable").
+    capture`)."""
+    from engine.fieldmap import capture_workable
+    return capture_workable(slug, job_id, opener)
 
 
 def apply_url(slug: str, job_id: str) -> str:
-    """The public apply-page URL: delegates to `registry.PROVIDERS["workable"].
-    apply_url_fn` (`registry.workable_apply_url`)."""
-    return registry.resolve(vendor).apply_url_fn(slug, job_id)
+    """The public apply-page URL: this vendor's own browser-free
+    `capture.workable_apply_url` builder."""
+    from engine.providers.workable.capture import workable_apply_url
+    return workable_apply_url(slug, job_id)
 
 
 # -- value resolution: from the kernel (hole-fix e CV/photo choice) ------------

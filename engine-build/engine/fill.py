@@ -89,7 +89,7 @@ from engine.kernel.fill_toolkit import (  # noqa: F401
     _UPLOAD_BUTTON_RE,
     _upload_attached,
 )
-from engine.providers import registry
+from engine.providers import _registry
 from engine.ssot import SSOT
 
 # The resolve engine (coverage classification + fill-value render) moved to
@@ -396,11 +396,11 @@ def greenhouse_apply_url(slug: str, job_id: str) -> str:
 
 
 def _apply_url(vendor: str, slug: str, job_id: str) -> str:
-    spec = registry.PROVIDERS.get(vendor)
-    if spec is None or not spec.supported or spec.apply_url_fn is None:
+    spec = _registry.PROVIDERS.get(vendor)
+    if spec is None or not spec.supported or spec.apply_url is None:
         raise ValueError(
             f"unknown vendor {vendor!r} (expected greenhouse/lever/ashby/workable)")
-    return spec.apply_url_fn(slug, job_id)
+    return spec.apply_url(slug, job_id)
 
 
 def _current_url(page) -> str:

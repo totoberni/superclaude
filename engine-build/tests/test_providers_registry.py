@@ -28,7 +28,10 @@ from engine.discover import (
     WorkableAdapter,
 )
 from engine.fetch import Source
-from engine.providers import registry
+from engine.providers import _registry, ashby, greenhouse, lever
+from engine.providers.ashby.discover import ashby_endpoint
+from engine.providers.greenhouse.discover import greenhouse_endpoint
+from engine.providers.lever.discover import lever_endpoint
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,45 +43,45 @@ def _posting(slug, job_id):
 # -- resolve(): the vendor -> ProviderSpec source of truth ---------------------
 
 def test_resolve_returns_expected_wiring_for_each_real_vendor():
-    gh = registry.resolve("greenhouse")
+    gh = _registry.resolve("greenhouse")
     assert gh.adapter is GreenhouseAdapter
-    assert gh.endpoint_fn is registry.greenhouse_endpoint
-    assert gh.capture_fn is registry._capture_greenhouse
-    assert gh.apply_url_fn is registry._apply_greenhouse
+    assert gh.endpoint_fn is greenhouse_endpoint
+    assert gh.capture._target == ("engine.providers.greenhouse", "capture")
+    assert gh.apply_url is greenhouse.apply_url
     assert gh.supported is True
 
-    lv = registry.resolve("lever")
+    lv = _registry.resolve("lever")
     assert lv.adapter is LeverAdapter
-    assert lv.endpoint_fn is registry.lever_endpoint
-    assert lv.capture_fn is registry._capture_lever
-    assert lv.apply_url_fn is registry._apply_lever
+    assert lv.endpoint_fn is lever_endpoint
+    assert lv.capture._target == ("engine.providers.lever", "capture")
+    assert lv.apply_url is lever.apply_url
 
-    ash = registry.resolve("ashby")
+    ash = _registry.resolve("ashby")
     assert ash.adapter is AshbyAdapter
-    assert ash.endpoint_fn is registry.ashby_endpoint
-    assert ash.capture_fn is registry._capture_ashby
-    assert ash.apply_url_fn is registry._apply_ashby
+    assert ash.endpoint_fn is ashby_endpoint
+    assert ash.capture._target == ("engine.providers.ashby", "capture")
+    assert ash.apply_url is ashby.apply_url
 
 
 def test_resolve_unknown_vendor_raises_value_error():
     with pytest.raises(ValueError, match="unknown vendor 'nope'"):
-        registry.resolve("nope")
+        _registry.resolve("nope")
 
 
 def test_workable_is_a_registered_supported_provider():
     # W5.4 un-stubbed workable: it was formerly supported=False, adapter=None,
     # with every wiring fn raising NotImplementedError("...W5.4..."). It is now a
     # first-class supported provider with a live adapter and callable wiring.
-    spec = registry.resolve("workable")
+    spec = _registry.resolve("workable")
     assert spec.supported is True
     assert spec.adapter is WorkableAdapter
-    assert spec.capture_fn is registry._capture_workable
+    assert spec.capture._target == ("engine.providers.workable", "capture")
     # every wiring slot is a live callable now (no NotImplementedError); the
     # browser-free URL builders return their real values when called.
-    assert callable(spec.capture_fn)
+    assert callable(spec.capture)
     assert spec.endpoint_fn("powerlines") == \
         "https://apply.workable.com/api/v1/widget/accounts/powerlines"
-    assert spec.apply_url_fn("powerlines", "57CFF1B2AF") == \
+    assert spec.apply_url("powerlines", "57CFF1B2AF") == \
         "https://apply.workable.com/powerlines/j/57CFF1B2AF/apply/"
 
 
@@ -99,7 +102,7 @@ def test_workable_is_a_registered_supported_provider():
     ("not a url", None),
 ])
 def test_detect_maps_hosts_to_vendor(url_or_host, expected):
-    assert registry.detect(url_or_host) == expected
+    assert _registry.detect(url_or_host) == expected
 
 
 # -- fetch.endpoint_for: golden URLs + preserved error path --------------------
@@ -126,7 +129,13 @@ def test_endpoint_for_unknown_vendor_preserves_error():
 def test_adapters_and_vendors_are_registry_projections():
     # the shims kept for import-compat mirror the registry (workable now included,
     # un-stubbed in W5.4)
-    assert fetch._VENDORS == ("greenhouse", "lever", "ashby", "workable")
+    # Order is the deterministic self-registration-cascade order (greenhouse
+    # registers first via the re-entrant import edge, then ashby/lever/workable);
+    # it changed from the old registry's hand-written (greenhouse,lever,ashby,
+    # workable) when PROVIDERS moved to plugin self-registration. It is an
+    # iteration order only (no functional dependency). ROBUSTNESS FOLLOW-UP: pin
+    # a canonical VENDOR_ORDER so this cannot silently shift with the import graph.
+    assert fetch._VENDORS == ("greenhouse", "ashby", "lever", "workable")
     assert fetch._ADAPTERS == {
         "greenhouse": GreenhouseAdapter,
         "lever": LeverAdapter,

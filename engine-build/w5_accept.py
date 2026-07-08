@@ -12,7 +12,7 @@ from pathlib import Path
 
 from engine.ssot import SSOT
 from engine.profile_map import profile_from_real_ssot
-from engine.providers import registry, greenhouse, lever, ashby, workable
+from engine.providers import greenhouse, lever, ashby, workable
 from engine.providers.base import _is_submit_request
 from engine.fill import FillAssets
 from engine import browse

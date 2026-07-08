@@ -27,7 +27,7 @@ from engine import browse
 from engine.fieldmap import Field, FieldMap, Locator
 from engine.fill import FillAssets, FillSafetyError
 from engine.profile_map import profile_from_real_ssot
-from engine.providers import lever, protocol, registry
+from engine.providers import _registry, lever, protocol
 from engine.ssot import SSOT
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "providers" / "lever"
@@ -300,8 +300,9 @@ class _FakeLeverPage:
 
 
 def test_capture_delegates_to_registry_capture_fn(monkeypatch):
-    # registry._capture_lever (== PROVIDERS["lever"].capture_fn) lazily imports
-    # and calls engine.browse.capture_lever at CALL time; patching that module
+    # _registry.get("lever").capture is a call-time lazy_call targeting
+    # engine.providers.lever:capture, which lazily imports and calls
+    # engine.browse.capture_lever at CALL time; patching that module
     # attribute proves capture() rides the SAME registry wiring end to end.
     calls = []
 
@@ -313,7 +314,7 @@ def test_capture_delegates_to_registry_capture_fn(monkeypatch):
     result = lever.capture("fauxcorp", "9001", opener="IGNORED")
     assert result == "SENTINEL"
     assert calls == [("fauxcorp", "9001")]
-    assert registry.resolve("lever").capture_fn is registry._capture_lever
+    assert _registry.get("lever").capture._target == ("engine.providers.lever", "capture")
 
 
 def test_apply_url_delegates_to_registry_apply_url_fn():

@@ -11,10 +11,10 @@ The four board-JSON adapters were moved to their per-vendor plugin homes
 (`engine.providers.<vendor>.discover`, leaf modules importing only
 `engine.kernel.*`) in W5.1 Stage 2e; they are re-exported here at load so every
 `from engine.discover import <Adapter>` consumer keeps resolving unchanged. This
-re-export edge is SAFE (it does not re-create the old cycle) because
-`engine.providers.registry` no longer imports `engine.discover`: nothing under
-`engine.providers` reaches back here at load, so importing these plugin leaves
-never re-enters a half-initialised `engine.discover`.
+re-export edge is SAFE (it does not re-create the old cycle) because nothing
+under `engine.providers` (its `__init__`, the `_registry`, or any vendor plugin)
+imports `engine.discover` at load; so importing these plugin leaves never
+re-enters a half-initialised `engine.discover`.
 
 Liveness invariant (R-WT-8): a posting is surfaceable iff present in the latest
 board poll snapshot, and on Ashby iff `isListed` is true. Aggregator-sourced

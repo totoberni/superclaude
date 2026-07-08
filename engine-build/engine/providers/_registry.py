@@ -43,14 +43,15 @@ from __future__ import annotations
 import importlib
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
 class ProviderSpec:
     """Everything the engine needs to talk to one ATS vendor, in one place.
 
-    Fields (parallel to `engine.providers.registry.ProviderSpec` for a mechanical
-    Stage-3 migration):
+    Fields (the Stage-3 consolidation of `engine.providers.registry.ProviderSpec`;
+    this is now the SINGLE ProviderSpec):
         vendor          canonical vendor key ("greenhouse" | "lever" | ...).
         capture         field-map capture callable, (slug, job_id, opener=None)
                         -> FieldMap. LAZY (`lazy_call`): resolves the plugin
@@ -67,6 +68,11 @@ class ProviderSpec:
         vendor_resolver zero-arg callable returning the vendor's portal-widget
                         resolver object, or None when the vendor has none.
         supported       False for a documented stub; excluded from live wiring.
+        endpoint_fn     board poll-URL builder, (slug, region="us") -> str; the
+                        SSOT `fetch.endpoint_for` delegates here (Lever's eu host
+                        stays expressible via region). None for a stub.
+        hosts           host suffixes that identify this vendor from a posting URL
+                        (drives `detect`).
     """
 
     vendor: str
@@ -77,6 +83,8 @@ class ProviderSpec:
     adapter: type | None
     vendor_resolver: Callable[[], object] | None = None
     supported: bool = True
+    endpoint_fn: Callable[..., str] | None = None
+    hosts: tuple[str, ...] = ()
 
 
 PROVIDERS: dict[str, ProviderSpec] = {}
@@ -86,7 +94,9 @@ def register(vendor: str, *, capture: Callable[..., object],
              fill: Callable[..., object], apply_url: Callable[..., str],
              resolve_values: Callable[..., object], adapter: type | None,
              vendor_resolver: Callable[[], object] | None = None,
-             supported: bool = True) -> ProviderSpec:
+             supported: bool = True,
+             endpoint_fn: Callable[..., str] | None = None,
+             hosts: tuple[str, ...] = ()) -> ProviderSpec:
     """Record (or REPLACE) the wiring for one vendor.
 
     Idempotent by REPLACE: `PROVIDERS` is keyed on `vendor`, so registering the
@@ -99,7 +109,8 @@ def register(vendor: str, *, capture: Callable[..., object],
     spec = ProviderSpec(vendor=vendor, capture=capture, fill=fill,
                         apply_url=apply_url, resolve_values=resolve_values,
                         adapter=adapter, vendor_resolver=vendor_resolver,
-                        supported=supported)
+                        supported=supported, endpoint_fn=endpoint_fn,
+                        hosts=hosts)
     PROVIDERS[vendor] = spec
     return spec
 
@@ -112,6 +123,40 @@ def all_providers() -> tuple[str, ...]:
 def get(vendor: str) -> ProviderSpec:
     """The `ProviderSpec` for `vendor`; raises `KeyError` if unregistered."""
     return PROVIDERS[vendor]
+
+
+def resolve(vendor: str) -> ProviderSpec:
+    """The `ProviderSpec` for `vendor`, raising `ValueError` for an unknown one.
+
+    The value-oriented sibling of `get` (which raises `KeyError`): kept for the
+    single-import call sites that carried over from the old central registry
+    (`from engine.providers import resolve`). A registered-but-unsupported stub
+    still resolves normally; calling its wiring is what raises.
+    """
+    try:
+        return PROVIDERS[vendor]
+    except KeyError:
+        raise ValueError(f"unknown vendor {vendor!r}") from None
+
+
+def detect(url_or_host: str) -> str | None:
+    """Map a posting URL or bare host to its vendor key, or None if unrecognised.
+
+    The ONE place a URL / host is classified to a vendor. Matches on each vendor's
+    registered `hosts` suffixes; a bare host (no scheme) is accepted as-is, and
+    userinfo / port are stripped before matching.
+    """
+    if not url_or_host:
+        return None
+    host = urlsplit(url_or_host).netloc or url_or_host
+    host = host.split("@")[-1].split(":")[0].strip().lower()
+    if not host:
+        return None
+    for vendor, spec in PROVIDERS.items():
+        for suffix in spec.hosts:
+            if host == suffix or host.endswith("." + suffix):
+                return vendor
+    return None
 
 
 def lazy_call(module_path: str, attr: str) -> Callable[..., object]:

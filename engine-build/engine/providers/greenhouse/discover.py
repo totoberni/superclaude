@@ -57,3 +57,12 @@ def _plain(content: str) -> str:
     """Greenhouse content=true is HTML-escaped HTML; reduce to plain text."""
     unescaped = html.unescape(content or "")
     return re.sub(r"<[^>]+>", " ", unescaped).strip()
+
+
+def greenhouse_endpoint(slug: str, region: str = "us") -> str:
+    """The ONE definition of Greenhouse's board poll URL (region ignored). The
+    provider registry registers this as `endpoint_fn` and `fetch.endpoint_for`
+    delegates here; the returned string is byte-identical to the old central
+    `registry.greenhouse_endpoint`."""
+    return ("https://boards-api.greenhouse.io/v1/boards/"
+            f"{slug}/jobs?content=true")

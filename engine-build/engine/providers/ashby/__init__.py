@@ -60,9 +60,13 @@ from engine.providers.ashby.fill import (  # noqa: F401
 )
 
 # -- Stage 2e self-registration into the eager-light auto-registry -------------
-# The board-JSON adapter is a LEAF module (`engine.kernel.*` only); it is the one
-# name this package needs from `.discover` and is safe to import at load.
-from engine.providers.ashby.discover import AshbyAdapter  # noqa: E402,F401
+# The board-JSON adapter + board poll-URL builder are LEAF names (`engine.kernel.*`
+# only); they are what this package needs from `.discover` and are safe to import
+# at load.
+from engine.providers.ashby.discover import (  # noqa: E402,F401
+    AshbyAdapter,
+    ashby_endpoint,
+)
 
 
 def vendor_resolver():
@@ -86,6 +90,8 @@ _registry.register(
     resolve_values=resolve_values,
     adapter=AshbyAdapter,
     vendor_resolver=vendor_resolver,
+    endpoint_fn=ashby_endpoint,
+    hosts=("ashbyhq.com",),
 )
 
 __all__ = ["vendor", "capture", "apply_url", "resolve_values", "fill",

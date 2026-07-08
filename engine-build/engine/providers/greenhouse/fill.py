@@ -70,7 +70,7 @@ from engine.kernel.contracts import (
 # (base re-exports these same kernel names). Not monkeypatched anywhere.
 from engine.kernel.fill_toolkit import _locator_text, _normalize_name, type_human
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
-from engine.providers import base, registry
+from engine.providers import base
 from engine.providers.greenhouse.resolve import GREENHOUSE_WIDGET_RESOLVER
 
 vendor = "greenhouse"
@@ -89,16 +89,22 @@ _TEXT_UPLOAD_SIBLINGS = {"resume_text": "resume",
 
 
 def capture(slug: str, job_id: str, opener: Any = None) -> FieldMap:
-    """The schema fetch: delegates to `registry.PROVIDERS["greenhouse"].
-    capture_fn` (itself `fieldmap.capture_greenhouse`, the public
-    `boards-api.../questions=true` GET). No new logic here."""
-    return registry.resolve(vendor).capture_fn(slug, job_id, opener)
+    """The schema fetch: the public `boards-api.../questions=true` GET. Reaches
+    `engine.fieldmap.capture_greenhouse` (a re-export shim to this vendor's own
+    `.capture`) via a CALL-TIME lookup on the module object, so the test
+    monkeypatch seam `monkeypatch.setattr(fieldmap, "capture_greenhouse", ...)`
+    still routes and importing this module never eagerly loads fieldmap. No new
+    logic here (the provider registry looks this function up lazily as
+    `_registry.get("greenhouse").capture`)."""
+    from engine.fieldmap import capture_greenhouse
+    return capture_greenhouse(slug, job_id, opener)
 
 
 def apply_url(slug: str, job_id: str) -> str:
-    """The public apply-page URL: delegates to `registry.PROVIDERS[
-    "greenhouse"].apply_url_fn` (`fill.greenhouse_apply_url`)."""
-    return registry.resolve(vendor).apply_url_fn(slug, job_id)
+    """The public apply-page URL: `fill.greenhouse_apply_url`, imported at CALL
+    time so this module stays browser-free at import."""
+    from engine.fill import greenhouse_apply_url
+    return greenhouse_apply_url(slug, job_id)
 
 
 # -- value resolution: delegate to the vendor-agnostic kernel resolver ---------

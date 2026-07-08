@@ -50,3 +50,11 @@ def _ashby_locations(job: dict) -> list[str]:
         if name:
             locations.append(name)
     return locations
+
+
+def ashby_endpoint(slug: str, region: str = "us") -> str:
+    """The ONE definition of Ashby's board poll URL (region ignored). The
+    provider registry registers this as `endpoint_fn` and `fetch.endpoint_for`
+    delegates here; byte-identical to the old central `registry.ashby_endpoint`."""
+    return ("https://api.ashbyhq.com/posting-api/job-board/"
+            f"{slug}?includeCompensation=true")

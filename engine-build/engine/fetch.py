@@ -31,7 +31,7 @@ import yaml
 
 from engine.kernel.discover_base import SourceAdapter
 from engine.kernel.capture_toolkit import UA  # noqa: F401 (moved to kernel, W5.1 stage 5)
-from engine.providers import registry
+from engine.providers import _registry
 from engine.store import Store
 
 # _VENDORS / _ADAPTERS are thin projections of the provider registry (the SSOT for
@@ -42,7 +42,7 @@ from engine.store import Store
 # adapter=None) is excluded from both; with workable un-stubbed (W5.4) the four
 # supported vendors are ("greenhouse", "lever", "ashby", "workable").
 _VENDORS: tuple[str, ...] = tuple(
-    vendor for vendor, spec in registry.PROVIDERS.items()
+    vendor for vendor, spec in _registry.PROVIDERS.items()
     if spec.supported and spec.adapter is not None
 )
 _MAX_RETRIES = 2
@@ -50,7 +50,7 @@ _INITIAL_BACKOFF_S = 1.0
 
 _ADAPTERS: dict[str, Callable[[], SourceAdapter]] = {
     vendor: spec.adapter
-    for vendor, spec in registry.PROVIDERS.items()
+    for vendor, spec in _registry.PROVIDERS.items()
     if spec.adapter is not None
 }
 
@@ -104,7 +104,7 @@ def endpoint_for(source: Source) -> str:
     poll URLs); kept as a module-level function because callers and tests import
     `endpoint_for` from engine.fetch.
     """
-    spec = registry.PROVIDERS.get(source.vendor)
+    spec = _registry.PROVIDERS.get(source.vendor)
     if spec is None or not spec.supported or spec.endpoint_fn is None:
         raise ValueError(f"unknown vendor: {source.vendor}")
     return spec.endpoint_fn(source.slug, source.region)

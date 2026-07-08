@@ -27,8 +27,8 @@ import engine.fill  # noqa: F401
 from engine.fieldmap import Field, FieldMap, Locator, parse_greenhouse
 from engine.fill import FillAssets, FillSafetyError
 from engine.profile_map import profile_from_real_ssot
-from engine.providers import base, greenhouse, protocol, registry
-from engine.providers.registry import PROVIDERS
+from engine.providers import base, greenhouse, protocol
+from engine.providers._registry import PROVIDERS
 from engine.ssot import SSOT
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "providers" / "greenhouse"
@@ -415,8 +415,8 @@ def _resolved_values(fieldmap, *, tmp_path, assets_kwargs=None):
 
 
 def test_capture_delegates_to_registry_capture_fn(monkeypatch):
-    # registry._capture_greenhouse (== PROVIDERS["greenhouse"].capture_fn,
-    # bound at registry module-load time) itself lazily imports and calls
+    # PROVIDERS["greenhouse"].capture is a call-time lazy_call targeting
+    # engine.providers.greenhouse:capture, which itself lazily imports and calls
     # engine.fieldmap.capture_greenhouse at CALL time (mirrors
     # test_providers_registry.py's own `test_collect_fieldmap_greenhouse_
     # passes_opener`), so patching that module attribute is what proves
@@ -432,7 +432,7 @@ def test_capture_delegates_to_registry_capture_fn(monkeypatch):
     result = greenhouse.capture("fakeco", "7701001", opener="OPENER")
     assert result == "SENTINEL"
     assert calls == [("fakeco", "7701001", "OPENER")]
-    assert registry.resolve("greenhouse").capture_fn is registry._capture_greenhouse
+    assert PROVIDERS["greenhouse"].capture._target == ("engine.providers.greenhouse", "capture")
 
 
 def test_apply_url_delegates_to_registry_apply_url_fn():
