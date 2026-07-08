@@ -389,12 +389,6 @@ _GOTO_TIMEOUT_MS = 20_000
 
 # -- URL helpers ---------------------------------------------------------------
 
-def greenhouse_apply_url(slug: str, job_id: str) -> str:
-    """The public Greenhouse apply page (the `job-boards.greenhouse.io/{slug}/
-    jobs/{job_id}` host is the newer variant of the same page)."""
-    return f"https://boards.greenhouse.io/{slug}/jobs/{job_id}"
-
-
 def _apply_url(vendor: str, slug: str, job_id: str) -> str:
     spec = _registry.PROVIDERS.get(vendor)
     if spec is None or not spec.supported or spec.apply_url is None:

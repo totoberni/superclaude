@@ -10,17 +10,18 @@ the DOM-sweep cross-check (`base.sweep_required` / `base.completeness_
 mismatch`) still runs so a schema/DOM divergence is never silently missed
 (hole-fix d is load-bearing everywhere, not only for the DOM-only vendors).
 
-`capture` and `apply_url` are thin delegations to the registry wiring already
-registered for "greenhouse" (`registry.PROVIDERS["greenhouse"]`) -- this
-module adds NO new schema-fetch or URL-building logic, only the `fill()`
-sequencing and the vendor-specific bits documented per step below.
+`capture` reaches this vendor's schema fetch through the `engine.fieldmap`
+re-export seam at call time, and `apply_url` its own `.capture` URL builder --
+this module adds NO new schema-fetch or URL-building logic, only the `fill()`
+sequencing and the vendor-specific bits documented per step below (the
+registry's `_registry.PROVIDERS["greenhouse"]` spec looks both up lazily).
 
-LAZY-IMPORT INVARIANT (mirrors `providers/base.py` and `registry.py`): this
+LAZY-IMPORT INVARIANT (mirrors `providers/base.py` and `_registry.py`): this
 module must not import patchright / `engine.browse` at load time, so the
 daily poller (which imports `engine.providers` eagerly) stays browser-free.
-`engine.fill` (patchright-free itself, but not on the poller's hot path
-either) is imported lazily inside the functions that need its private
-helpers, matching `base.py`'s own `_fill()` accessor pattern.
+Module-scope imports are the kernel, `providers/base`, the `engine.fieldmap`
+FieldMap re-export, and this package's own `.resolve` (all browser-free by
+construction); this module no longer imports `engine.fill` at all.
 
 SEEDED FIELD-NAME REFERENCE (workpls greenhouse.js, Apache-2.0; W5 spec
 section 3): Greenhouse's stable native field names are
@@ -61,8 +62,8 @@ from engine.fieldmap import FieldMap
 # `engine.fill`: this package's `__init__` is reachable through the lazy
 # `engine.fieldmap` re-export shim while `engine.fill` is still mid-import, so
 # a top-level `from engine.fill import ...` here would re-enter a
-# half-initialised `engine.fill` and raise. `engine.fill` is still imported
-# LAZILY inside the functions that need its private helpers.
+# half-initialised `engine.fill` and raise. (Since wave 4B1 this module has NO
+# `engine.fill` import at any scope; primitives come from the kernel.)
 from engine.kernel.contracts import (
     FillAssets, FillReport, FillSafetyError, ResolvedValues)
 # Generic form-driving primitives the moved react-select / upload-poll widget
@@ -101,9 +102,9 @@ def capture(slug: str, job_id: str, opener: Any = None) -> FieldMap:
 
 
 def apply_url(slug: str, job_id: str) -> str:
-    """The public apply-page URL: `fill.greenhouse_apply_url`, imported at CALL
+    """The public apply-page URL: `capture.greenhouse_apply_url`, imported at CALL
     time so this module stays browser-free at import."""
-    from engine.fill import greenhouse_apply_url
+    from engine.providers.greenhouse.capture import greenhouse_apply_url
     return greenhouse_apply_url(slug, job_id)
 
 
@@ -178,7 +179,7 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     # The TRUTHFUL, immediate sibling-satisfaction signal (racy-render
     # hole-fix, 2026-07-06 gitlab/8503792002 full-fill run): a key lands
     # here the moment `_fill_upload` confirms `el.files.length>=1` on the
-    # native input, via `engine.fill._upload_attached` with NO `confirm=`
+    # native input, via `kernel.fill_toolkit._upload_attached` with NO `confirm=`
     # argument -- independent of Greenhouse's own (racy) React re-render.
     # `filled_keys` stays the RENDER-CONFIRMED signal (gated on `confirm=`,
     # used for the report's `uploads`/completeness); `file_attached_keys` is
@@ -269,7 +270,7 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     # renders it, so it must never be swept as a schema/DOM disagreement --
     # and an uploaded field's OWN label is reconciled against the filename
     # Greenhouse appends to it post-upload (`_reconcile_uploaded_labels`).
-    from engine import fill as _fill
+    from engine.kernel.resolve import _completeness
 
     schema_required = {f.label for f in fieldmap.required_fields()
                        if f.key not in satisfied_by_sibling}
@@ -279,8 +280,9 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
 
     filled = len(filled_keys)
     all_skips = list(values.skipped) + extra_skips
-    fillable_total, required_unfilled, justified_skips = _fill._completeness(
-        fieldmap, filled_keys, all_skips, filled)
+    fillable_total, required_unfilled, justified_skips = _completeness(
+        fieldmap, filled_keys, all_skips, filled,
+        vendor_resolver=GREENHOUSE_WIDGET_RESOLVER)
     required_unfilled = required_unfilled + _sweep_gaps(mismatch)
 
     return FillReport(
@@ -410,7 +412,7 @@ def _fill_upload(page, fv, uploads: list[dict],
                  filled_keys: set[str],
                  file_attached_keys: set[str]) -> None:
     """Attach a whitelisted asset via the reused `base._safe_upload` /
-    `engine.fill._locate_file_input` (the real `<input type=file>` locator;
+    `kernel.fill_toolkit._locate_file_input` (the real `<input type=file>` locator;
     the fieldmap's best-effort role=button hint never reaches it). A
     successful upload counts as filled (`filled_keys`/`uploads`) ONLY once
     BOTH the input's own readback confirms a file actually attached AND
@@ -425,7 +427,7 @@ def _fill_upload(page, fv, uploads: list[dict],
 
     `file_attached_keys` (FIX 1, racy-render decoupling, 2026-07-06
     gitlab/8503792002 full-fill run): the TRUTHFUL, immediate `el.files.
-    length>=1` signal alone -- `engine.fill._upload_attached(control)` with
+    length>=1` signal alone -- `kernel.fill_toolkit._upload_attached(control)` with
     NO `confirm=` argument, read right after `set_input_files` -- recorded
     independently of whether the render-confirmed gate below succeeds. This
     is the ONLY signal a `<name>_text` paste-textarea sibling is satisfied
@@ -433,9 +435,9 @@ def _fill_upload(page, fv, uploads: list[dict],
     (or, under a busy full-fill load, not land within even the extended
     poll window) while the file is already genuinely on the input, and the
     textarea must never be driven in that state regardless."""
-    from engine import fill as _fill
+    from engine.kernel.fill_toolkit import _locate_file_input, _upload_attached
 
-    control = _fill._locate_file_input(page, fv)
+    control = _locate_file_input(page, fv)
     if control is None:
         extra_skips.append((fv.key, "no file input located"))
         return
@@ -447,10 +449,10 @@ def _fill_upload(page, fv, uploads: list[dict],
     except Exception as exc:  # per-field upload error is fail-soft
         extra_skips.append((fv.key, f"upload-error: {exc}"))
         return
-    if _fill._upload_attached(control):
+    if _upload_attached(control):
         file_attached_keys.add(fv.key)
     confirm = lambda: base.poll_upload_confirmed(page, control, str(fv.value))
-    if not _fill._upload_attached(control, confirm=confirm):
+    if not _upload_attached(control, confirm=confirm):
         extra_skips.append((fv.key, "upload did not attach (readback)"))
         return
     filled_keys.add(fv.key)
@@ -500,7 +502,7 @@ def _reconfirm_late_uploads(page, fieldmap: FieldMap, values: ResolvedValues,
 
     Restricted to REQUIRED upload fields still missing from `filled_keys`:
     an optional upload's false negative already resolves to a justified
-    skip (`_fill._is_upload_skip`), so re-polling it would spend time
+    skip (`kernel.resolve._is_upload_skip`), so re-polling it would spend time
     without changing the report's verdict.
 
     On a genuine re-confirm: the key joins `filled_keys`/`uploads` (mirrors
@@ -511,7 +513,7 @@ def _reconfirm_late_uploads(page, fieldmap: FieldMap, values: ResolvedValues,
     re-marked satisfied-by-sibling -- the SAME skip-reason string `fill.
     _is_satisfied_by_sibling_upload` recognizes, so completeness stays
     single-sourced with the inline sibling-skip branch above."""
-    from engine import fill as _fill
+    from engine.kernel.fill_toolkit import _locate_file_input
 
     # Under a busy acceptance harness (per-request audit callbacks on the
     # context keep the event loop churning), Greenhouse's attached-file React
@@ -532,7 +534,7 @@ def _reconfirm_late_uploads(page, fieldmap: FieldMap, values: ResolvedValues,
     for fv in values.fields:
         if not _is_upload(fv) or fv.key in filled_keys:
             continue
-        control = _fill._locate_file_input(page, fv)
+        control = _locate_file_input(page, fv)
         # `control` can be None here precisely BECAUSE the upload SUCCEEDED:
         # greenhouse unmounts the <input type=file> once it re-renders the
         # widget to a filename + remove control, so a None control is NOT a
@@ -574,7 +576,7 @@ def _drop_readback_mismatch(readback_mismatches: list[dict], key: str) -> None:
 def _current_assets(fv):
     """`base._safe_upload` requires a `FillAssets` whitelist; `fv.value` is
     already ONE of that whitelist's resolved paths (produced by `resolve_
-    values`/`_fill.resolve_values` upstream), so a single-path FillAssets
+    values` -- this module's kernel-delegating resolver -- upstream), so a single-path FillAssets
     keyed to whichever asset slot `fv.asset` names reconstructs an
     equivalent whitelist without threading the original object through the
     Provider contract's `fill(page, fieldmap, values)` signature."""
@@ -793,10 +795,10 @@ def _wait_timeout(page, ms: int) -> None:
 # -- upload rendered-confirmation poll (Greenhouse resume-upload false ---------
 # positive fix, 2026-07-06 gitlab/8503792002 acceptance run, HOSTILE REVIEW #1)
 #
-# `engine.fill._upload_attached`'s `el.files.length >= 1` check is NECESSARY
+# `kernel.fill_toolkit._upload_attached`'s `el.files.length >= 1` check is NECESSARY
 # but NOT SUFFICIENT for Greenhouse: a live probe showed the engine's own
 # upload path (an ElementHandle captured once via `query_selector_all`,
-# fixed in `engine.fill._locate_file_input`/`_file_input_control`) left the
+# fixed in `kernel.fill_toolkit._locate_file_input`/`_file_input_control`) left the
 # file genuinely sitting in the native input's FileList while Greenhouse's
 # React-driven widget never rendered it -- still the empty "Attach"/"Enter
 # manually" placeholder, no filename, no remove control. A DIRECT

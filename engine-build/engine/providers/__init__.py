@@ -6,8 +6,8 @@ that knowledge into one `vendor -> ProviderSpec` map; W5.1 Stage 3c collapsed th
 two coexisting registries onto the single eager-but-light auto-registry
 `engine.providers._registry`, which the plugins populate by SELF-REGISTERING on
 import. The call sites delegate to it; the capture / apply / endpoint function
-BODIES live in their vendor plugin homes (`<vendor>.capture` / `.discover`,
-plus `fill.greenhouse_apply_url`) and the registry only holds references.
+BODIES live in their vendor plugin homes (each vendor's `.capture` / `.discover`
+submodules) and the registry only holds references.
 
 POPULATION: importing this package eagerly imports the four vendor plugin
 packages below, each of which self-registers into `_registry.PROVIDERS` from its

@@ -54,6 +54,12 @@ def greenhouse_questions_url(slug: str, job_id: str) -> str:
             f"{slug}/jobs/{job_id}?questions=true")
 
 
+def greenhouse_apply_url(slug: str, job_id: str) -> str:
+    """The public Greenhouse apply page (the `job-boards.greenhouse.io/{slug}/
+    jobs/{job_id}` host is the newer variant of the same page)."""
+    return f"https://boards.greenhouse.io/{slug}/jobs/{job_id}"
+
+
 def capture_greenhouse(slug: str, job_id: str, opener=None, *,
                        timeout_s: float = 20, user_agent: str = UA,
                        now: Callable[[], str] | None = None) -> FieldMap:

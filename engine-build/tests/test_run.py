@@ -845,12 +845,11 @@ def test_capture_fieldmaps_is_fail_soft_per_item(tmp_path, jobhunt_config,
     assert record["counts"]["discarded"] == 1
 
 
-def test_capture_fieldmaps_routes_ashby_to_browse_capture(
+def test_capture_fieldmaps_routes_ashby_to_vendor_capture(
         tmp_path, jobhunt_config, real_ssot_path, ashby_raw, monkeypatch):
-    # An ashby item must dispatch to browse.capture_ashby (NOT the greenhouse
+    # An ashby item must dispatch to the vendor capture module's capture_ashby (NOT the greenhouse
     # HTTP path). A fake stands in for the browser capture so no playwright or
     # network is touched; threshold=0 guarantees the ashby posting is visible.
-    import engine.browse as browse
     from engine.fieldmap import Field, FieldMap, Locator
 
     calls = []
@@ -865,7 +864,9 @@ def test_capture_fieldmaps_routes_ashby_to_browse_capture(
                           locator=Locator(role="textbox", name="Full name"),
                           step_index=0, conditional_on=None)])
 
-    monkeypatch.setattr(browse, "capture_ashby", fake_capture_ashby)
+    from importlib import import_module
+    monkeypatch.setattr(import_module("engine.providers.ashby.capture"),
+                        "capture_ashby", fake_capture_ashby)
 
     tuned = dataclasses.replace(jobhunt_config, threshold=0)
     store = Store(tmp_path / "store.db")

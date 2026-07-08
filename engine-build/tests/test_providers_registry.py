@@ -183,28 +183,30 @@ def test_collect_fieldmap_greenhouse_passes_opener(monkeypatch):
     assert calls == [("acme", "5501001", opener)]
 
 
-def test_collect_fieldmap_ashby_routes_to_browse_ignoring_opener(monkeypatch):
-    import engine.browse as browse
+def test_collect_fieldmap_ashby_routes_to_vendor_capture_ignoring_opener(monkeypatch):
     calls = []
 
     def fake_capture_ashby(slug, job_id, browser_factory=None):
         calls.append((slug, job_id))
         return object()
 
-    monkeypatch.setattr(browse, "capture_ashby", fake_capture_ashby)
+    from importlib import import_module
+    monkeypatch.setattr(import_module("engine.providers.ashby.capture"),
+                        "capture_ashby", fake_capture_ashby)
     run._collect_fieldmap("ashby", _posting("initech", "xyz"), object())
     assert calls == [("initech", "xyz")]
 
 
-def test_collect_fieldmap_lever_routes_to_browse_ignoring_opener(monkeypatch):
-    import engine.browse as browse
+def test_collect_fieldmap_lever_routes_to_vendor_capture_ignoring_opener(monkeypatch):
     calls = []
 
     def fake_capture_lever(slug, job_id, browser_factory=None):
         calls.append((slug, job_id))
         return object()
 
-    monkeypatch.setattr(browse, "capture_lever", fake_capture_lever)
+    from importlib import import_module
+    monkeypatch.setattr(import_module("engine.providers.lever.capture"),
+                        "capture_lever", fake_capture_lever)
     run._collect_fieldmap("lever", _posting("globex", "req-9"), object())
     assert calls == [("globex", "req-9")]
 

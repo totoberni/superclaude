@@ -80,11 +80,14 @@ DOM sweep (`base.sweep_required`), the completeness arithmetic
 `FillReport` dataclass -- is the SAME shared base/fill spine every provider
 stands on (never a reimplementation).
 
-LAZY-IMPORT INVARIANT (mirrors greenhouse.py / lever.py / base.py / registry.py):
+LAZY-IMPORT INVARIANT (mirrors greenhouse.py / lever.py / base.py / _registry.py):
 this module must not import patchright / `engine.browse` at load time so the
-daily poller (which imports `engine.providers` -> only `protocol` + `registry`)
-stays browser-free. `engine.fill`'s private helpers are imported lazily inside
-the functions that need them, matching base.py's `_fill()` accessor pattern.
+daily poller (which imports `engine.providers` eagerly: `_registry` plus the
+four plugin packages, all browser-free) stays browser-free. Kernel primitives
+are imported at module scope (browser-free by construction); the vendor capture
+submodule is reached at CALL time via `importlib.import_module`. The one
+remaining `engine.fill` import is the top-level dataclass re-export line
+(repoints to `kernel.contracts` in Stage 4).
 Ashby imports NO sibling vendor package (import-disjoint, W5.1 Stage 3a): the
 CV/photo rule comes from the kernel, not from greenhouse.
 
@@ -117,27 +120,30 @@ vendor = "ashby"
 
 
 def capture(slug: str, job_id: str, opener: Any = None) -> FieldMap:
-    """The field-map capture: `browse.capture_ashby`, the read-only
+    """The field-map capture: `capture.capture_ashby`, the read-only
     non-user-graphql `ApiJobPosting` interception (Ashby's field map comes from
-    the graphql schema, so `opener` is ignored). Reached via a CALL-TIME lookup
-    on `engine.browse` so importing this module never loads the browser stack and
-    the test monkeypatch seam `monkeypatch.setattr(browse, "capture_ashby", ...)`
-    still routes. No new capture logic here (the provider registry looks this
-    function up lazily as `_registry.get("ashby").capture`)."""
-    from engine import browse
-    return browse.capture_ashby(slug, job_id)
+    the graphql schema, so `opener` is ignored). Reached at CALL TIME via
+    `importlib.import_module("engine.providers.ashby.capture")` -- the `.capture`
+    submodule name is shadowed at package scope by this Provider callable, so it
+    is reached through `sys.modules` per the package __init__ NAME NOTE -- so
+    importing this module never loads the browser stack and the capture-module
+    monkeypatch seam still routes. No new capture logic here (the provider
+    registry looks this function up lazily as `_registry.get("ashby").capture`)."""
+    from importlib import import_module
+    return import_module("engine.providers.ashby.capture").capture_ashby(slug, job_id)
 
 
 def apply_url(slug: str, job_id: str) -> str:
-    """The public apply-page URL: `browse.ashby_application_url`, imported at CALL
-    time so this module stays browser-free at import."""
-    from engine import browse
-    return browse.ashby_application_url(slug, job_id)
+    """The public apply-page URL: `capture.ashby_application_url`, reached at CALL
+    TIME via `importlib.import_module` (the `.capture` submodule is shadowed at
+    package scope; see __init__) so this module stays browser-free at import."""
+    from importlib import import_module
+    return import_module("engine.providers.ashby.capture").ashby_application_url(slug, job_id)
 
 
 # -- value resolution: from the kernel (hole-fix e CV/photo choice) ------------
 # The structural CV/photo rule is vendor-agnostic (keyed on the form's own
-# upload-field shape via `fill._form_has_photo_field`, never posting text), so it
+# upload-field shape via `kernel.resolve._form_has_photo_field`, never posting text), so it
 # has ONE home -- the generic kernel.resolve.resolve_values -- and Ashby
 # delegates to it rather than duplicating a load-bearing safety rule.
 
@@ -229,7 +235,7 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     # authoritative oracle); `dom_required` is the live sweep, run as a
     # cross-check that the schema did not miss a field the page actually
     # requires. ANY mismatch (either direction) forces NOT_COMPLETE.
-    from engine import fill as _fill
+    from engine.kernel.resolve import _completeness
 
     schema_required = {f.label for f in fieldmap.required_fields()}
     dom_required = base.sweep_required(page)
@@ -237,8 +243,8 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
 
     filled = len(filled_keys)
     all_skips = list(values.skipped) + extra_skips
-    fillable_total, required_unfilled, justified_skips = _fill._completeness(
-        fieldmap, filled_keys, all_skips, filled)
+    fillable_total, required_unfilled, justified_skips = _completeness(
+        fieldmap, filled_keys, all_skips, filled, vendor_resolver=None)
     required_unfilled = required_unfilled + _sweep_gaps(mismatch)
 
     return FillReport(
@@ -392,9 +398,9 @@ def _fill_upload(page, fv, uploads: list[dict],
     Counts as filled ONLY once the input's own readback confirms a file
     attached, mirroring greenhouse's / lever's upload path exactly (the SAME
     base/fill primitives, not a reimplementation)."""
-    from engine import fill as _fill
+    from engine.kernel.fill_toolkit import _locate_file_input, _upload_attached
 
-    control = _fill._locate_file_input(page, fv)
+    control = _locate_file_input(page, fv)
     if control is None:
         extra_skips.append((fv.key, "no file input located"))
         return
@@ -406,7 +412,7 @@ def _fill_upload(page, fv, uploads: list[dict],
     except Exception as exc:  # per-field upload error is fail-soft
         extra_skips.append((fv.key, f"upload-error: {exc}"))
         return
-    if not _fill._upload_attached(control):
+    if not _upload_attached(control):
         extra_skips.append((fv.key, "upload did not attach (readback)"))
         return
     filled_keys.add(fv.key)

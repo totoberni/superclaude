@@ -302,7 +302,7 @@ class _FakeLeverPage:
 def test_capture_delegates_to_registry_capture(monkeypatch):
     # _registry.get("lever").capture is a call-time lazy_call targeting
     # engine.providers.lever:capture, which lazily imports and calls
-    # engine.browse.capture_lever at CALL time; patching that module
+    # engine.providers.lever.capture.capture_lever at CALL time; patching that module
     # attribute proves capture() rides the SAME registry wiring end to end.
     calls = []
 
@@ -310,7 +310,9 @@ def test_capture_delegates_to_registry_capture(monkeypatch):
         calls.append((slug, job_id))
         return "SENTINEL"
 
-    monkeypatch.setattr(browse, "capture_lever", fake_capture)
+    from importlib import import_module
+    monkeypatch.setattr(import_module("engine.providers.lever.capture"),
+                        "capture_lever", fake_capture)
     result = lever.capture("fauxcorp", "9001", opener="IGNORED")
     assert result == "SENTINEL"
     assert calls == [("fauxcorp", "9001")]
