@@ -34,3 +34,13 @@ Create a GitHub pull request for the current branch.
    )"
    ```
 7. Return the PR URL
+
+## Loop integration (converge)
+
+`pr` is a ONE-SHOT ACTION: a single invocation drafts and creates the pull request (steps 1-7 above). It has no round-by-round REWORK cycle and emits no SEAL; a full `/converge` loop does not apply to the act of publishing the PR itself.
+
+Before running `gh pr create` (step 6), run ONE optional single self-check on the drafted description: does the Summary accurately reflect the actual diff gathered in step 3, and does the Test plan checklist cover the changed surface? This is a single pass, not a loop: one fresh look before publishing, no VERDICT/REWORK cycling.
+
+Iterating the underlying CODE to a sealed quality bar is `/converge`'s job, run separately via `/fix-issue` or `/review`; `pr` itself only publishes what already exists and stays one-shot regardless.
+
+Loop orchestration (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention.

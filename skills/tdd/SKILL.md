@@ -111,3 +111,11 @@ Before marking work complete:
 - [ ] Wrote minimal code to pass each test
 - [ ] All tests pass (run full suite, not just new tests)
 - [ ] No warnings or errors in output
+
+## Loop integration (converge)
+
+The RED-GREEN core is already self-gating: the test suite is a deterministic pass/fail gate, and no LLM review loop is needed to decide whether a test passes. `/converge` has nothing to add there.
+
+REFACTOR is the optional converge touchpoint. Once GREEN holds, the conductor may run `/converge` (or a single `w-reviewer` pass) over the refactored code to iterate code quality (naming, duplication, structure) to clean, while the correctness gate stays the test suite throughout: REFACTOR review only proceeds on a green suite, and every round must keep it green.
+
+Loop orchestration (dispatching the reviewer, invoking `/review-dispatch`, printing the `/goal` block) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention. This skill drives no loop of its own; its own `allowed-tools` cover only the single RED-GREEN-REFACTOR cycle above.

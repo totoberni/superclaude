@@ -155,3 +155,11 @@ Output: markdown report with sections ## Verification, ## Files changed, ## Diff
 - Spawn telemetry source: `~/.claude/comms/_spawns.log`
 - Outcome telemetry (sister): `~/.claude/comms/_outcomes.log` (populated by `hooks/modules/42-agent-outcome.sh`)
 - Sister skills: `/swarm-dispatch` (initial batch dispatch), `/autocommission` (ephemeral worker spawn)
+
+## Loop integration (converge)
+
+`recover-truncated` is an advisory, ONE-SHOT recovery-dispatch generator: it locates a truncated or failed worker's output and prints a narrow re-dispatch prompt for the caller to paste into the Agent tool. It drives no convergence loop and emits no VERDICT or SEAL.
+
+The load-bearing step is Step 2 (verify state via git): after the RE-DISPATCHED worker returns, the caller MUST verify on-disk state before trusting the result, not just the worker's own report, per R-3 (`~/.claude/rules/40-swarm-quality-gates.md`). A "failed" status can still carry a complete edit underneath (opus truncates report-only, per `~/.claude/rules/13-worker-first-mandate.md` § Worker model split), while a genuinely partial edit needs cleanup before any redo; treat this git-diff check as the single verification pass that closes a recovery, and note it pairs with `/converge` whenever the recovered work is one round inside a larger loop.
+
+Loop orchestration itself (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention. This skill drives no loop of its own; its own `allowed-tools` cover only the single locate-and-prompt invocation above.

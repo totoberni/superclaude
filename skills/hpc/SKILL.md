@@ -138,3 +138,11 @@ Display partitions, modules, storage, and tips for the target cluster.
 - All file paths absolute
 - Read `~/.ssh/config` for hostnames (DRY — single source of truth)
 - Respect two-phase HPC workflow: prepare on login node, execute on compute
+
+## Loop integration (converge)
+
+`hpc` is a ONE-SHOT generator: it produces a SLURM script, an rsync command, or a status/env summary and writes or prints it. Per the Constraints above it never executes SSH or rsync and never submits jobs, so there is no convergence loop for it to drive.
+
+Before submitting a GENERATED script, run ONE optional pre-submission review: a `w-reviewer` (light style/lint tier), or a manual check for the SSOT path-gotcha trap documented in `~/.claude/rules/20-tool-conventions.md` § Single Source of Truth Across Tool Boundaries, where a bash `CKPT_DIR`-style variable that mirrors an application-side path formula "for early permission failure detection" silently drifts and writes to the wrong location. This is a single go/no-go check, not a loop: no REWORK round, no SEAL. A long HPC campaign's own monitor loop (polling `squeue`, re-submitting on preemption) belongs to a separate scheduled skill (a future `wf-hpc-watch`), not to `hpc` itself.
+
+Loop orchestration itself (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention. This skill drives no loop of its own; its own `allowed-tools` cover only the single generate-and-write invocation above.
