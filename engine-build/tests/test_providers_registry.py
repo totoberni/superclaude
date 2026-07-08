@@ -129,12 +129,11 @@ def test_endpoint_for_unknown_vendor_preserves_error():
 def test_adapters_and_vendors_are_registry_projections():
     # the shims kept for import-compat mirror the registry (workable now included,
     # un-stubbed in W5.4)
-    # Order is the deterministic self-registration-cascade order (greenhouse
-    # registers first via the re-entrant import edge, then ashby/lever/workable);
-    # it changed from the old registry's hand-written (greenhouse,lever,ashby,
-    # workable) when PROVIDERS moved to plugin self-registration. It is an
-    # iteration order only (no functional dependency). ROBUSTNESS FOLLOW-UP: pin
-    # a canonical VENDOR_ORDER so this cannot silently shift with the import graph.
+    # Order is pinned to `engine.providers.VENDOR_ORDER` (registration walks
+    # that tuple; a post-import check raises on divergence). The literal below
+    # stays HARDCODED on purpose: it bites independently of the pin, so a
+    # coordinated wrong edit of VENDOR_ORDER cannot silently pass. It is an
+    # iteration order only (no functional dependency).
     assert fetch._VENDORS == ("greenhouse", "ashby", "lever", "workable")
     assert fetch._ADAPTERS == {
         "greenhouse": GreenhouseAdapter,
