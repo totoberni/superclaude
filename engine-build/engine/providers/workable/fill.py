@@ -195,7 +195,7 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     # is that trustworthy oracle and `dom_required` is the LIVE cross-check; any
     # mismatch forces NOT_COMPLETE via _sweep_gaps, and a boolean/checkbox/etc
     # handed off above (or any field whose readback did not confirm) surfaces
-    # through fill._completeness.
+    # through kernel.resolve._completeness.
     from engine.kernel.resolve import _completeness
 
     schema_required = {f.label for f in fieldmap.required_fields()}
@@ -316,7 +316,7 @@ def _fill_upload(page, fv, uploads: list[dict],
                  extra_skips: list[tuple[str, str]],
                  filled_keys: set[str]) -> None:
     """Attach a whitelisted asset via the reused `base._safe_upload` /
-    `fill._locate_file_input` primitives (the real hidden `input[type=file]`; the
+    `kernel.fill_toolkit._locate_file_input` primitives (the real hidden `input[type=file]`; the
     fieldmap's role=button hint never reaches it). Counts as filled ONLY once the
     input's own readback confirms a file attached, mirroring greenhouse's / lever's
     upload path exactly (the SAME base/fill primitives, not a reimplementation)."""

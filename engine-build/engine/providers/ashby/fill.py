@@ -74,9 +74,9 @@ rule with one home.
 OVERRIDES greenhouse: only the per-field DRIVING body (the controlled-component
 select driver + the Turnstile checkbox/radio hand-off). Everything else -- the
 structural never-send (`base.install_never_send`), the upload primitives
-(`base._safe_upload` / `fill._locate_file_input` / `fill._upload_attached`), the
+(`base._safe_upload` / `kernel.fill_toolkit._locate_file_input` / `kernel.fill_toolkit._upload_attached`), the
 DOM sweep (`base.sweep_required`), the completeness arithmetic
-(`fill._completeness`) and its greenhouse cross-check SEMANTICS, and the
+(`kernel.resolve._completeness`) and its greenhouse cross-check SEMANTICS, and the
 `FillReport` dataclass -- is the SAME shared base/fill spine every provider
 stands on (never a reimplementation).
 
@@ -98,7 +98,7 @@ SEEDED FIELD-NAME REFERENCE (neonwatty/job-apply-plugin, MIT; W5 spec section
 does NOT hardcode those as selectors: the per-field `fieldmap.Field.locator`
 (role + accessible name, derived from the graphql schema by `browse._parse_
 ashby`) is authoritative and always preferred (`base._locate` resolves it); the
-resume input is found by its key stem through the shared `fill._locate_file_
+resume input is found by its key stem through the shared `kernel.fill_toolkit._locate_file_
 input` (the `_systemfield_resume` key yields a "resume" token). The neonwatty
 paths are kept as a REFERENCE/FALLBACK note only; no code path consults them.
 """
@@ -393,7 +393,7 @@ def _fill_upload(page, fv, uploads: list[dict],
                  extra_skips: list[tuple[str, str]],
                  filled_keys: set[str]) -> None:
     """Attach a whitelisted asset via the reused `base._safe_upload` /
-    `fill._locate_file_input` primitives (the real `#_systemfield_resume`
+    `kernel.fill_toolkit._locate_file_input` primitives (the real `#_systemfield_resume`
     `<input type=file>`; the fieldmap's role=button hint never reaches it).
     Counts as filled ONLY once the input's own readback confirms a file
     attached, mirroring greenhouse's / lever's upload path exactly (the SAME

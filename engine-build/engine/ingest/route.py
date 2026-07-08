@@ -3,7 +3,7 @@
 `route(msg, bucket) -> RoutingDecision`. Extraction only, for now:
 
 - job-alert: pulls canonical job refs (LinkedIn `/comm/jobs/view/(\\d+)`; Indeed
-  `jk=` param) that a future wave feeds into `engine.discover` / `engine.store`.
+  `jk=` param) that a future wave feeds into the discovery pipeline (`engine.run`) / `engine.store`.
 - verification: pulls the first link in the body for an ntfy handoff.
 - outcome: parses a received/rejected/interview status from the subject cue
   that also drove the classify.py bucket decision, plus a best-effort
@@ -13,7 +13,7 @@
 - review: no extraction; a human looks at the message directly.
 
 This wave stops at the dataclass: `route()` does NOT call into
-`engine.discover` / `engine.store` / `engine.notify`.
+`engine.run` / `engine.store` / `engine.notify`.
 """
 
 from __future__ import annotations

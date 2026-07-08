@@ -7,7 +7,7 @@ registry <-> discover import cycle:
 1. Population + light-import: importing the registry (through any entry point)
    fully populates `PROVIDERS` with all four vendors and loads NO browser module.
 2. Cycle dissolution: `PROVIDERS` is fully populated no matter which module is
-   imported first (registry-first, plugin-first, or `engine.discover`-first) --
+   imported first (registry-first, plugin-first, or `engine.run`-first) --
    the re-entrant self-registration graph resolves in every direction.
 3. Per-vendor contract: the vendor_resolver duck-type (greenhouse has one, the
    others return None), the LAZY call-time capture/fill resolution, the directly

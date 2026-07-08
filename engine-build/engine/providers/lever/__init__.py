@@ -17,11 +17,12 @@ Lever has NO `.resolve` submodule: `.fill.resolve_values` delegates to the
 kernel's `engine.kernel.resolve.resolve_values`, which carries the hole-fix e
 structural CV/photo choice (a load-bearing safety rule single-sourced in the
 kernel), so no vendor duplicates it -- exactly as ashby / workable do. The `.discover`
-adapter move lands in Stage 2e WITH the eager-light `_registry.py`, because the
-CURRENT `registry.py` loads at `engine.providers.__init__` time and from-imports
-the adapter out of `engine.discover`; the adapter's plugin home is only reachable
-THROUGH that same partially-initialized package (a load-time move here is a
-proven hard import cycle).
+adapter move landed in Stage 2e WITH the eager-light `_registry.py`, because the
+then-live `registry.py` (deleted in Stage 3c) loaded at `engine.providers.__init__`
+time and from-imported the adapter out of the old `engine.discover` shim
+(dissolved in Stage 4); the adapter's plugin home was only reachable THROUGH that
+same partially-initialized package (an earlier load-time move was a proven hard
+import cycle).
 
 NAME NOTE: `.capture` and `.fill` are submodules whose names collide with the
 Provider callables `capture` / `fill`. At PACKAGE scope the callables win (the
@@ -32,10 +33,14 @@ Provider callables `capture` / `fill`. At PACKAGE scope the callables win (the
 package attribute).
 
 Kept LIGHT (matching the old module's import cost): importing this package loads
-NO patchright / `engine.browse`; the fill/capture bodies still reach
-`engine.fill`'s private helpers via CALL-TIME imports, and patchright loads
-lazily in the kernel only when a real capture runs. This package does NOT
-self-register with any registry yet (Stage 2e wires the new registry).
+NO patchright / `engine.browse`; the fill/capture bodies reach the kernel's
+private helpers (`kernel.resolve._completeness`,
+`kernel.fill_toolkit._locate_file_input`/`_upload_attached`) and the vendor
+`.capture` submodule via CALL-TIME imports, and patchright loads lazily in the
+kernel only when a real capture runs; the sole `engine.fill` reference is the
+module-scope dataclass re-export line. This package SELF-REGISTERS into
+`engine.providers._registry` at import (Stage 2e-1) -- that is how `PROVIDERS`
+populates.
 """
 
 # Eager-load the sibling submodule so the whole vendor namespace is populated

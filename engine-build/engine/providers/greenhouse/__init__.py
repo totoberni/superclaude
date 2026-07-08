@@ -29,9 +29,12 @@ reachable via `sys.modules` / `importlib.import_module`, which is exactly how th
 members (never via the package attribute).
 
 Kept LIGHT (matching the old module's import cost): importing this package loads
-NO patchright / `engine.browse`; the fill/capture bodies still reach
-`engine.fill`'s private helpers via CALL-TIME imports. This package does NOT
-self-register with any registry yet (Stage 2e wires the new registry).
+NO patchright / `engine.browse`; the fill body reaches the kernel's private
+helpers (`kernel.resolve._completeness`, the `kernel.fill_toolkit` upload
+primitives) and the capture body the `engine.fieldmap` seam via CALL-TIME
+imports -- this package has NO `engine.fill` import at any scope. It
+SELF-REGISTERS into `engine.providers._registry` at import (Stage 2e-1) -- that
+is how `PROVIDERS` populates.
 """
 
 # Eager-load the sibling submodules so the whole vendor namespace is populated

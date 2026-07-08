@@ -16,7 +16,7 @@ completeness SEMANTICS differ, for the two reasons Lever is a distinct reference
    `base.sweep_required(page)` at fill time is the authoritative required-field
    oracle. For greenhouse the sweep is a cross-check against an independent
    API schema (hole-fix d); for Lever the sweep IS the schema. The completeness
-   code is the same shared machinery (`fill._completeness` + `base.
+   code is the same shared machinery (`kernel.resolve._completeness` + `base.
    completeness_mismatch` + `_sweep_gaps`), but for Lever a `dom_only` gap is
    not "the schema missed a field" -- it is "the live form requires a field the
    capture-time DOM did not", the ground truth winning over the snapshot. Every
@@ -55,8 +55,8 @@ OVERRIDES greenhouse: the whole `fill()` field-driving body (native path, no
 react-select, checkbox/radio human hand-off) and the DOM-sweep-as-PRIMARY
 completeness SEMANTICS above. Everything else -- the structural never-send
 (`base.install_never_send`), the upload primitives (`base._safe_upload` /
-`fill._locate_file_input` / `fill._upload_attached`), the DOM sweep
-(`base.sweep_required`), the completeness arithmetic (`fill._completeness`) and
+`kernel.fill_toolkit._locate_file_input` / `kernel.fill_toolkit._upload_attached`), the DOM sweep
+(`base.sweep_required`), the completeness arithmetic (`kernel.resolve._completeness`) and
 the `FillReport` dataclass -- is the SAME shared base/fill spine both providers
 stand on (never a reimplementation).
 
@@ -210,7 +210,7 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     # required` here is the capture-time DOM snapshot (Lever has no independent
     # schema); `dom_required` is the LIVE sweep, which wins. Any mismatch forces
     # NOT_COMPLETE via _sweep_gaps, and a checkbox/radio handed off above (or any
-    # field whose readback did not confirm) surfaces through fill._completeness.
+    # field whose readback did not confirm) surfaces through kernel.resolve._completeness.
     from engine.kernel.resolve import _completeness
 
     schema_required = {f.label for f in fieldmap.required_fields()}
@@ -329,7 +329,7 @@ def _fill_upload(page, fv, uploads: list[dict],
                  extra_skips: list[tuple[str, str]],
                  filled_keys: set[str]) -> None:
     """Attach a whitelisted asset via the reused `base._safe_upload` /
-    `fill._locate_file_input` primitives (the real `<input type=file>`; the
+    `kernel.fill_toolkit._locate_file_input` primitives (the real `<input type=file>`; the
     fieldmap's role=button hint never reaches it). Counts as filled ONLY once
     the input's own readback confirms a file attached, mirroring greenhouse's
     upload path exactly (the SAME base/fill primitives, not a reimplementation)."""

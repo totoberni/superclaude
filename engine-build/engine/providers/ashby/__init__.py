@@ -38,10 +38,14 @@ commits but the driver does" proof), so it is re-exported here to keep that seam
 resolving at package scope. It is NOT in `__all__` (the Provider surface only).
 
 Kept LIGHT (matching the old module's import cost): importing this package loads
-NO patchright / `engine.browse`; the fill/capture bodies still reach
-`engine.fill`'s private helpers via CALL-TIME imports, and patchright loads
-lazily in the kernel only when a real capture runs. This package does NOT
-self-register with any registry yet (Stage 2e wires the new registry).
+NO patchright / `engine.browse`; the fill/capture bodies reach the kernel's
+private helpers (`kernel.resolve._completeness`,
+`kernel.fill_toolkit._locate_file_input`/`_upload_attached`) and the vendor
+`.capture` submodule via CALL-TIME imports, and patchright loads lazily in the
+kernel only when a real capture runs; the sole `engine.fill` reference is the
+module-scope dataclass re-export line. This package SELF-REGISTERS into
+`engine.providers._registry` at import (Stage 2e-1) -- that is how `PROVIDERS`
+populates.
 """
 
 # Eager-load the sibling submodule so the whole vendor namespace is populated
