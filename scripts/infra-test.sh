@@ -373,12 +373,14 @@ test_agents() {
 
   # A7: wf-skills fleet contract (W1.7). Each w-*.md must carry EXACTLY ONE
   # "## Report Contract (wf-skills)" section; the Skill tool must be on the tools
-  # line of the 9 reasoning workers and ABSENT from w-committer and w-explorer
-  # (read-only / low-reasoning classes must not gain Skill). Real failing paths:
+  # line of the 10 reasoning workers (incl. w-hostile-reviewer, m4) and ABSENT from
+  # w-committer and w-explorer (read-only / low-reasoning classes must not gain Skill).
+  # A8 separately guards w-hostile-reviewer's disallowedTools (not duplicated here).
+  # Real failing paths:
   # a dropped/duplicated contract section, a missing Skill grant on a reasoning
   # worker, or Skill leaking onto a read-only class.
   local FLEET_OK=true W_COUNT=0 wf wname wcc wtl
-  local REASONING=" w-reviewer w-design-reviewer w-doc w-implementer w-debugger w-tester w-merger w-refactorer w-planner "
+  local REASONING=" w-reviewer w-design-reviewer w-doc w-implementer w-debugger w-tester w-merger w-refactorer w-planner w-hostile-reviewer "
   local NOSKILL=" w-committer w-explorer "
   for wf in "$AGENT_DIR"/w-*.md; do
     [ -f "$wf" ] || continue
@@ -404,7 +406,7 @@ test_agents() {
     FLEET_OK=false
     fail "A7 fleet contract" "expected >= 11 w-*.md agents, found $W_COUNT"
   fi
-  [ "$FLEET_OK" = true ] && pass "A7 wf-skills fleet ($W_COUNT workers: 1 report-contract each; Skill on 9 reasoning, absent from w-committer/w-explorer)"
+  [ "$FLEET_OK" = true ] && pass "A7 wf-skills fleet ($W_COUNT workers: 1 report-contract each; Skill on 10 reasoning, absent from w-committer/w-explorer)"
 
   # A8: read-only class write-lock (W0.8). The tools: allowlist alone does
   # not reliably exclude Write/Edit (w-hostile-reviewer showed Write+Edit
@@ -576,11 +578,14 @@ test_skills() {
   done
   [ "$SHARED_OK" = true ] && pass "S6 _shared integrity (8 required blocks present; all _shared/*.md Consumed-by present, dash-clean)"
 
-  # S7: wf-skills new loop-driver skills (W1.4/W1.5). converge + review-dispatch must
-  # exist with frontmatter carrying name/description/user-invocable, must NOT carry a
-  # disable-model-invocation key (DEC-R3 flip), and must be em/en-dash clean. Real
-  # failing paths: a missing skill, a dropped required key, a re-added flip key, a dash.
-  local NEW_SKILLS="converge review-dispatch"
+  # S7: wf-skills new loop-driver skills (W1.4/W1.5) + hostile-review (M1). converge +
+  # review-dispatch + hostile-review must exist with frontmatter carrying name/
+  # description/user-invocable, must NOT carry a disable-model-invocation key (DEC-R3
+  # flip), and must be em/en-dash clean. hostile-review is the adversarial reviewer the
+  # convergence engine dispatches, so its frontmatter contract is guarded here alongside
+  # the loop drivers. Real failing paths: a missing skill, a dropped required key, a
+  # re-added flip key, a dash.
+  local NEW_SKILLS="converge review-dispatch hostile-review"
   local NEWSK_OK=true ns nsf nsfm
   for ns in $NEW_SKILLS; do
     nsf="$SKILL_DIR/$ns/SKILL.md"
@@ -599,7 +604,7 @@ test_skills() {
       fail "S7 new skills" "$ns: contains em-dash/en-dash byte"
     fi
   done
-  [ "$NEWSK_OK" = true ] && pass "S7 new skills (converge + review-dispatch: name/description/user-invocable, no flip key, dash-clean)"
+  [ "$NEWSK_OK" = true ] && pass "S7 new skills (converge + review-dispatch + hostile-review: name/description/user-invocable, no flip key, dash-clean)"
 
   # S8: wf-skills DEC-R3 flip invariant (W3.5). The 2026-07-07 flip deleted
   # disable-model-invocation: true from all skills so every skill is model-
@@ -661,8 +666,20 @@ test_skills() {
     echo "$sksfm" | grep -qE '^disable-model-invocation:'  && { SCHED_OK=false; fail "S10 schedule skills" "$sks: disable-model-invocation must be absent (DEC-R3)"; }
     skshc=$(grep -c '^## ' "$sksf" 2>/dev/null)
     [ "$skshc" -eq 6 ] || { SCHED_OK=false; fail "S10 schedule skills" "$sks: R-1 template needs exactly 6 '## ' headers, found $skshc"; }
+    # m2: goal-block TEXT, not just the 6-header count. The 4 goal-bearing drivers each
+    # emit a '/goal ' directive carrying the delta-7 no-pre-approval clause; wf-hygiene
+    # is the deliberate exception (B4) and emits NO '/goal ' directive.
+    case "$sks" in
+      wf-hygiene)
+        grep -qE '^/goal ' "$sksf" && { SCHED_OK=false; fail "S10 schedule skills" "$sks: must NOT emit a /goal directive (B4 exception)"; }
+        ;;
+      *)
+        grep -qE '^/goal ' "$sksf"              || { SCHED_OK=false; fail "S10 schedule skills" "$sks: missing emitted '/goal ' directive line"; }
+        grep -qE 'post-date|MOST RECENT' "$sksf" || { SCHED_OK=false; fail "S10 schedule skills" "$sks: goal block missing delta-7 clause (post-date/MOST RECENT)"; }
+        ;;
+    esac
   done
-  [ "$SCHED_OK" = true ] && pass "S10 schedule skills (5 wf-* drivers: Use-when desc, category workflow, user-invocable, no flip key, 6-section R-1 template)"
+  [ "$SCHED_OK" = true ] && pass "S10 schedule skills (5 wf-* drivers: Use-when desc, category workflow, user-invocable, no flip key, 6-section R-1 template, goal-block text: 4 emit /goal + delta-7, wf-hygiene none)"
 
   # S11: wf-skills family invariants (Wave-3). EVERY skill named wf-* (the 3 flagship
   # drivers wf-design/wf-report/wf-websearch PLUS the 5 schedule drivers) must carry
@@ -730,6 +747,57 @@ test_skills() {
     [ "$rvs_all" -eq "$rvs_neg" ] || { SEAL_OK=false; fail "S13 no-self-seal" "$rvs: unnegated 'seals itself' (total=$rvs_all negated=$rvs_neg)"; }
   done
   [ "$SEAL_OK" = true ] && pass "S13 no-self-seal (review/design-review/sanity-check: 'never seals itself' present, no positive self-seal construction)"
+
+  # S14: two-token grammar CONTENT in the SOT (B1). verdict-schema.md is the SOT the
+  # whole convergence engine binds to; presence alone is not enough, the canonical token
+  # grammar must be intact. Assert the VERDICT grammar line, the SEAL grammar line, the
+  # '## Canonical emitted /goal block' heading, and a '/goal Accept only when' directive
+  # line all survive. Real failing path: deleting the grammar from verdict-schema.md
+  # (even keeping the Consumed-by line) fails this.
+  local VSCHEMA="$SKILL_DIR/_shared/verdict-schema.md"
+  local VS_OK=true
+  if [ ! -f "$VSCHEMA" ]; then
+    VS_OK=false; fail "S14 token grammar" "verdict-schema.md: missing"
+  else
+    grep -qE 'VERDICT:.*REWORK.*CLEAN.*blocking=.*major=.*minor=.*round=' "$VSCHEMA" || { VS_OK=false; fail "S14 token grammar" "VERDICT grammar line absent"; }
+    grep -qE 'SEAL:.*ACCEPTED.*REJECTED.*blocking=.*major=.*minor=.*nits=' "$VSCHEMA"  || { VS_OK=false; fail "S14 token grammar" "SEAL grammar line absent"; }
+    grep -qE '^## Canonical emitted /goal block' "$VSCHEMA"                            || { VS_OK=false; fail "S14 token grammar" "'## Canonical emitted /goal block' heading absent"; }
+    grep -qE '^/goal Accept only when' "$VSCHEMA"                                       || { VS_OK=false; fail "S14 token grammar" "'/goal Accept only when' directive line absent"; }
+  fi
+  [ "$VS_OK" = true ] && pass "S14 token grammar (verdict-schema.md: VERDICT + SEAL grammar, Canonical /goal block heading + '/goal Accept only when' line)"
+
+  # S15: every skill description is a guarded 'Use when' one-liner (m1). Convention: each
+  # skills/*/SKILL.md frontmatter description starts with "Use when" and is <= 80 chars.
+  # Read off disk via glob (like S8) so gitignored skills (nudge, notebook) are covered.
+  # Real failing path: a description missing the prefix or over 80 chars.
+  local DESC_OK=true dsk dskname dskdesc dsklen
+  for dsk in "$SKILL_DIR"/*/SKILL.md; do
+    [ -f "$dsk" ] || continue
+    dskname=$(basename "$(dirname "$dsk")")
+    dskdesc=$(sed -n '2,/^---$/p' "$dsk" 2>/dev/null | grep -m1 '^description:' | sed 's/^description:[[:space:]]*//' | sed 's/^"//; s/"[[:space:]]*$//')
+    case "$dskdesc" in
+      "Use when"*) ;;
+      *) DESC_OK=false; fail "S15 use-when descriptions" "$dskname: description does not start with 'Use when'" ;;
+    esac
+    dsklen=${#dskdesc}
+    [ "$dsklen" -le 80 ] || { DESC_OK=false; fail "S15 use-when descriptions" "$dskname: description $dsklen chars (> 80)"; }
+  done
+  [ "$DESC_OK" = true ] && pass "S15 use-when descriptions (every skills/*/SKILL.md description starts 'Use when', <= 80 chars)"
+
+  # S16: consumer-side schema binding (M2). The two engine consumers converge and
+  # review-dispatch must each cite the verdict-schema SOT by name, so the token grammar
+  # they drive stays pinned to S14's SOT. Real failing path: a consumer that stops
+  # referencing verdict-schema.
+  local CONSUMERS="converge review-dispatch"
+  local CONS_OK=true cns cnsf
+  for cns in $CONSUMERS; do
+    cnsf="$SKILL_DIR/$cns/SKILL.md"
+    if [ ! -f "$cnsf" ]; then
+      CONS_OK=false; fail "S16 schema binding" "$cns/SKILL.md: missing"; continue
+    fi
+    grep -q 'verdict-schema' "$cnsf" || { CONS_OK=false; fail "S16 schema binding" "$cns: no reference to verdict-schema SOT"; }
+  done
+  [ "$CONS_OK" = true ] && pass "S16 schema binding (converge + review-dispatch each cite the verdict-schema SOT)"
 }
 
 # ═══════════════════════════════════════════════════
@@ -1228,6 +1296,50 @@ test_wfscripts() {
     pass "WF4 broker-queries.sh (SQLi-shaped args rejected pre-SQL, exit 2)"
   else
     fail "WF4 broker-queries.sh" "latest-rpt exit $WF4_RPT_RC, volume exit $WF4_VOL_RC (expected 2, 2)"
+  fi
+
+  # WF5: hcom-send.sh CONSTRUCTS the broker send command correctly (M3). Hermetic,
+  # mirrors WF2/WF4's stub-HOME + stub .broker.db pattern. A stub HOME supplies a fake
+  # venv python that RECORDS the argv it is handed (no shebang, so bash's ENOEXEC
+  # fallback runs it as a shell script) and never touches any DB. hcom-send.sh executed
+  # directly must forward a well-formed 'send --from ... --to ... --kind ... --seq ...
+  # --body ...' argv, exit 0, and leave the stub broker.db byte-empty. The production
+  # ~/.claude/comms/.broker.db is NEVER reachable (HOME is stubbed). Genuinely fails if a
+  # regression drops --seq (the conditional expansion) or reshapes the argv; it is not a
+  # mere any-nonzero probe.
+  local WF5_HOME="$WF_TMP/hs"
+  mkdir -p "$WF5_HOME/.claude/.venv/bin" "$WF5_HOME/.claude/scripts" "$WF5_HOME/.claude/comms"
+  : > "$WF5_HOME/.claude/comms/.broker.db"
+  printf 'printf "%%s\\n" "$*" >> "$HOME/pyargs.txt"\nexit 0\n' > "$WF5_HOME/.claude/.venv/bin/python"
+  chmod +x "$WF5_HOME/.claude/.venv/bin/python"
+  : > "$WF5_HOME/.claude/scripts/hcom-broker.py"
+  HOME="$WF5_HOME" bash "$SCRIPT_DIR/comms/hcom-send.sh" infratest-from @infratest-to RPT 99 "hermetic body" >/dev/null 2>&1
+  local WF5_RC=$?
+  local WF5_ARGS WF5_BROKER_SIZE
+  WF5_ARGS=$(cat "$WF5_HOME/pyargs.txt" 2>/dev/null)
+  WF5_BROKER_SIZE=$(wc -c < "$WF5_HOME/.claude/comms/.broker.db" 2>/dev/null | tr -d ' ')
+  if [ "$WF5_RC" -eq 0 ] \
+     && echo "$WF5_ARGS" | grep -q 'send --from infratest-from --to @infratest-to --kind RPT --seq 99 --body' \
+     && [ "$WF5_BROKER_SIZE" = "0" ]; then
+    pass "WF5 hcom-send.sh (constructs send argv with --from/--to/--kind/--seq/--body; stub broker untouched)"
+  else
+    fail "WF5 hcom-send.sh" "rc=$WF5_RC broker_size=$WF5_BROKER_SIZE args=[$WF5_ARGS]"
+  fi
+
+  # WF6: recover-worker.sh guard paths (m3). Hermetic arg-validation: no args must exit
+  # nonzero and print usage; a task-mode missing file must exit nonzero. Exercises the
+  # main() dispatch guard and the mode_task file-existence guard without needing a real
+  # transcript. Real failing path: a regression dropping the usage/exit-1 guard.
+  local WF6_NOARGS_RC WF6_USAGE WF6_MISS_RC
+  bash "$SCRIPT_DIR/swarm/recover-worker.sh" >/dev/null 2>&1
+  WF6_NOARGS_RC=$?
+  WF6_USAGE=$(bash "$SCRIPT_DIR/swarm/recover-worker.sh" 2>&1 | grep -c 'usage')
+  bash "$SCRIPT_DIR/swarm/recover-worker.sh" task "$WF_TMP/does-not-exist-$$" >/dev/null 2>&1
+  WF6_MISS_RC=$?
+  if [ "$WF6_NOARGS_RC" -ne 0 ] && [ "$WF6_USAGE" -ge 1 ] && [ "$WF6_MISS_RC" -ne 0 ]; then
+    pass "WF6 recover-worker.sh (no-args exits nonzero + usage; task-mode missing file exits nonzero)"
+  else
+    fail "WF6 recover-worker.sh" "noargs_rc=$WF6_NOARGS_RC usage=$WF6_USAGE missing_rc=$WF6_MISS_RC"
   fi
 
   rm -rf "$WF_TMP" 2>/dev/null
