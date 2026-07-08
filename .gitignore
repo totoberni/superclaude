@@ -132,9 +132,9 @@ daemon/
 daemon.lock
 daemon.log
 daemon.status.json
-# Job-queue + notebook operational state (project-specific; notebook/ holds private project scaffolds)
+# Job-queue + notebook operational state (project-specific; /notebook/ holds private project scaffolds)
 jobs/
-notebook/
+/notebook/
 # One-shot update result + comms runtime logs (top-level; comms/*/ only covers subdirs)
 .last-update-result.json
 comms/_*.log
