@@ -3,7 +3,7 @@ import time
 
 import yaml
 
-from engine.discover import Posting
+from engine.kernel.discover_base import Posting
 from engine.match import ScoreBreakdown
 from engine.queue_sm import QueueStateMachine
 from engine.questionnaire import Questionnaire

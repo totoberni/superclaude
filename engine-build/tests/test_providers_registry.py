@@ -21,12 +21,10 @@ from types import SimpleNamespace
 import pytest
 
 from engine import fetch, fill, run
-from engine.discover import (
-    AshbyAdapter,
-    GreenhouseAdapter,
-    LeverAdapter,
-    WorkableAdapter,
-)
+from engine.providers.ashby.discover import AshbyAdapter
+from engine.providers.greenhouse.discover import GreenhouseAdapter
+from engine.providers.lever.discover import LeverAdapter
+from engine.providers.workable.discover import WorkableAdapter
 from engine.fetch import Source
 from engine.providers import _registry, ashby, greenhouse, lever
 from engine.providers.ashby.discover import ashby_endpoint

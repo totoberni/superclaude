@@ -11,7 +11,7 @@ import re
 
 import urllib.error
 
-from engine.discover import GreenhouseAdapter
+from engine.providers.greenhouse.discover import GreenhouseAdapter
 from engine.draft import DraftResult
 from engine.fetch import HttpFetcher, Source
 from engine.match import Scorer

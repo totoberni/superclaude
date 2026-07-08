@@ -1,6 +1,8 @@
 import pytest
 
-from engine.discover import GreenhouseAdapter, LeverAdapter, Posting
+from engine.kernel.discover_base import Posting
+from engine.providers.greenhouse.discover import GreenhouseAdapter
+from engine.providers.lever.discover import LeverAdapter
 from engine.match import (
     Scorer,
     TokenOverlapSimilarity,

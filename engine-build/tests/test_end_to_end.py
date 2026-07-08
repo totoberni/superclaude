@@ -10,12 +10,10 @@ import socket
 
 import pytest
 
-from engine.discover import (
-    AshbyAdapter,
-    GreenhouseAdapter,
-    LeverAdapter,
-    run_discovery,
-)
+from engine.providers.ashby.discover import AshbyAdapter
+from engine.providers.greenhouse.discover import GreenhouseAdapter
+from engine.providers.lever.discover import LeverAdapter
+from engine.run import run_discovery
 from engine.match import Scorer, profile_from_ssot
 from engine.notify import FakeTransport, publish_digest
 from engine.queue_sm import QueueStateMachine

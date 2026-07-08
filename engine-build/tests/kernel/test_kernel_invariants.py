@@ -200,7 +200,6 @@ _FORBIDDEN_PREFIXES = (
     "engine.fetch",
     "engine.match",
     "engine.draft",
-    "engine.discover",
     "engine.fill",
     "engine.fieldmap",
     "engine.browse",
@@ -423,7 +422,6 @@ def test_shim_paths_are_identity_reexports():
     import engine.kernel.contracts
     import engine.fill
     import engine.kernel.fill_toolkit
-    import engine.discover
     import engine.providers.base
     import engine.kernel.never_send
     import engine.browse
@@ -434,7 +432,6 @@ def test_shim_paths_are_identity_reexports():
     assert engine.providers.protocol.Provider is engine.kernel.protocol.Provider
     assert engine.fieldmap.FieldMap is engine.kernel.contracts.FieldMap
     assert engine.fill.FillReport is engine.kernel.contracts.FillReport
-    assert engine.discover.Posting is engine.kernel.contracts.Posting
     assert (engine.providers.base.install_never_send
             is engine.kernel.never_send.install_never_send)
     assert engine.providers.base.type_human is engine.kernel.fill_toolkit.type_human

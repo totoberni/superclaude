@@ -55,7 +55,7 @@ def test_importing_registry_loads_no_browser_module():
     "import engine.providers._registry",
     "import engine.providers.greenhouse",
     "import engine.providers.lever",
-    "import engine.discover",
+    "import engine.run",
     "import engine.fetch",
 ])
 def test_registry_fully_populated_regardless_of_first_import(first_import):

@@ -59,10 +59,10 @@ from typing import Any
 from engine.fieldmap import FieldMap
 # Dataclasses come straight from their canonical kernel home rather than via
 # `engine.fill`: this package's `__init__` is reachable through the lazy
-# `engine.fieldmap` / `engine.discover` re-export shims while `engine.fill` is
-# still mid-import, so a top-level `from engine.fill import ...` here would
-# re-enter a half-initialised `engine.fill` and raise. `engine.fill` is still
-# imported LAZILY inside the functions that need its private helpers.
+# `engine.fieldmap` re-export shim while `engine.fill` is still mid-import, so
+# a top-level `from engine.fill import ...` here would re-enter a
+# half-initialised `engine.fill` and raise. `engine.fill` is still imported
+# LAZILY inside the functions that need its private helpers.
 from engine.kernel.contracts import (
     FillAssets, FillReport, FillSafetyError, ResolvedValues)
 # Generic form-driving primitives the moved react-select / upload-poll widget

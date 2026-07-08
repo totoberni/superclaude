@@ -35,10 +35,10 @@ from engine.artifacts import (
     write_txt_fallback,
 )
 from engine.config import Config, load_config
-from engine.discover import run_discovery
 from engine.draft import ClaudeCliDrafter, Drafter, select_language
 from engine.fetch import HttpFetcher, Source, adapter_for, fetch_all, load_sources
 from engine.kernel.contracts import FieldMap
+from engine.kernel.discover_base import Posting, SourceAdapter
 from engine.kernel.resolve import ANSWERABLE, MANUAL_ONLY, MISSING_STATUS, coverage
 from engine.match import Scorer
 from engine.notify import (
@@ -52,6 +52,7 @@ from engine.profile_map import profile_from_real_ssot
 from engine.providers import _registry
 from engine.queue_sm import QueueStateMachine
 from engine.ssot import MISSING, SSOT
+from engine.store import Store
 
 _HEADER_SUBTITLE = "Computational Scientist"
 
@@ -162,6 +163,22 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
     }
     _append_run_record(runs_path or _DEFAULT_RUNS_PATH, record)
     return record
+
+
+def run_discovery(sources: list[tuple[SourceAdapter, object, str]],
+                 store: Store) -> list[Posting]:
+    """Parse every source, enforce liveness, drop already-known items.
+
+    `sources` is a list of (adapter, raw_json, company_slug). Returns only the
+    net-new live postings; carryover lives in the queue, not here (7.5).
+    """
+    postings: list[Posting] = []
+    for adapter, raw, slug in sources:
+        for posting in adapter.parse(raw, slug):
+            posting.unverified = not adapter.is_authoritative
+            postings.append(posting)
+    live = [p for p in postings if p.listed]
+    return [p for p in live if not store.is_known(p.identity_key())]
 
 
 def _close_board_absent(store, discovery) -> list[str]:

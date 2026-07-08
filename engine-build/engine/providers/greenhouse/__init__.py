@@ -11,21 +11,22 @@ their canonical dotted path, e.g. `engine.providers.greenhouse.capture`):
   - `.fill`     -- fill() orchestration + the react-select / upload widget cluster
   - `.capture`  -- schema capture/parse (moved out of `engine.fieldmap`)
   - `.resolve`  -- portal-widget coverage resolver (moved out of `engine.fieldmap`)
-  - `.discover` -- lands in Stage 2e: the board-JSON adapter move is sequenced
-                   WITH the eager-light `_registry.py`, because the CURRENT
-                   `registry.py` loads at `engine.providers.__init__` time and
-                   from-imports the adapter out of `engine.discover`; the
-                   adapter's plugin home is only reachable THROUGH that same
-                   partially-initialized package (a load-time move here is a
-                   proven hard import cycle).
+  - `.discover` -- landed in Stage 2e: the board-JSON adapter move was
+                   sequenced WITH the eager-light `_registry.py`, because the
+                   then-live `registry.py` (deleted in Stage 3c) loaded at
+                   `engine.providers.__init__` time and from-imported the
+                   adapter out of the old `engine.discover` shim (dissolved in
+                   Stage 4); the adapter's plugin home was only reachable
+                   THROUGH that same partially-initialized package (an earlier
+                   load-time move was a proven hard import cycle).
 
 NAME NOTE: `.capture` and `.fill` are submodules whose names collide with the
 Provider callables `capture` / `fill`. At PACKAGE scope the callables win (the
 `.fill` re-exports below run last), matching the old module where
 `greenhouse.capture` / `greenhouse.fill` were the functions. The submodules stay
 reachable via `sys.modules` / `importlib.import_module`, which is exactly how the
-`engine.fieldmap` / `engine.providers.base` / `engine.discover` re-export shims
-reach their moved members (never via the package attribute).
+`engine.fieldmap` / `engine.providers.base` re-export shims reach their moved
+members (never via the package attribute).
 
 Kept LIGHT (matching the old module's import cost): importing this package loads
 NO patchright / `engine.browse`; the fill/capture bodies still reach

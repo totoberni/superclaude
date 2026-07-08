@@ -1,10 +1,8 @@
-from engine.discover import (
-    AshbyAdapter,
-    GreenhouseAdapter,
-    LeverAdapter,
-    WorkableAdapter,
-    run_discovery,
-)
+from engine.providers.ashby.discover import AshbyAdapter
+from engine.providers.greenhouse.discover import GreenhouseAdapter
+from engine.providers.lever.discover import LeverAdapter
+from engine.providers.workable.discover import WorkableAdapter
+from engine.run import run_discovery
 
 
 def test_greenhouse_adapter_parses_and_unescapes(greenhouse_raw):

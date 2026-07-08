@@ -14,12 +14,12 @@ canonical dotted path, `engine.providers.workable.capture`):
 Workable has NO `.resolve` submodule: `.fill.resolve_values` delegates to the
 kernel's `engine.kernel.resolve.resolve_values`, which carries the hole-fix e
 structural CV/photo choice (a load-bearing safety rule single-sourced in the
-kernel), so no vendor duplicates it. The `.discover` adapter move lands in Stage 2e WITH the
-eager-light `_registry.py`, because the CURRENT `registry.py` loads at
-`engine.providers.__init__` time and from-imports the adapter out of
-`engine.discover`; the adapter's plugin home is only reachable THROUGH that same
-partially-initialized package (a load-time move here is a proven hard import
-cycle).
+kernel), so no vendor duplicates it. The `.discover` adapter move landed in Stage 2e WITH the
+eager-light `_registry.py`, because the then-live `registry.py` (deleted in
+Stage 3c) loaded at `engine.providers.__init__` time and from-imported the
+adapter out of the old `engine.discover` shim (dissolved in Stage 4); the
+adapter's plugin home was only reachable THROUGH that same partially-initialized
+package (an earlier load-time move was a proven hard import cycle).
 
 NAME NOTE: `.capture` and `.fill` are submodules whose names collide with the
 Provider callables `capture` / `fill`. At PACKAGE scope the callables win (the

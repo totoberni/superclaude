@@ -1,7 +1,7 @@
 import pytest
 
 from engine.config import Config
-from engine.discover import Posting
+from engine.kernel.discover_base import Posting
 from engine.match import ScoreBreakdown
 from engine.queue_sm import InvalidTransition, QueueStateMachine
 
