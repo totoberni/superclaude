@@ -1346,6 +1346,65 @@ test_wfscripts() {
 }
 
 # ═══════════════════════════════════════════════════
+# CA: converge-auto Driver Tests
+# ═══════════════════════════════════════════════════
+# The supervised-autonomous convergence driver (scripts/swarm/converge_auto.py) plus its
+# deterministic regression suite (scripts/test-converge-auto.sh). CA1 static checks; CA2
+# doc-code consistency (full enumeration, no head-limits); CA3 delegates to the suite in
+# default (non-mutation) mode and gates on its exit code. READ-ONLY: the suite runs its own
+# fixtures under mktemp and never modifies the driver (it asserts the driver sha256 unchanged
+# end to end), so this component adds no write side effects to the infrastructure.
+test_converge_auto() {
+  section "converge-auto Driver Tests (CA)"
+
+  local DRIVER="$SCRIPT_DIR/swarm/converge_auto.py"
+  local SUITE="$SCRIPT_DIR/test-converge-auto.sh"
+  local WFAUTO="$SKILL_DIR/wf-auto/SKILL.md"
+
+  # CA1: driver exists, executable, py_compile clean
+  local CA1_OK=true
+  if [ ! -f "$DRIVER" ]; then
+    CA1_OK=false; fail "CA1 driver static" "converge_auto.py missing"
+  else
+    [ -x "$DRIVER" ] || { CA1_OK=false; fail "CA1 driver static" "converge_auto.py not executable"; }
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -m py_compile "$DRIVER" 2>/dev/null || { CA1_OK=false; fail "CA1 driver static" "py_compile failed"; }
+    fi
+  fi
+  [ "$CA1_OK" = true ] && pass "CA1 driver static (exists, executable, py_compile clean)"
+
+  # CA2: doc-code consistency (scenario 22, full enumeration). wf-auto/SKILL.md must document
+  # the read-only guard flags (--no-session-persistence, --disallowedTools) AND the literal
+  # Write,Edit,NotebookEdit deny list; the driver's READ_ONLY_DENY constant must carry the
+  # same literal list, binding doc and code so neither drifts alone.
+  local CA2_OK=true
+  if [ ! -f "$WFAUTO" ]; then
+    CA2_OK=false; fail "CA2 doc-code" "wf-auto/SKILL.md missing"
+  else
+    grep -qF -e '--no-session-persistence' "$WFAUTO" || { CA2_OK=false; fail "CA2 doc-code" "SKILL.md lacks --no-session-persistence"; }
+    grep -qF -e '--disallowedTools' "$WFAUTO"        || { CA2_OK=false; fail "CA2 doc-code" "SKILL.md lacks --disallowedTools"; }
+    grep -qF 'Write,Edit,NotebookEdit' "$WFAUTO"     || { CA2_OK=false; fail "CA2 doc-code" "SKILL.md lacks the literal Write,Edit,NotebookEdit deny list"; }
+  fi
+  if [ -f "$DRIVER" ]; then
+    grep -qF 'Write,Edit,NotebookEdit' "$DRIVER" || { CA2_OK=false; fail "CA2 doc-code" "driver READ_ONLY_DENY lacks Write,Edit,NotebookEdit"; }
+  fi
+  [ "$CA2_OK" = true ] && pass "CA2 doc-code consistency (SKILL.md guard flags + literal deny list; driver READ_ONLY_DENY matches)"
+
+  # CA3: run the deterministic regression suite (default mode, no --mutations) and gate on exit.
+  if [ ! -f "$SUITE" ]; then
+    fail "CA3 regression suite" "test-converge-auto.sh missing"
+  else
+    local CA3_OUT CA3_RC
+    CA3_OUT=$(bash "$SUITE" 2>&1); CA3_RC=$?
+    if [ "$CA3_RC" -eq 0 ]; then
+      pass "CA3 regression suite ($(echo "$CA3_OUT" | grep -oE '[0-9]+ passed' | head -1))"
+    else
+      fail "CA3 regression suite" "exit $CA3_RC: $(echo "$CA3_OUT" | grep -E 'FAIL:' | head -3 | tr '\n' ' ')"
+    fi
+  fi
+}
+
+# ═══════════════════════════════════════════════════
 # Run selected tests
 # ═══════════════════════════════════════════════════
 
@@ -1365,9 +1424,10 @@ elif [ -n "$COMPONENT" ]; then
     matrix|memory|M)    test_matrix ;;
     skm|SK)             test_skm ;;
     wfscripts|wf|WF)    test_wfscripts ;;
+    converge-auto|CA)   test_converge_auto ;;
     *)
       echo "Unknown component: $COMPONENT"
-      echo "Valid: hooks, settings, agents, skills, rules, comms, matrix, skm, wfscripts"
+      echo "Valid: hooks, settings, agents, skills, rules, comms, matrix, skm, wfscripts, converge-auto"
       exit 2
       ;;
   esac
@@ -1382,6 +1442,7 @@ else
   test_matrix
   test_skm
   test_wfscripts
+  test_converge_auto
 fi
 
 END_TIME=$(date +%s)
