@@ -22,11 +22,14 @@ not by convention:
   - No silent retry (guard 6): budget breach, timeout, FAILED, second PARTIAL,
     malformed-twice, or a non-decreasing findings trend all ESCALATE and stop.
 
-The revision a SEAL binds to is a content manifest (sha256 over the sorted
-per-file byte hashes of artifact_paths), NOT a commit hash: mid-loop trees are
-uncommitted by design, and a content manifest detects ANY edit including
-uncommitted ones, which is stricter than a commit hash and works for non-git
-artifacts.
+The revision a SEAL binds to depends on mode. In a git repo the driver commits
+the artifact scope (a pre-seal snapshot commit) and binds the seal to that real
+commit hash (git rev-parse HEAD), quoted as commit:<12hex>; guard 3 re-verifies
+HEAD unchanged AND the scope clean after the seal returns. For non-git artifacts
+the binding is a content manifest (sha256 over the sorted per-file byte hashes of
+artifact_paths), quoted as sha256:<12hex>, detecting any edit including
+uncommitted ones. The content manifest is also the cheapest detector for the
+produce-to-review window and is retained for that check in both modes.
 
 Runs under ~/.claude/.venv/bin/python and system python3 alike (stdlib only).
 Design SOT: ~/.claude/plans/wf-autonomy/checkpoints/w1-design.md.
@@ -42,6 +45,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -51,6 +55,8 @@ from pathlib import Path
 
 DEFAULT_ALLOWED_TOOLS = ["Bash"]
 READ_ONLY_DENY = "Write,Edit,NotebookEdit"
+# Sentinel identifying our post-commit hook so --install-void-hook is idempotent.
+HOOK_MARKER = "converge-auto-seal-void-hook"
 PREFLIGHT_TIMEOUT_S = 30
 NOTIFY_TIMEOUT_S = 30
 GATE_TAIL_CHARS = 2000
@@ -112,16 +118,6 @@ def iso_now() -> str:
 
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def first_line(text: str) -> str:
-    stripped = text.lstrip()
-    return stripped.splitlines()[0] if stripped else ""
-
-
-def body_after_line1(text: str) -> str:
-    parts = text.lstrip().split("\n", 1)
-    return parts[1] if len(parts) > 1 else ""
 
 
 def counts_within_bar(bar: str, blocking: int, major: int, minor: int, nits: int) -> bool:
@@ -225,6 +221,41 @@ def validate_config(cfg: dict) -> dict:
     return cfg
 
 
+# Default no-commit project list; overridable per-run so tests stay hermetic.
+NO_COMMIT_LIST_DEFAULT = str(Path.home() / ".claude" / "hooks" / "no-commit-projects.local")
+
+
+def detect_no_commit_policy(cfg: dict) -> bool:
+    """Detect the per-project /commit false policy, mirroring the precedence in
+    hooks/modules/15-baseline-stash.sh EXACTLY (that hook is the pattern SOT; the
+    project list is READ from the same file, never duplicated here):
+
+      1. CLAUDE_COMMIT_POLICY=false env wins;
+      2. else the repo basename appears in the no-commit project list file
+         (~/.claude/hooks/no-commit-projects.local by default, override via the
+         CONVERGE_NO_COMMIT_FILE env var; blank and #comment lines ignored).
+
+    A non-git loop (repo=null) is already in content-manifest mode, so this only
+    decides the binding/diff mode for git repos.
+    """
+    if os.environ.get("CLAUDE_COMMIT_POLICY") == "false":
+        return True
+    repo = cfg.get("repo")
+    if not repo:
+        return False
+    list_path = Path(os.environ.get("CONVERGE_NO_COMMIT_FILE", NO_COMMIT_LIST_DEFAULT)).expanduser()
+    if not list_path.is_file():
+        return False
+    basename = Path(repo).expanduser().name
+    for raw in list_path.read_text(errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == basename:
+            return True
+    return False
+
+
 # --- The convergence loop ----------------------------------------------------
 
 
@@ -236,6 +267,11 @@ class Loop:
         self.rt = runtime_dir
         self.claude = claude_cmd
         self.cwd = Path(cfg["repo"]).expanduser() if cfg.get("repo") else runtime_dir
+        # /commit false composition: a git repo under no-commit policy behaves like
+        # the repo=null path (content-manifest binding, snapshot diffs, no commits,
+        # dirty-start refusal skipped). commit_mode gates every git-vs-manifest fork.
+        self.no_commit = detect_no_commit_policy(cfg)
+        self.commit_mode = bool(cfg.get("repo")) and not self.no_commit
         self.budget = str(cfg["phase_budget_usd"])
         self.timeout = cfg["phase_timeout_s"]
         self.open_findings = 0
@@ -266,9 +302,9 @@ class Loop:
     def archive_prompt(self, round_k: int, phase: str, prompt: str) -> None:
         (self.rt / "prompts" / f"round-{round_k}-{phase}.txt").write_text(prompt)
 
-    def append_ledger(self, round_k, phase, event, delta, token, findings, manifest12) -> None:
+    def append_ledger(self, round_k, phase, event, delta, token, findings, revision) -> None:
         tok = f"`{token}`" if token else "none"
-        man = f"sha256:{manifest12}" if manifest12 else "n/a"
+        man = revision if revision else "n/a"
         row = (
             f"## R{round_k}.{phase} - {iso_now()} - {event}\n"
             f"- delta: {delta}\n"
@@ -316,6 +352,24 @@ class Loop:
             self.escalate(round_k, f"{phase} {reason}")
         return parsed.get("result") or ""
 
+    def _unique_token(self, compiled, text, phase):
+        """Tolerant token extraction: find anchored full-line matches of a token
+        grammar ANYWHERE in the result (re.MULTILINE), not only on line 1.
+
+        Headless returns sometimes precede the token line with a narrative
+        preamble; strict line-1 parsing refused otherwise-perfect returns. So
+        EXACTLY ONE anchored match is accepted (a format warning is logged when it
+        is not the first line). Zero or more-than-one matches return (None, count)
+        so the caller takes its existing malformed path (retry once, then escalate).
+        """
+        matches = list(re.finditer(compiled.pattern, text, re.MULTILINE))
+        if len(matches) != 1:
+            return None, len(matches)
+        match = matches[0]
+        if text[:match.start()].strip():
+            self.log(f"{phase} token not on line 1 (accepted, unique match): {match.group(0)}")
+        return match, 1
+
     # -- command construction --
 
     def _phase_agent_overrides(self, phase: str):
@@ -352,8 +406,86 @@ class Loop:
             entries.append(f"{rel}:{digest}")
         return sha256_text("\n".join(sorted(entries)))
 
+    # -- revision binding (commit hash in git mode, content manifest otherwise) --
+
+    @staticmethod
+    def _rev_label(kind: str, full: str) -> str:
+        """Ledger/prompt label for a bound revision: commit:<12hex> or sha256:<12hex>."""
+        return f"{kind}:{full[:12]}"
+
+    def _git_run(self, *args) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(self.cwd), *args],
+                              capture_output=True, text=True, timeout=60)
+
+    def _git_head(self):
+        try:
+            proc = self._git_run("rev-parse", "HEAD")
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return proc.stdout.strip() if proc.returncode == 0 else None
+
+    def _git_scope_dirty(self):
+        """True/False if the artifact scope has uncommitted changes; None on git error."""
+        try:
+            proc = self._git_run("status", "--porcelain", "--", *self.cfg["artifact_paths"])
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if proc.returncode != 0:
+            return None
+        return bool(proc.stdout.strip())
+
+    def _pre_seal_commit(self, round_k: int) -> str:
+        """Commit the artifact scope as a pre-seal snapshot; return the full HEAD hash.
+
+        A clean scope (nothing to commit) is acceptable: HEAD already carries the
+        current state, so the seal reuses it. Any other git failure ESCALATES.
+        """
+        paths = self.cfg["artifact_paths"]
+        try:
+            add = self._git_run("add", "--", *paths)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.escalate(round_k, f"pre-seal git add failed: {exc}")
+        if add.returncode != 0:
+            self.escalate(round_k, f"pre-seal git add failed: {add.stderr.strip()}")
+        msg_path = self.rt / f"preseal-round-{round_k}.msg"
+        msg_path.write_text(
+            f"chore({self.cfg['loop_id']}): round {round_k} pre-seal snapshot\n\n"
+            "Co-Authored-By: Claude <noreply@anthropic.com>\n"
+        )
+        try:
+            commit = self._git_run("commit", "-F", str(msg_path))
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.escalate(round_k, f"pre-seal git commit failed: {exc}")
+        if commit.returncode != 0:
+            blob = (commit.stdout + commit.stderr).lower()
+            if "nothing to commit" not in blob and "no changes added" not in blob:
+                self.escalate(round_k, f"pre-seal git commit failed: {commit.stderr.strip()}")
+            self.log(f"pre-seal round {round_k}: nothing to commit, reusing current HEAD")
+        head = self._git_head()
+        if not head:
+            self.escalate(round_k, "pre-seal could not resolve HEAD after commit")
+        return head
+
+    def _establish_bound_revision(self, round_k: int):
+        """Return (full_revision, ledger_label) the seal binds to for this round."""
+        if self.commit_mode:
+            head = self._pre_seal_commit(round_k)
+            return head, self._rev_label("commit", head)
+        manifest = self.compute_manifest()
+        return manifest, self._rev_label("sha256", manifest)
+
+    def _revision_stable(self, bound_full: str) -> bool:
+        """Guard 3: has the bound revision held since it was established?
+
+        Git mode: HEAD unchanged AND the artifact scope clean. Non-git: the
+        content manifest recomputes identically.
+        """
+        if self.commit_mode:
+            return self._git_head() == bound_full and self._git_scope_dirty() is False
+        return self.compute_manifest() == bound_full
+
     def snapshot_round0(self) -> None:
-        if self.cfg.get("repo"):
+        if self.commit_mode:
             return
         snapdir = self.rt / "raw" / "snapshot-0"
         snapdir.mkdir(parents=True, exist_ok=True)
@@ -363,7 +495,7 @@ class Loop:
             (snapdir / rel.replace("/", "__").replace("\\", "__")).write_bytes(data)
 
     def capture_diff(self) -> str:
-        if self.cfg.get("repo"):
+        if self.commit_mode:
             cmd = ["git", "-C", str(self.cwd), "diff", "--"] + self.cfg["artifact_paths"]
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -401,18 +533,20 @@ class Loop:
         allow = ", ".join(self.cfg["allowed_tools"])
         return (
             f"# Objective\n{objective}\n\n"
-            f"# Output contract\nLine 1 of your final message MUST be exactly this shape "
-            f"(verdict-schema.md):\nSTATUS: DONE|PARTIAL|FAILED files=N checkpoint={checkpoint}\n"
-            f"Write your progress and findings to that checkpoint file BEFORE composing the "
-            f"final message. You are FORBIDDEN from writing a VERDICT or SEAL line; only "
-            f"reviewers author those.\n\n"
             f"# Tool guidance\nAllowed tools: {allow}. Make the minimal change set that "
             f"satisfies the objective; match existing patterns.\n\n"
             f"# Boundaries\nWrite ONLY these paths (the allowlist): "
-            f"{', '.join(self.cfg['artifact_paths'])}. Touch nothing else.\n\n"
+            f"{', '.join(self.cfg['artifact_paths'])}. Touch nothing else. NEVER run git add, "
+            f"git commit, or git push; version control belongs to the driver and the owner. "
+            f"You are FORBIDDEN from writing a VERDICT or SEAL line anywhere; only reviewers "
+            f"author those.\n\n"
             f"# Budget\nTool-call ceiling 20-40; a hard per-phase spend cap of ${self.budget} "
             f"is enforced by the harness. If you hit the ceiling, checkpoint and return "
-            f"STATUS: PARTIAL rather than overrunning."
+            f"STATUS: PARTIAL rather than overrunning.\n\n"
+            f"# Output contract (verdict-schema.md)\nWrite your progress and findings to the "
+            f"checkpoint file BEFORE composing the final message. Your final message MUST "
+            f"BEGIN with the token line, and the token line must appear EXACTLY ONCE in the "
+            f"whole message:\nSTATUS: DONE|PARTIAL|FAILED files=N checkpoint={checkpoint}"
         )
 
     def build_reviewer_prompt(self, round_k: int, diff: str) -> str:
@@ -422,30 +556,32 @@ class Loop:
             f"# Artifact paths\n{', '.join(self.cfg['artifact_paths'])}\n\n"
             f"# Cumulative diff\n{diff}\n\n"
             f"# Rubric\nRead and apply: {self.cfg['rubric_path']}\n\n"
-            f"# Output contract (verbatim, verdict-schema.md)\nLine 1 of your final message "
-            f"MUST be exactly:\nVERDICT: REWORK|CLEAN blocking=N major=N minor=N round={round_k}\n"
-            f"State round={round_k}. {EVIDENCE_BAR} {ANTI_HACKING}\n\n"
             f"# Boundaries\nRead-only: you may not edit any file. {NO_PRE_APPROVAL} "
-            f"Do NOT emit a SEAL line; a round reviewer emits VERDICT only.\n\n"
-            f"# Budget\nA per-phase spend cap of ${self.budget} is enforced by the harness."
+            f"Do NOT emit a SEAL line anywhere; a round reviewer emits VERDICT only.\n\n"
+            f"# Budget\nA per-phase spend cap of ${self.budget} is enforced by the harness.\n\n"
+            f"# Output contract (verbatim, verdict-schema.md)\n{EVIDENCE_BAR} {ANTI_HACKING} "
+            f"State round={round_k}. Your final message MUST BEGIN with the token line, and "
+            f"the token line must appear EXACTLY ONCE in the whole message:\n"
+            f"VERDICT: REWORK|CLEAN blocking=N major=N minor=N round={round_k}"
         )
 
-    def build_seal_prompt(self, diff: str, revision12: str) -> str:
+    def build_seal_prompt(self, diff: str, revision_label: str, revision12: str) -> str:
         return (
             f"# Objective\nFinal holistic acceptance audit of the COMPLETE current artifact "
-            f"at revision {revision12}. You are a fresh auditor; examine the full final "
+            f"at revision {revision_label}. You are a fresh auditor; examine the full final "
             f"state, not a delta.\n\n"
             f"# Complete current artifact\n{self._artifact_dump()}\n\n"
             f"# Cumulative diff\n{diff}\n\n"
             f"# Rubric\nRead and apply: {self.cfg['rubric_path']}\n\n"
-            f"# Output contract (verbatim, verdict-schema.md)\nLine 1 of your final message "
-            f"MUST be exactly:\nSEAL: ACCEPTED|REJECTED blocking=N major=N minor=N nits=N\n"
-            f"Seal bar ({self.cfg['bar']}): ACCEPT only at {BAR_TEXT[self.cfg['bar']]}.\n"
-            f"You examined revision {revision12}; you MUST repeat this exact revision string "
-            f"in your return. {EVIDENCE_BAR} {ANTI_HACKING}\n\n"
             f"# Boundaries\nRead-only: you may not edit any file. {NO_PRE_APPROVAL} "
-            f"Do NOT emit a VERDICT line; a seal auditor emits SEAL only.\n\n"
-            f"# Budget\nA per-phase spend cap of ${self.budget} is enforced by the harness."
+            f"Do NOT emit a VERDICT line anywhere; a seal auditor emits SEAL only.\n\n"
+            f"# Budget\nA per-phase spend cap of ${self.budget} is enforced by the harness.\n\n"
+            f"# Output contract (verbatim, verdict-schema.md)\nSeal bar ({self.cfg['bar']}): "
+            f"ACCEPT only at {BAR_TEXT[self.cfg['bar']]}. You examined revision {revision_label}; "
+            f"you MUST repeat the 12-hex revision identifier {revision12} verbatim in your "
+            f"return. {EVIDENCE_BAR} {ANTI_HACKING} Your final message MUST BEGIN with the "
+            f"token line, and the token line must appear EXACTLY ONCE in the whole message:\n"
+            f"SEAL: ACCEPTED|REJECTED blocking=N major=N minor=N nits=N"
         )
 
     # -- phases --
@@ -467,9 +603,9 @@ class Loop:
         return self._settle_producer_status(round_k, result, parsed.get("session_id"))
 
     def _settle_producer_status(self, round_k, result, session_id) -> str:
-        match = STATUS_RE.match(first_line(result))
+        match, count = self._unique_token(STATUS_RE, result, "produce")
         if not match:
-            self.escalate(round_k, "producer emitted no valid STATUS line")
+            self.escalate(round_k, f"producer STATUS lines found={count}, need exactly 1")
         word = match.group("word")
         self.produce_files = int(match.group("files"))
         if word == "FAILED":
@@ -477,7 +613,10 @@ class Loop:
         if word == "PARTIAL":
             self.resume_producer(round_k, session_id)
         self.state["producer_status_last"] = "DONE"
-        self.produce_delta = f"files={self.produce_files} via {self.cfg['producer_agent']}"
+        delta = f"files={self.produce_files} via {self.cfg['producer_agent']}"
+        if round_k == 1 and self.no_commit:
+            delta += " policy=/commit-false"
+        self.produce_delta = delta
         self.write_handoff()
         return "ok"
 
@@ -497,7 +636,7 @@ class Loop:
         result = self.cli_result_or_escalate(parsed, rc, timed_out, round_k, "produce-resume")
         if PRODUCER_TOKEN_RE.search(result):
             self.escalate(round_k, "producer authored VERDICT/SEAL on resume")
-        match = STATUS_RE.match(first_line(result))
+        match, count = self._unique_token(STATUS_RE, result, "produce-resume")
         if not match or match.group("word") != "DONE":
             self.escalate(round_k, "producer still not DONE after one resume")
         self.produce_files = int(match.group("files"))
@@ -529,88 +668,101 @@ class Loop:
         cmd = self.build_cmd(prompt, "review")
         parsed, rc, timed_out = self.run_cli(cmd, self.rt / "raw" / f"round-{round_k}-{tag}.json")
         result = self.cli_result_or_escalate(parsed, rc, timed_out, round_k, "review")
-        line = first_line(result)
-        match = VERDICT_RE.match(line)
-        if not match or int(match.group("round")) != round_k:
-            reason = "reviewer emitted SEAL" if SEAL_RE.match(line) else "malformed/round-mismatch VERDICT"
+        seal_leak = re.search(SEAL_RE.pattern, result, re.MULTILINE) is not None
+        match, count = self._unique_token(VERDICT_RE, result, "review")
+        if seal_leak or not match or int(match.group("round")) != round_k:
+            if seal_leak:
+                reason = "reviewer emitted SEAL"
+            elif not match:
+                reason = f"malformed VERDICT (found {count}, need exactly 1)"
+            else:
+                reason = "round-mismatch VERDICT"
             if attempt == 1:
                 self.log(f"review {reason}; one fresh re-dispatch")
                 return self.review(round_k, attempt=2)
             self.escalate(round_k, f"reviewer {reason} twice")
+        body = (result[:match.start()] + result[match.end():]).strip()
         return {"word": match.group("word"), "blocking": int(match.group("b")),
                 "major": int(match.group("m")), "minor": int(match.group("mi")),
-                "line": line, "body": body_after_line1(result)}
+                "line": match.group(0), "body": body}
 
-    def run_seal_once(self, round_k: int, revision12: str, idx: int) -> dict:
+    def run_seal_once(self, round_k: int, revision_label: str, revision12: str, idx: int) -> dict:
         diff = self.capture_diff()
         for attempt in (1, 2):
             tag = f"seal-{idx}" + ("" if attempt == 1 else "-retry")
-            prompt = self.build_seal_prompt(diff, revision12)
+            prompt = self.build_seal_prompt(diff, revision_label, revision12)
             self.archive_prompt(round_k, tag, prompt)
             cmd = self.build_cmd(prompt, "seal")
             parsed, rc, to = self.run_cli(cmd, self.rt / "raw" / f"round-{round_k}-{tag}.json")
             result = self.cli_result_or_escalate(parsed, rc, to, round_k, "seal")
-            line = first_line(result)
-            match = SEAL_RE.match(line)
+            match, count = self._unique_token(SEAL_RE, result, "seal")
             revision_ok = revision12 in result
-            emitted_verdict = VERDICT_RE.match(line) is not None
-            if match and revision_ok and not emitted_verdict:
+            verdict_leak = re.search(VERDICT_RE.pattern, result, re.MULTILINE) is not None
+            if match and revision_ok and not verdict_leak:
+                body = (result[:match.start()] + result[match.end():]).strip()
                 return {"word": match.group("word"), "blocking": int(match.group("b")),
                         "major": int(match.group("m")), "minor": int(match.group("mi")),
-                        "nits": int(match.group("nits")), "line": line,
-                        "body": body_after_line1(result)}
-            self.log(f"seal malformed (seal_line={bool(match)} revision={revision_ok} "
-                     f"verdict_token={emitted_verdict}); attempt {attempt}")
+                        "nits": int(match.group("nits")), "line": match.group(0),
+                        "body": body}
+            self.log(f"seal malformed (seal_matches={count} revision={revision_ok} "
+                     f"verdict_leak={verdict_leak}); attempt {attempt}")
         self.escalate(round_k, "seal auditor malformed or missing revision twice")
 
     # -- seal orchestration and terminal states --
 
     def attempt_seal(self, round_k: int) -> str:
         required = 2 if self.cfg["bar"] == "strict" else 1
-        prev_hash = None
+        bound_full, bound_label = self._establish_bound_revision(round_k)
         seal_line = None
         for idx in range(required):
-            h_pre = self.compute_manifest()
-            if idx > 0 and h_pre != prev_hash:
-                self.escalate(round_k, "manifest changed between strict seal audits")
-            seal = self.run_seal_once(round_k, h_pre[:12], idx)
-            if self.compute_manifest() != h_pre:
-                self._record_seal(round_k, "void", seal, h_pre, seal["blocking"] + seal["major"])
-                self.escalate(round_k, "artifact mutated during seal (H_post != H_pre)")
+            if idx > 0 and not self._revision_stable(bound_full):
+                self.escalate(round_k, "revision changed between strict seal audits")
+            seal = self.run_seal_once(round_k, bound_label, bound_full[:12], idx)
+            if not self._revision_stable(bound_full):
+                self._record_seal(round_k, "void", seal, bound_label,
+                                  seal["blocking"] + seal["major"])
+                self.escalate(round_k, "artifact mutated during seal")
             accepted = seal["word"] == "ACCEPTED" and counts_within_bar(
                 self.cfg["bar"], seal["blocking"], seal["major"], seal["minor"], seal["nits"])
             if not accepted:
-                self._record_seal(round_k, "fail", seal, h_pre,
+                self._record_seal(round_k, "fail", seal, bound_label,
                                   seal["blocking"] + seal["major"] + seal["minor"] + seal["nits"])
                 self.state["punch_list"] = {"text": seal["body"], "source_round": round_k,
                                             "source_phase": "seal"}
-                self.state["seal"] = {"status": "REJECTED", "bound_hash": h_pre, "line": seal["line"]}
+                self.state["seal"] = {"status": "REJECTED", "bound_revision": bound_full,
+                                      "line": seal["line"]}
                 self.write_handoff()
                 return "rejected"
-            self._record_seal(round_k, "ok", seal, h_pre, 0)
-            self.state["seal"] = {"status": "ACCEPTED", "bound_hash": h_pre, "line": seal["line"]}
+            self._record_seal(round_k, "ok", seal, bound_label, 0)
+            # sealed_manifest is the CONTENT manifest at seal time in BOTH modes;
+            # the post-commit void hook voids iff the recomputed manifest differs
+            # from it (content-precise, so a byte-identical re-commit is safe).
+            self.state["seal"] = {"status": "ACCEPTED", "bound_revision": bound_full,
+                                  "sealed_manifest": self.compute_manifest(),
+                                  "line": seal["line"]}
             self.write_handoff()
-            prev_hash, seal_line = h_pre, seal["line"]
-        self.terminal(round_k, prev_hash, seal_line)
+            seal_line = seal["line"]
+        self.terminal(round_k, bound_full, bound_label, seal_line)
 
-    def _record_seal(self, round_k, event, seal, h_pre, findings) -> None:
+    def _record_seal(self, round_k, event, seal, bound_label, findings) -> None:
         self.append_ledger(round_k, "seal", event, f"seal by {self.cfg['seal_agent']}",
-                           seal["line"], findings, h_pre[:12])
+                           seal["line"], findings, bound_label)
 
-    def terminal(self, round_k: int, h_final: str, seal_line: str) -> None:
-        self.append_ledger(round_k, "terminal", "sealed", f"sealed at {h_final[:12]}",
-                           seal_line, 0, h_final[:12])
+    def terminal(self, round_k: int, bound_full: str, bound_label: str, seal_line: str) -> None:
+        self.append_ledger(round_k, "terminal", "sealed", f"sealed at {bound_label}",
+                           seal_line, 0, bound_label)
         self.state.update({"status": "sealed", "phase": "terminal"})
         self.write_handoff()
-        self.log(f"SEALED round {round_k} at revision {h_final[:12]}")
+        self.log(f"SEALED round {round_k} at revision {bound_label}")
         self.notify(f"converge-auto {self.cfg['loop_id']} SEALED",
-                    f"round {round_k} revision {h_final[:12]}: {seal_line}")
+                    f"round {round_k} revision {bound_label}: {seal_line}")
         sys.exit(0)
 
     def escalate(self, round_k: int, reason: str) -> None:
         event = "escalate:" + reason.replace(" ", "_")
-        manifest12 = self.state["manifest_hash_last"][:12] if self.state["manifest_hash_last"] else None
-        self.append_ledger(round_k, "escalate", event, reason, None, self.open_findings, manifest12)
+        last = self.state["manifest_hash_last"]
+        revision = self._rev_label("sha256", last) if last else None
+        self.append_ledger(round_k, "escalate", event, reason, None, self.open_findings, revision)
         self.state.update({"status": "escalated", "phase": "escalate"})
         self.write_handoff()
         self.log(f"ESCALATE round {round_k}: {reason}")
@@ -622,8 +774,12 @@ class Loop:
         return len(history) >= 2 and history[-1] >= history[-2] and history[-1] > 0
 
     def refuse_dirty_tree_or_exit(self) -> None:
-        """A seal binds to a revision; a dirty starting scope poisons diff attribution (R-2)."""
-        if not self.cfg.get("repo") or self.cfg.get("allow_dirty"):
+        """A seal binds to a revision; a dirty starting scope poisons diff attribution (R-2).
+
+        Skipped under /commit false: a chronically dirty tree is that policy's normal
+        state, and the round-0 snapshot (not a clean HEAD) is the attribution baseline.
+        """
+        if not self.commit_mode or self.cfg.get("allow_dirty"):
             return
         cmd = ["git", "-C", str(self.cwd), "status", "--porcelain", "--"] + self.cfg["artifact_paths"]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -659,7 +815,7 @@ class Loop:
         manifest = self.compute_manifest()
         self.state["manifest_hash_last"] = manifest
         self.append_ledger(round_k, "produce", "ok", self.produce_delta, None,
-                           self.open_findings, manifest[:12])
+                           self.open_findings, self._rev_label("sha256", manifest))
         verdict = self.review(round_k)
         if self.compute_manifest() != manifest:
             self.escalate(round_k, "artifact mutated during review")
@@ -667,7 +823,7 @@ class Loop:
         self.state["findings_history"].append(total)
         self.open_findings = total
         self.append_ledger(round_k, "review", "ok", f"review by {self.cfg['reviewer_agent']}",
-                           verdict["line"], total, manifest[:12])
+                           verdict["line"], total, self._rev_label("sha256", manifest))
         if self.trend_stalled():
             self.escalate(round_k, "findings did not decrease across 2 rounds")
         self._triage(round_k, verdict)
@@ -686,8 +842,9 @@ class Loop:
         for sub in ("prompts", "raw"):
             (self.rt / sub).mkdir(parents=True, exist_ok=True)
         self.write_handoff()
+        policy = "/commit-false" if self.no_commit else "/commit-true"
         self.log(f"driver start loop_id={self.cfg['loop_id']} bar={self.cfg['bar']} "
-                 f"cap={self.cfg['rounds_cap']}")
+                 f"cap={self.cfg['rounds_cap']} policy={policy}")
         self.preflight_or_exit()
         self.refuse_dirty_tree_or_exit()
         self.snapshot_round0()
@@ -706,6 +863,9 @@ class Loop:
         print(f"converge-auto DRY RUN  loop_id={cfg['loop_id']}")
         print(f"  runtime dir : {self.rt}")
         print(f"  repo        : {cfg.get('repo') or '(null; snapshot-diff mode)'}")
+        print(f"  policy      : "
+              + ("/commit false (snapshot-diff, no commits, sha256 binding)"
+                 if self.no_commit else "/commit true"))
         print(f"  cwd         : {self.cwd}")
         print(f"  artifacts   : {', '.join(cfg['artifact_paths'])}")
         print(f"  bar         : {cfg['bar']}  ->  {BAR_TEXT[cfg['bar']]}")
@@ -730,17 +890,86 @@ class Loop:
 # --- entrypoint --------------------------------------------------------------
 
 
+def _hooks_dir(repo_dir: Path) -> Path:
+    """Resolve the .git/hooks dir, following a worktree/submodule .git file."""
+    git_marker = repo_dir / ".git"
+    if git_marker.is_file():
+        text = git_marker.read_text(errors="replace").strip()
+        gitdir = text.split("gitdir:", 1)[1].strip() if "gitdir:" in text else ""
+        base = Path(gitdir) if Path(gitdir).is_absolute() else (repo_dir / gitdir).resolve()
+        return base / "hooks"
+    return git_marker / "hooks"
+
+
+def install_void_hook(repo: str) -> int:
+    """Idempotently install seal-void-hook.sh as repo/.git/hooks/post-commit.
+
+    Any pre-existing foreign post-commit is moved to post-commit.chained and
+    exec'd by the installed hook (never clobbered). Re-running is a no-op.
+    """
+    repo_dir = Path(repo).expanduser()
+    if not repo_dir.is_dir() or not (repo_dir / ".git").exists():
+        print(f"error: not a git repo: {repo_dir}", file=sys.stderr)
+        return 3
+    src = Path(__file__).resolve().parent / "seal-void-hook.sh"
+    if not src.is_file():
+        print(f"error: seal-void-hook.sh not found beside the driver: {src}", file=sys.stderr)
+        return 4
+    hooks_dir = _hooks_dir(repo_dir)
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    dst = hooks_dir / "post-commit"
+    chained = hooks_dir / "post-commit.chained"
+    if dst.exists():
+        if HOOK_MARKER in dst.read_text(errors="replace"):
+            print(f"post-commit already the seal-void-hook; idempotent no-op ({dst})")
+            return 0
+        if chained.exists():
+            print(f"error: refusing to clobber existing {chained}", file=sys.stderr)
+            return 1
+        os.replace(str(dst), str(chained))
+        os.chmod(str(chained), 0o755)
+        print(f"chained existing post-commit -> {chained}")
+    shutil.copyfile(str(src), str(dst))
+    os.chmod(str(dst), 0o755)
+    print(f"installed seal-void-hook -> {dst}")
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Supervised-autonomous convergence driver.")
-    parser.add_argument("--config", required=True, help="path to loop.json")
+    parser.add_argument("--config", help="path to loop.json (required for a run)")
     parser.add_argument("--claude-cmd", default="claude", help="claude CLI path (default: claude)")
     parser.add_argument("--dry-run", action="store_true",
                         help="validate config and print the phase plan; spawn nothing")
+    parser.add_argument("--install-void-hook", nargs="?", const="", metavar="REPO",
+                        help="install seal-void-hook.sh as the repo's post-commit hook "
+                             "(REPO from this arg, else from --config), then exit")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.install_void_hook is not None:
+        repo = args.install_void_hook
+        if not repo:
+            if not args.config:
+                print("config error: --install-void-hook needs a REPO arg or --config",
+                      file=sys.stderr)
+                sys.exit(3)
+            try:
+                cfg = validate_config(load_config(Path(args.config).expanduser().resolve()))
+            except ConfigError as exc:
+                print(f"config error: {exc}", file=sys.stderr)
+                sys.exit(3)
+            repo = cfg.get("repo")
+            if not repo:
+                print("config error: loop.json has no repo for --install-void-hook",
+                      file=sys.stderr)
+                sys.exit(3)
+        sys.exit(install_void_hook(repo))
+    if not args.config:
+        print("config error: --config is required", file=sys.stderr)
+        sys.exit(3)
     cfg_path = Path(args.config).expanduser().resolve()
     if not cfg_path.is_file():
         print(f"config error: loop.json not found: {cfg_path}", file=sys.stderr)

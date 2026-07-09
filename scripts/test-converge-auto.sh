@@ -39,6 +39,15 @@ trap 'rm -rf "$ROOT"' EXIT
 
 SHA_BEFORE=$(sha256sum "$REAL_DRIVER" | awk '{print $1}')
 
+# Hermetic policy env: no ambient /commit false leaks into the non-policy scenarios.
+# The driver's policy detector reads CONVERGE_NO_COMMIT_FILE (default the real
+# ~/.claude/hooks/no-commit-projects.local); point it at an empty temp list so only
+# the policy scenarios (which override it per-run) ever see a no-commit repo.
+unset CLAUDE_COMMIT_POLICY
+EMPTY_NO_COMMIT="$ROOT/empty-no-commit-list"
+: > "$EMPTY_NO_COMMIT"
+export CONVERGE_NO_COMMIT_FILE="$EMPTY_NO_COMMIT"
+
 # ── Counters + assertion helpers ──
 PASS=0
 FAIL=0
@@ -133,7 +142,7 @@ FCEOF
 MOCK="$ROOT/mock-claude"
 cat > "$MOCK" <<'MOCKEOF'
 #!/usr/bin/env python3
-import json, os, re, sys, time
+import json, os, re, subprocess, sys, time
 
 argv = sys.argv
 MOCK_DIR = os.environ["MOCK_DIR"]
@@ -186,7 +195,8 @@ def round_of():
     return m.group(1) if m else "1"
 
 def revision_of():
-    m = re.search(r"revision ([0-9a-f]{12})", prompt)
+    # bound revision is labelled commit:<12hex> (git) or sha256:<12hex> (non-git)
+    m = re.search(r"(?:commit|sha256):([0-9a-f]{12})", prompt)
     return m.group(1) if m else "deadbeef0000"
 
 def write_art(txt):
@@ -321,6 +331,55 @@ elif SCEN == "review_mutation":
     if role == "seal":
         default_seal()
 
+elif SCEN == "git_seal_commit":
+    if role in ("produce", "produce-resume"):
+        default_produce()
+    if role == "review":
+        default_review()
+    if role == "seal":
+        # move HEAD during the seal audit: guard 3 must void on the HEAD change
+        repo = os.path.dirname(ART)
+        with open(ART, "a") as fh:
+            fh.write("mock mid-seal commit change\n")
+        subprocess.run(["git", "-C", repo, "add", "artifact.txt"], capture_output=True)
+        subprocess.run(["git", "-C", repo, "-c", "user.email=m@m", "-c", "user.name=m",
+                        "commit", "-qm", "mock mid-seal commit"], capture_output=True)
+        default_seal()
+
+elif SCEN == "status_preamble":
+    if role in ("produce", "produce-resume"):
+        write_art("converged artifact body, no canary token here\n")
+        emit("I completed the objective.\nSummary of changes follows.\nSTATUS: DONE files=1 checkpoint=cp.md\ntrailing note")
+    if role == "review":
+        default_review()
+    if role == "seal":
+        default_seal()
+
+elif SCEN == "verdict_preamble":
+    if role in ("produce", "produce-resume"):
+        default_produce()
+    if role == "review":
+        emit("Here is my analysis of the diff.\nEverything checks out against the rubric.\nVERDICT: CLEAN blocking=0 major=0 minor=0 round=%s\ntrailing note" % round_of())
+    if role == "seal":
+        default_seal()
+
+elif SCEN == "two_verdicts":
+    if role in ("produce", "produce-resume"):
+        default_produce()
+    if role == "review":
+        r = round_of()
+        emit("VERDICT: CLEAN blocking=0 major=0 minor=0 round=%s\nVERDICT: REWORK blocking=0 major=1 minor=0 round=%s\nconflicting pair" % (r, r))
+    if role == "seal":
+        default_seal()
+
+elif SCEN == "seal_preamble":
+    if role in ("produce", "produce-resume"):
+        default_produce()
+    if role == "review":
+        default_review()
+    if role == "seal":
+        emit("Holistic audit complete.\nNo blocking issues found.\nSEAL: ACCEPTED blocking=0 major=0 minor=0 nits=0\nexamined revision %s" % revision_of())
+
 elif SCEN == "isolation":
     if role == "produce":
         write_art("clean artifact body without any canary token\n")
@@ -365,6 +424,55 @@ setup_scen() {
   printf '# Rubric\nApply good judgment.\n' > "$sd/rubric.md"
   python3 "$MKCFG" "$sd/loop.json" "$sd" "$overrides"
 }
+
+# Create a clean git repo whose artifact.txt is committed (clean start).
+# $2 is written with %b, so "\n" produces a real newline (exact byte match).
+mk_git_repo() {
+  local repo="$1" content="$2"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@t
+  git -C "$repo" config user.name t
+  printf '%b' "$content" > "$repo/artifact.txt"
+  git -C "$repo" add artifact.txt
+  git -C "$repo" -c user.email=t@t -c user.name=t commit -qm init >/dev/null 2>&1
+}
+
+# Content manifest of a repo's paths, mirroring converge_auto.py compute_manifest()
+# and seal-void-hook.sh recompute_manifest (seeds the sealed_manifest fixture below).
+manifest_of() {
+  local repo="$1"; shift
+  python3 - "$repo" "$@" <<'PYEOF'
+import hashlib, os, sys
+repo = sys.argv[1]; paths = sys.argv[2:]
+entries = []
+for rel in paths:
+    p = rel if os.path.isabs(rel) else os.path.join(repo, rel)
+    try:
+        with open(p, "rb") as fh:
+            d = hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        d = "MISSING"
+    entries.append("%s:%s" % (rel, d))
+sys.stdout.write(hashlib.sha256("\n".join(sorted(entries)).encode("utf-8")).hexdigest())
+PYEOF
+}
+
+# Stage a sealed converge-auto loop under a FAKE HOME so the hook scan never
+# reaches the real ~/.claude/plans. Records sealed_manifest of the CURRENT artifact
+# (the content-precise void hook needs it). Echoes the runtime dir it created.
+write_sealed_loop() {
+  local fh="$1" repo="$2" bound="$3" round="$4"
+  local rt="$fh/.claude/plans/testcampaign/auto/testloop"
+  mkdir -p "$rt"
+  local sm; sm="$(manifest_of "$repo" artifact.txt)"
+  printf '{"loop_id":"testloop","repo":"%s","artifact_paths":["artifact.txt"]}\n' "$repo" > "$rt/loop.json"
+  printf '{"loop_id":"testloop","round":%s,"status":"sealed","seal":{"status":"ACCEPTED","bound_revision":"%s","sealed_manifest":"%s","line":"SEAL: ACCEPTED blocking=0 major=0 minor=0 nits=0"}}\n' "$round" "$bound" "$sm" > "$rt/handoff.json"
+  printf '# ledger\n\n' > "$rt/rounds.md"
+  echo "$rt"
+}
+
+BASHBIN="$(command -v bash)"
 
 # ═══════════════════════════════════════════════════
 sect "converge-auto deterministic scenarios"
@@ -604,6 +712,206 @@ else
 fi
 
 # ═══════════════════════════════════════════════════
+sect "git-mode seal (commit-hash binding)"
+
+seal_manifest_of() { awk '/^## R.*\.seal - .* - ok$/{f=1} f&&/^- manifest:/{print $3; f=0}' "$1" | head -1; }
+term_manifest_of() { awk '/^## R.*\.terminal - /{f=1} f&&/^- manifest:/{print $3; f=0}' "$1" | head -1; }
+
+# S23: happy git seal: pre-seal snapshot commit + commit-hash binding
+GREPO="$ROOT/gs23"; mk_git_repo "$GREPO" "seed content, will be overwritten\n"
+S="$ROOT/s23"; setup_scen "$S" "{\"repo\":\"$GREPO\",\"bar\":\"gate\"}"
+drive "$S" happy "$GREPO/artifact.txt"
+expect_exit 0 "S23 git happy seal"
+SUBJ=$(git -C "$GREPO" log -1 --format=%s)
+if [ "$SUBJ" = "chore(testloop): round 1 pre-seal snapshot" ]; then ok "S23 pre-seal commit subject exact"; else no "S23 commit subject" "got: $SUBJ"; fi
+if git -C "$GREPO" log -1 --format=%B | grep -qF 'Co-Authored-By: Claude <noreply@anthropic.com>'; then ok "S23 co-author trailer present"; else no "S23 co-author" "trailer absent"; fi
+CSM=$(seal_manifest_of "$S/rounds.md"); CTM=$(term_manifest_of "$S/rounds.md")
+HEAD12=$(git -C "$GREPO" rev-parse HEAD | cut -c1-12)
+if [ "$CSM" = "commit:$HEAD12" ] && [ "$CSM" = "$CTM" ]; then ok "S23 seal+terminal bind commit:$HEAD12 == HEAD"; else no "S23 commit binding" "seal=$CSM terminal=$CTM head=commit:$HEAD12"; fi
+
+# S24: git seal void: scope mutated during seal (porcelain non-empty) -> exit 2
+GREPO="$ROOT/gs24"; mk_git_repo "$GREPO" "seed\n"
+S="$ROOT/s24"; setup_scen "$S" "{\"repo\":\"$GREPO\"}"
+drive "$S" seal_void "$GREPO/artifact.txt"
+expect_exit 2 "S24 git seal void (scope dirty during seal)"
+VOID_LN=$(grep -nE '^## R[0-9]+\.seal - .* - void$' "$S/rounds.md" 2>/dev/null | head -1 | cut -d: -f1)
+ESC_LN=$(grep -nF 'escalate:artifact_mutated_during_seal' "$S/rounds.md" 2>/dev/null | head -1 | cut -d: -f1)
+if [ -n "$VOID_LN" ] && [ -n "$ESC_LN" ] && [ "$VOID_LN" -lt "$ESC_LN" ]; then ok "S24 void row (commit-bound) precedes escalate"; else no "S24 void ordering" "void=$VOID_LN esc=$ESC_LN"; fi
+
+# S25: git seal void on HEAD move: mock commits during seal -> exit 2
+GREPO="$ROOT/gs25"; mk_git_repo "$GREPO" "seed\n"
+S="$ROOT/s25"; setup_scen "$S" "{\"repo\":\"$GREPO\"}"
+drive "$S" git_seal_commit "$GREPO/artifact.txt"
+expect_exit 2 "S25 git seal void (HEAD moved during seal)"
+if grep -qE '^## R[0-9]+\.seal - .* - void$' "$S/rounds.md" 2>/dev/null; then ok "S25 void row present on HEAD move"; else no "S25 void row" "absent"; fi
+
+# S26: strict git bar: two seals, HEAD stable between them -> exit 0
+GREPO="$ROOT/gs26"; mk_git_repo "$GREPO" "seed\n"
+S="$ROOT/s26"; setup_scen "$S" "{\"repo\":\"$GREPO\",\"bar\":\"strict\"}"
+drive "$S" happy "$GREPO/artifact.txt"
+expect_exit 0 "S26 strict git two seals HEAD stable"
+SV=$(cntF '"w-mock-seal"' "$S/mock/calls.jsonl")
+SR=$(cntE '^## R[0-9]+\.seal - .* - ok$' "$S/rounds.md")
+if [ "$SV" = 2 ] && [ "$SR" = 2 ]; then ok "S26 two seal invocations + two seal rows (git strict)"; else no "S26 double seal" "invocations=$SV rows=$SR"; fi
+
+# S27: nothing-to-commit reuse: producer writes identical bytes -> reuse HEAD
+GREPO="$ROOT/gs27"; mk_git_repo "$GREPO" "converged artifact body, no canary token here\n"
+S="$ROOT/s27"; setup_scen "$S" "{\"repo\":\"$GREPO\"}"
+drive "$S" happy "$GREPO/artifact.txt"
+expect_exit 0 "S27 nothing-to-commit reuse of HEAD"
+NCOMMITS=$(git -C "$GREPO" rev-list --count HEAD)
+if [ "$NCOMMITS" = 1 ]; then ok "S27 no pre-seal commit created (reused HEAD)"; else no "S27 commit count" "expected 1 got $NCOMMITS"; fi
+CSM=$(seal_manifest_of "$S/rounds.md"); HEAD12=$(git -C "$GREPO" rev-parse HEAD | cut -c1-12)
+if [ "$CSM" = "commit:$HEAD12" ]; then ok "S27 seal binds reused HEAD commit:$HEAD12"; else no "S27 reuse binding" "seal=$CSM head=commit:$HEAD12"; fi
+
+# ═══════════════════════════════════════════════════
+sect "seal-void-hook (post-commit hardening)"
+
+# H3: install is idempotent: run twice, single hook, no spurious chain
+HREPO="$ROOT/hrepo3"; mk_git_repo "$HREPO" "seed\n"
+python3 "$DRIVER_PY" --install-void-hook "$HREPO" >/dev/null 2>&1
+python3 "$DRIVER_PY" --install-void-hook "$HREPO" >"$ROOT/h3b.out" 2>&1
+if grep -qF 'idempotent no-op' "$ROOT/h3b.out"; then ok "H3 second install is idempotent no-op"; else no "H3 idempotent" "$(cat "$ROOT/h3b.out")"; fi
+if [ ! -f "$HREPO/.git/hooks/post-commit.chained" ]; then ok "H3 no spurious chain on double install"; else no "H3 chain" "post-commit.chained created without a prior hook"; fi
+
+# H4: an existing foreign post-commit is chained and still executes on commit
+HREPO="$ROOT/hrepo4"; mk_git_repo "$HREPO" "seed\n"
+cat > "$HREPO/.git/hooks/post-commit" <<EOF
+#!/bin/bash
+touch "$ROOT/h4-foreign-ran"
+EOF
+chmod +x "$HREPO/.git/hooks/post-commit"
+python3 "$DRIVER_PY" --install-void-hook "$HREPO" >"$ROOT/h4.out" 2>&1
+if grep -qF 'chained existing post-commit' "$ROOT/h4.out" && [ -f "$HREPO/.git/hooks/post-commit.chained" ]; then ok "H4 existing post-commit moved to post-commit.chained"; else no "H4 chaining" "$(cat "$ROOT/h4.out")"; fi
+rm -f "$ROOT/h4-foreign-ran"
+printf 'extra\n' >> "$HREPO/artifact.txt"; git -C "$HREPO" add artifact.txt
+HOME="$ROOT/fh4-empty" git -C "$HREPO" -c user.email=t@t -c user.name=t commit -qm c2 >/dev/null 2>&1
+if [ -f "$ROOT/h4-foreign-ran" ]; then ok "H4 chained foreign hook still executes on commit"; else no "H4 chain exec" "foreign hook did not run"; fi
+
+# H5: hook exits 0 (non-blocking) when jq is absent: empty PATH, absolute bash
+HREPO="$ROOT/hrepo5"; mk_git_repo "$HREPO" "seed\n"
+python3 "$DRIVER_PY" --install-void-hook "$HREPO" >/dev/null 2>&1
+if env -i PATH="" HOME="$ROOT/fh5-empty" "$BASHBIN" "$HREPO/.git/hooks/post-commit" >/dev/null 2>&1; then ok "H5 hook exits 0 when jq is absent (non-blocking)"; else no "H5 jq-absent" "hook returned nonzero"; fi
+
+if command -v jq >/dev/null 2>&1; then
+  # H1: post-hoc commit touching a sealed loop's scope -> void row + VOIDED marker
+  HREPO="$ROOT/hrepo1"; mk_git_repo "$HREPO" "seed\n"
+  BOUND=$(git -C "$HREPO" rev-parse HEAD); BOUND12=$(printf '%s' "$BOUND" | cut -c1-12)
+  FH="$ROOT/fh1"; RT=$(write_sealed_loop "$FH" "$HREPO" "$BOUND" 2)
+  python3 "$DRIVER_PY" --install-void-hook "$HREPO" >/dev/null 2>&1
+  printf 'post-hoc change\n' >> "$HREPO/artifact.txt"; git -C "$HREPO" add artifact.txt
+  HOME="$FH" git -C "$HREPO" -c user.email=t@t -c user.name=t commit -qm post-hoc >/dev/null 2>&1
+  if grep -qF 'escalate:seal_voided_post_hoc' "$RT/rounds.md" 2>/dev/null; then ok "H1 void row appended by hook"; else no "H1 void row" "absent"; fi
+  if grep -qE '^## R[0-9]+\.escalate - [^ ]+ - escalate:seal_voided_post_hoc$' "$RT/rounds.md" 2>/dev/null; then ok "H1 void row header conforms to ledger schema"; else no "H1 header" "nonconforming"; fi
+  if grep -qF "manifest: commit:$BOUND12" "$RT/rounds.md" 2>/dev/null; then ok "H1 void row names OLD bound commit:$BOUND12"; else no "H1 bound revision" "absent"; fi
+  if [ -f "$RT/VOIDED" ]; then ok "H1 VOIDED marker created"; else no "H1 VOIDED marker" "absent"; fi
+
+  # H2: a commit NOT touching the sealed scope leaves the loop untouched
+  HREPO="$ROOT/hrepo2"; mk_git_repo "$HREPO" "seed\n"
+  BOUND=$(git -C "$HREPO" rev-parse HEAD)
+  FH="$ROOT/fh2"; RT=$(write_sealed_loop "$FH" "$HREPO" "$BOUND" 2)
+  python3 "$DRIVER_PY" --install-void-hook "$HREPO" >/dev/null 2>&1
+  printf 'unrelated\n' > "$HREPO/other.txt"; git -C "$HREPO" add other.txt
+  HOME="$FH" git -C "$HREPO" -c user.email=t@t -c user.name=t commit -qm other >/dev/null 2>&1
+  if ! grep -qF 'escalate:seal_voided_post_hoc' "$RT/rounds.md" 2>/dev/null && [ ! -f "$RT/VOIDED" ]; then ok "H2 out-of-scope commit leaves sealed loop untouched"; else no "H2 out-of-scope" "hook voided a loop it should have ignored"; fi
+
+  # H6: content-precision. A byte-identical re-commit (amend/message rewrite) of the
+  # sealed scope must NOT void (new HEAD hash, identical content manifest).
+  HREPO="$ROOT/hrepo6"; mk_git_repo "$HREPO" "sealed body content\n"
+  BOUND=$(git -C "$HREPO" rev-parse HEAD)
+  FH="$ROOT/fh6"; RT=$(write_sealed_loop "$FH" "$HREPO" "$BOUND" 2)
+  python3 "$DRIVER_PY" --install-void-hook "$HREPO" >/dev/null 2>&1
+  HOME="$FH" git -C "$HREPO" -c user.email=t@t -c user.name=t commit --amend --no-edit -q >/dev/null 2>&1
+  if ! grep -qF 'escalate:seal_voided_post_hoc' "$RT/rounds.md" 2>/dev/null && [ ! -f "$RT/VOIDED" ]; then
+    ok "H6 byte-identical re-commit (amend) leaves the seal intact (content-precise)"
+  else
+    no "H6 content-precision" "byte-identical re-commit wrongly voided the seal"
+  fi
+
+  # H7: content-precision. A genuine content change to the sealed scope DOES void.
+  HREPO="$ROOT/hrepo7"; mk_git_repo "$HREPO" "sealed body content\n"
+  BOUND=$(git -C "$HREPO" rev-parse HEAD)
+  FH="$ROOT/fh7"; RT=$(write_sealed_loop "$FH" "$HREPO" "$BOUND" 2)
+  python3 "$DRIVER_PY" --install-void-hook "$HREPO" >/dev/null 2>&1
+  printf 'genuine content change\n' >> "$HREPO/artifact.txt"; git -C "$HREPO" add artifact.txt
+  HOME="$FH" git -C "$HREPO" -c user.email=t@t -c user.name=t commit -qm change >/dev/null 2>&1
+  if grep -qF 'escalate:seal_voided_post_hoc' "$RT/rounds.md" 2>/dev/null && [ -f "$RT/VOIDED" ]; then
+    ok "H7 genuine content change voids the seal (content-precise)"
+  else
+    no "H7 content-precision" "genuine content change failed to void"
+  fi
+else
+  no "H1/H2 hook void detection" "jq not available on this host"
+fi
+
+# ═══════════════════════════════════════════════════
+sect "tolerant token extraction (live-escalation fix)"
+
+# S28: reviewer VERDICT behind a narrative preamble: parses and proceeds (regression)
+S="$ROOT/s28"; setup_scen "$S" '{"bar":"gate"}'
+drive "$S" verdict_preamble "$S/artifact.txt"
+expect_exit 0 "S28 VERDICT behind preamble parses (live-escalation regression)"
+RV=$(cntF '"w-mock-reviewer"' "$S/mock/calls.jsonl")
+if [ "$RV" = 1 ]; then ok "S28 single review invocation (no retry needed)"; else no "S28 no retry" "found $RV review invocations, expected 1"; fi
+
+# S29: producer STATUS behind a preamble: parses
+S="$ROOT/s29"; setup_scen "$S"
+drive "$S" status_preamble "$S/artifact.txt"
+expect_exit 0 "S29 STATUS behind preamble parses"
+
+# S30: two valid VERDICT lines: malformed path (retry then escalate)
+S="$ROOT/s30"; setup_scen "$S"
+drive "$S" two_verdicts "$S/artifact.txt"
+expect_exit 2 "S30 duplicate VERDICT lines rejected"
+RV=$(cntF '"w-mock-reviewer"' "$S/mock/calls.jsonl")
+if [ "$RV" = 2 ]; then ok "S30 two review invocations (one retry) then escalate"; else no "S30 retry count" "found $RV, expected 2"; fi
+
+# S31: seal SEAL behind a preamble (with revision string): parses
+S="$ROOT/s31"; setup_scen "$S"
+drive "$S" seal_preamble "$S/artifact.txt"
+expect_exit 0 "S31 SEAL behind preamble parses"
+
+# ═══════════════════════════════════════════════════
+sect "policy composition (/commit false)"
+
+# S32: /commit false git repo (basename in the no-commit list) -> sha256 binding,
+# ZERO commits, snapshot-based reviewer diff, policy recorded in ledger + driver.log
+NCREPO="$ROOT/nocommitproj"; mk_git_repo "$NCREPO" "seed body for policy-false mode\n"
+NCLIST="$ROOT/no-commit-list.txt"; printf '# temp no-commit list\nnocommitproj\n' > "$NCLIST"
+NBEFORE=$(git -C "$NCREPO" rev-list --count HEAD)
+S="$ROOT/s32"; setup_scen "$S" "{\"repo\":\"$NCREPO\",\"bar\":\"gate\"}"
+export CONVERGE_NO_COMMIT_FILE="$NCLIST"; drive "$S" happy "$NCREPO/artifact.txt"; export CONVERGE_NO_COMMIT_FILE="$EMPTY_NO_COMMIT"
+expect_exit 0 "S32 /commit false seal"
+CSM=$(seal_manifest_of "$S/rounds.md")
+if echo "$CSM" | grep -qE '^sha256:[0-9a-f]{12}$'; then ok "S32 binds sha256 not commit ($CSM)"; else no "S32 sha256 binding" "seal manifest=$CSM"; fi
+NAFTER=$(git -C "$NCREPO" rev-list --count HEAD)
+if [ "$NBEFORE" = "$NAFTER" ]; then ok "S32 zero commits made (git log unchanged at $NAFTER)"; else no "S32 zero commits" "before=$NBEFORE after=$NAFTER"; fi
+if grep -qF 'policy=/commit-false' "$S/rounds.md" 2>/dev/null; then ok "S32 round-1 produce delta records policy=/commit-false"; else no "S32 ledger policy" "marker absent from rounds.md"; fi
+if grep -qF 'policy=/commit-false' "$S/driver.log" 2>/dev/null; then ok "S32 driver.log records policy=/commit-false"; else no "S32 driver.log policy" "marker absent from driver.log"; fi
+if grep -qF 'a/artifact.txt' "$S/prompts/round-1-review.txt" 2>/dev/null && grep -qF 'b/artifact.txt' "$S/prompts/round-1-review.txt" 2>/dev/null; then
+  ok "S32 reviewer diff comes from the round-0 snapshot mechanism (a/ b/ headers)"
+else
+  no "S32 snapshot diff" "snapshot a/ b/ headers absent from review prompt"
+fi
+
+# S33: a dirty /commit false tree does NOT trigger the dirty-start refusal
+NCREPO2="$ROOT/nocommitproj2"; mk_git_repo "$NCREPO2" "committed baseline\n"
+printf 'uncommitted dirty line\n' >> "$NCREPO2/artifact.txt"
+NCLIST2="$ROOT/no-commit-list2.txt"; printf 'nocommitproj2\n' > "$NCLIST2"
+S="$ROOT/s33"; setup_scen "$S" "{\"repo\":\"$NCREPO2\"}"
+export CONVERGE_NO_COMMIT_FILE="$NCLIST2"; drive "$S" happy "$NCREPO2/artifact.txt"; export CONVERGE_NO_COMMIT_FILE="$EMPTY_NO_COMMIT"
+expect_exit 0 "S33 dirty /commit false tree proceeds (dirty-start refusal skipped)"
+
+# S34: CLAUDE_COMMIT_POLICY=false env forces /commit false even without a list entry
+GREPO3="$ROOT/envpolicyrepo"; mk_git_repo "$GREPO3" "seed\n"
+NBEFORE=$(git -C "$GREPO3" rev-list --count HEAD)
+S="$ROOT/s34"; setup_scen "$S" "{\"repo\":\"$GREPO3\"}"
+export CLAUDE_COMMIT_POLICY=false; drive "$S" happy "$GREPO3/artifact.txt"; unset CLAUDE_COMMIT_POLICY
+expect_exit 0 "S34 CLAUDE_COMMIT_POLICY=false forces /commit false"
+NAFTER=$(git -C "$GREPO3" rev-list --count HEAD); CSM=$(seal_manifest_of "$S/rounds.md")
+if [ "$NBEFORE" = "$NAFTER" ] && echo "$CSM" | grep -qE '^sha256:'; then ok "S34 env /commit false: zero commits + sha256 binding"; else no "S34 env policy" "before=$NBEFORE after=$NAFTER seal=$CSM"; fi
+
+# ═══════════════════════════════════════════════════
 # Mutation harness (genuineness proof) — behind --mutations
 # ═══════════════════════════════════════════════════
 run_mutation() {
@@ -636,12 +944,13 @@ if [ "$DO_MUTATIONS" = true ]; then
   PF=$(cntE '^## R[0-9]+\.produce - .* - fail$' "$MUT_MD/rounds.md")
   if [ "$PF" != 2 ]; then ok "M1 producer-token guard (mutant yields $PF produce-fail rows, not 2)"; else no "M1" "guard still fired under mutation"; fi
 
-  # M2: remove H_post recompute -> S12 no longer voids the seal
+  # M2: neutralize the git-mode seal post-check -> paired git seal-void no longer voids
+  GREPO_M2="$ROOT/m2-gitrepo"; mk_git_repo "$GREPO_M2" "seed\n"
   run_mutation m2 \
-    'if self.compute_manifest() != h_pre:' \
-    'if False and self.compute_manifest() != h_pre:' \
-    seal_void '' "$ROOT/m2-run/artifact.txt"
-  if [ "$EXIT" != 2 ]; then ok "M2 seal-void guard (mutant exit=$EXIT, not 2)"; else no "M2" "seal still voided under mutation"; fi
+    'return self._git_head() == bound_full and self._git_scope_dirty() is False' \
+    'return True' \
+    seal_void "{\"repo\":\"$GREPO_M2\"}" "$GREPO_M2/artifact.txt"
+  if [ "$EXIT" != 2 ]; then ok "M2 git seal-void guard (mutant exit=$EXIT, not 2)"; else no "M2" "seal still voided under mutation"; fi
 
   # M3: drop --no-session-persistence -> S21 flag_check fails
   run_mutation m3 \
@@ -667,10 +976,17 @@ if [ "$DO_MUTATIONS" = true ]; then
 
   # M5: disable dirty-tree refusal -> S19 dirty case no longer exits 3
   run_mutation m5 \
-    'if not self.cfg.get("repo") or self.cfg.get("allow_dirty"):' \
+    'if not self.commit_mode or self.cfg.get("allow_dirty"):' \
     'if True:' \
     happy "{\"repo\":\"$REPO\"}" "$REPO/artifact.txt"
   if [ "$EXIT" != 3 ]; then ok "M5 dirty-start guard (mutant exit=$EXIT, not 3)"; else no "M5" "dirty refusal still fired under mutation"; fi
+
+  # M6: accept the first token even when duplicates exist -> S30 no longer rejects
+  run_mutation m6 \
+    'if len(matches) != 1:' \
+    'if len(matches) == 0:' \
+    two_verdicts '' "$ROOT/m6-run/artifact.txt"
+  if [ "$EXIT" != 2 ]; then ok "M6 unique-token guard (mutant exit=$EXIT, not 2)"; else no "M6" "duplicate VERDICT still rejected under mutation"; fi
 fi
 
 # ── Driver-file integrity (real file untouched end to end) ──
