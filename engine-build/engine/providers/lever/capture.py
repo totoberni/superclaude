@@ -20,8 +20,8 @@ empty label.
 
 Only the LEVER-specific capture/parse code moved here. Its transitive closure is
 DISJOINT from Ashby's graphql parse (which reads the intercepted JSON and touches
-no HTML tree): the two vendors share NONE of each other's helpers, so nothing was
-left behind to import from `engine.browse`. Everything this module reaches beyond
+no HTML tree): the two vendors share NONE of each other's helpers. Everything this
+module reaches beyond
 its own helpers is generic browser/HTML INFRA already single-sourced in the
 kernel -- the browser page factory + timeout + tree builder/finders + node-text
 reader + `CaptureShapeError` + `_now` from `engine.kernel.capture_toolkit`, and
@@ -29,15 +29,13 @@ the `Field`/`FieldMap`/`Locator` contracts + `_role_for_type` from
 `engine.kernel.contracts` -- so nothing is re-implemented and there is exactly
 one home for each name.
 
-`engine.browse` keeps a LAZY re-export shim (PEP 562 `__getattr__`) for every
-name moved here, so existing importers keep resolving them via `engine.browse`
-unchanged: `registry._capture_lever` / `_apply_lever`'s call-time
-`browse.capture_lever` / `browse.lever_apply_url`, `engine.fill._capture`'s
-call-time `from engine.browse import capture_lever`, and the tests'
-`from engine.browse import LEVER_SOURCE, capture_lever`, `browse._parse_lever`,
-and `monkeypatch.setattr(browse, "capture_lever", ...)` seam.
+The `engine.browse` re-export shim that once forwarded these names was dissolved
+in Stage 4: every importer now reaches this module directly. `engine.fill._capture`
+imports `capture_lever` from here, and the tests import `LEVER_SOURCE`,
+`capture_lever`, and `_parse_lever` from `engine.providers.lever.capture`; a test
+that needs to swap `capture_lever` monkeypatches it on this module.
 
-LAZY-IMPORT INVARIANT (mirrors browse.py / base.py / registry.py): patchright is
+LAZY-IMPORT INVARIANT (mirrors base.py): patchright is
 imported lazily inside `_default_browser_page` (in the kernel), only when a real
 capture runs, so importing this module -- and importing `engine.providers.lever`
 -- stays browser-free for the daily poller. Tests drive the parse path over

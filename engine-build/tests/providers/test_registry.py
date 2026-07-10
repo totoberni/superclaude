@@ -33,10 +33,11 @@ def test_all_four_vendors_self_register():
 
 
 def test_importing_registry_loads_no_browser_module():
-    # A fresh interpreter (sibling tests in-process may have imported browse via
-    # other paths). Importing the registry populates all four vendors while
+    # A fresh interpreter so in-process module caching cannot mask the check.
+    # Importing the registry populates all four vendors while
     # loading neither the browser driver (patchright / legacy playwright) nor
-    # engine.browse -- the "light" half of "eager-but-light".
+    # any `engine.browse` module (dissolved in Stage 4) -- the "light" half of
+    # "eager-but-light".
     script = (
         "import sys, engine.providers._registry as r; "
         "print(sorted(r.all_providers())); "
@@ -104,7 +105,7 @@ def test_lazy_capture_and_fill_resolve_to_the_real_plugin_functions():
 def test_lazy_capture_delegates_to_the_live_plugin_function(monkeypatch):
     # The registered capture is resolved on CALL, not on registration, so a
     # monkeypatched plugin function is honoured (the same import-alias safety the
-    # old registry's lazy refs give for browse.capture_*).
+    # old registry's lazy refs gave for browse.capture_*).
     import engine.providers.greenhouse as g
     import engine.providers._registry as r
     calls = []

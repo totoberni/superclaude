@@ -10,7 +10,8 @@ The vendor's other concern is split into a sibling submodule (reachable by its
 canonical dotted path, `engine.providers.ashby.capture`):
   - `.fill`     -- fill() orchestration (own controlled-component select driver,
                    Turnstile checkbox/radio HUMAN HAND-OFF)
-  - `.capture`  -- graphql schema capture/parse (moved out of `engine.browse`)
+  - `.capture`  -- graphql schema capture/parse (moved out of the former
+                   `engine.browse` shim)
 
 Ashby has NO `.resolve` submodule: `.fill.resolve_values` delegates to the
 kernel's `engine.kernel.resolve.resolve_values`, which carries the hole-fix e
@@ -27,9 +28,9 @@ NAME NOTE: `.capture` and `.fill` are submodules whose names collide with the
 Provider callables `capture` / `fill`. At PACKAGE scope the callables win (the
 `.fill` re-exports below run last), matching the old module where `ashby.capture`
 / `ashby.fill` were the functions. The submodules stay reachable via
-`sys.modules` / `importlib.import_module`, which is exactly how the
-`engine.browse` re-export shim reaches `.capture`'s moved members (never via the
-package attribute).
+`sys.modules` / `importlib.import_module` (never via the package attribute),
+which is exactly how `engine.fill._capture` and the tests reach `.capture`'s
+moved members.
 
 `_apply_ashby_controlled` (the berellevy controlled-component select DRIVER) is
 an INTERNAL `.fill` helper, but the ashby unit test asserts on it directly by
@@ -38,7 +39,7 @@ commits but the driver does" proof), so it is re-exported here to keep that seam
 resolving at package scope. It is NOT in `__all__` (the Provider surface only).
 
 Kept LIGHT (matching the old module's import cost): importing this package loads
-NO patchright / `engine.browse`; the fill/capture bodies reach the kernel's
+NO patchright / browser-capture module; the fill/capture bodies reach the kernel's
 private helpers (`kernel.resolve._completeness`,
 `kernel.fill_toolkit._locate_file_input`/`_upload_attached`) and the vendor
 `.capture` submodule via CALL-TIME imports, and patchright loads lazily in the

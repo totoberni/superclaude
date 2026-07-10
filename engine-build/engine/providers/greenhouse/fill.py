@@ -17,7 +17,7 @@ sequencing and the vendor-specific bits documented per step below (the
 registry's `_registry.PROVIDERS["greenhouse"]` spec looks both up lazily).
 
 LAZY-IMPORT INVARIANT (mirrors `providers/base.py` and `_registry.py`): this
-module must not import patchright / `engine.browse` at load time, so the
+module must not import patchright / a browser-capture module at load time, so the
 daily poller (which imports `engine.providers` eagerly) stays browser-free.
 Module-scope imports are the kernel, `providers/base`, the `engine.fieldmap`
 FieldMap re-export, and this package's own `.resolve` (all browser-free by

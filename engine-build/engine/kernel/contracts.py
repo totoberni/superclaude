@@ -100,7 +100,8 @@ class Field:
     step_index: int | None = None
     conditional_on: dict | None = None
     # -- W5 additive extension (schema_version 2): every new field defaults so
-    # every existing construction site (browse.py, tests, fixtures) keeps
+    # every existing construction site (the per-vendor capture modules, tests,
+    # fixtures) keeps
     # working unchanged, and every v1-shaped cached FieldMap deserializes via
     # these same defaults (see `from_dict`).
     decline_allowed: bool = False

@@ -6,7 +6,8 @@ field map and the SSOT playtest loop can judge coverage field by field.
 
 Greenhouse is the browserless vendor: the sanctioned schema source is
 `boards-api.greenhouse.io/v1/boards/{slug}/jobs/{id}?questions=true`, one polite
-GET per posting (Lever/Ashby need a browser and land in browse.py, a later wave).
+GET per posting (Lever/Ashby need a browser and land in their per-vendor capture
+modules, engine/providers/{lever,ashby}/capture.py).
 The captured shape is the R-WT-8 C canonical field map (schema_version 2 adds
 the trailing W5 fields additively; every consumer built against schema_version
 1 keeps working via the new fields' defaults):
@@ -72,9 +73,9 @@ from engine.kernel.resolve import (  # noqa: F401
 
 # Vendor-native `type` string -> canonical FieldType. Covers the Greenhouse
 # HTTP-schema vocabulary (also what Lever's DOM controls and Ashby's own
-# _ASHBY_TYPE_MAP shim collapse into today, browse.py) PLUS the raw Ashby
-# ApiJobPosting type strings, so a future provider can call `normalize_type`
-# directly on either vocabulary without drift.
+# _ASHBY_TYPE_MAP shim collapse into today, in engine/providers/ashby/capture.py)
+# PLUS the raw Ashby ApiJobPosting type strings, so a future provider can call
+# `normalize_type` directly on either vocabulary without drift.
 _TYPE_MAP = {
     # Greenhouse HTTP schema / Lever DOM / post-collapse Ashby.
     "input_text": FieldType.TEXT,
@@ -106,11 +107,11 @@ def normalize_type(vendor_native: str) -> str:
     """Map a vendor-native `type` string onto the canonical `FieldType`.
 
     Reused across every capture path (Greenhouse HTTP schema, the raw Ashby
-    ApiJobPosting type before browse.py's own collapse, Lever's DOM-derived
-    types which already share the Greenhouse vocabulary) so downstream
-    consumers reason about ONE type system. `input_hidden` has no user-facing
-    control and returns "" (skip signal, not a `FieldType` member); an
-    unrecognised native falls back to `FieldType.TEXT` (mirrors
+    ApiJobPosting type before its collapse in engine/providers/ashby/capture.py,
+    Lever's DOM-derived types which already share the Greenhouse vocabulary) so
+    downstream consumers reason about ONE type system. `input_hidden` has no
+    user-facing control and returns "" (skip signal, not a `FieldType`
+    member); an unrecognised native falls back to `FieldType.TEXT` (mirrors
     `_role_for_type`'s fallback-to-textbox convention).
     """
     key = vendor_native or ""

@@ -511,8 +511,8 @@ def test_sponsorship_matcher_falls_back_to_legacy_scalar_key():
 
 
 def test_field_new_w5_columns_default_additively():
-    # Every existing construction site (browse.py, fixtures, older tests)
-    # keeps working: only the original 7 positional-ish args are required.
+    # Every existing construction site (the vendor capture modules, fixtures,
+    # older tests) keeps working: only the original 7 positional-ish args are required.
     fld = Field(key="k", label="L", type="input_text", required=True,
                options=[], source="questions",
                locator=Locator(role="textbox", name="L"))
@@ -527,7 +527,7 @@ def test_field_new_w5_columns_default_additively():
 
 def test_normalize_type_maps_greenhouse_and_lever_vocabulary():
     # This is also the vocabulary Lever's DOM controls and Ashby's own
-    # browse.py _ASHBY_TYPE_MAP shim collapse into (engine/browse.py).
+    # `_ASHBY_TYPE_MAP` collapse into (in `engine.providers.ashby.capture`).
     assert normalize_type("input_text") == FieldType.TEXT
     assert normalize_type("textarea") == FieldType.LONGTEXT
     assert normalize_type("multi_value_single_select") == FieldType.SINGLE_SELECT

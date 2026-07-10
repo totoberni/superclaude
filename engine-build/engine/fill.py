@@ -371,16 +371,17 @@ def _screenshot(page, vendor: str, job_id: str, ts: str, artifacts_dir) -> Path:
     return path
 
 
-# -- playwright lifecycle (delegated to browse.py; lazy import) ----------------
+# -- playwright lifecycle (delegated to kernel.capture_toolkit; lazy import) ----
 
 def _default_browser_page():
-    """The real headless-chromium page factory (imported lazily via browse.py).
+    """The real headless-chromium page factory (imported lazily via
+    kernel.capture_toolkit).
 
     Kept as a thin indirection so this module imports cleanly without playwright
     and only reaches for it when a real fill is actually invoked with no fake
     factory. Tests always pass a fake factory and never touch this.
     """
-    from engine.browse import _default_browser_page as real_factory
+    from engine.kernel.capture_toolkit import _default_browser_page as real_factory
     return real_factory()
 
 
@@ -494,7 +495,8 @@ def _capture(vendor: str, slug: str, job_id: str) -> FieldMap:
         return capture_greenhouse(slug, job_id)
     # Lever/Ashby need the browser; imported here so the module and the
     # --fieldmap-from-store path stay usable without playwright installed.
-    from engine.browse import capture_ashby, capture_lever
+    from engine.providers.ashby.capture import capture_ashby
+    from engine.providers.lever.capture import capture_lever
     if vendor == "lever":
         return capture_lever(slug, job_id)
     if vendor == "ashby":

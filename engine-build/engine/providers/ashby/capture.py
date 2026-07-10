@@ -11,24 +11,22 @@ a shape mismatch raises `CaptureShapeError` naming the exact selector/key that
 missed, NEVER a silently empty FieldMap.
 
 Only the ASHBY-specific capture/parse code moved here. Its transitive closure is
-DISJOINT from Lever's DOM parse (which stays in `engine.browse`): the Ashby path
-works on the intercepted graphql JSON, never the HTML tree, so it shares NONE of
-browse.py's label/text/tree helpers. Everything it does reach is generic
+DISJOINT from Lever's DOM parse (which lives in `engine.providers.lever.capture`):
+the Ashby path works on the intercepted graphql JSON, never the HTML tree, so it
+shares NONE of Lever's label/text/tree helpers. Everything it does reach is generic
 browser/capture INFRA already single-sourced in the kernel -- the browser page
 factory + timeout + response-url reader + `_dig` + `CaptureShapeError` + `_now`
 from `engine.kernel.capture_toolkit`, and the `Field`/`FieldMap`/`Locator`
 contracts + `_role_for_type` from `engine.kernel.contracts` -- so nothing is
 re-implemented and there is exactly one home for each name.
 
-`engine.browse` keeps a LAZY re-export shim (PEP 562 `__getattr__`) for every
-name moved here, so existing importers keep resolving them via `engine.browse`
-unchanged: `registry._capture_ashby` / `_apply_ashby`'s call-time
-`browse.capture_ashby` / `browse.ashby_application_url`, `engine.fill`'s call-time
-`from engine.browse import capture_ashby`, and the tests'
-`from engine.browse import ASHBY_SOURCE, capture_ashby`, `browse._parse_ashby`,
-and `monkeypatch.setattr(browse, "capture_ashby", ...)` seam.
+The `engine.browse` re-export shim that once forwarded these names was dissolved
+in Stage 4: every importer now reaches this module directly. `engine.fill._capture`
+imports `capture_ashby` from here, and the tests import `ASHBY_SOURCE`,
+`capture_ashby`, and `_parse_ashby` from `engine.providers.ashby.capture`; a test
+that needs to swap `capture_ashby` monkeypatches it on this module.
 
-LAZY-IMPORT INVARIANT (mirrors browse.py / base.py / registry.py): patchright is
+LAZY-IMPORT INVARIANT (mirrors base.py): patchright is
 imported lazily inside `_default_browser_page` (in the kernel), only when a real
 capture runs, so importing this module -- and importing `engine.providers.ashby`
 -- stays browser-free for the daily poller. Tests drive the capture path with a

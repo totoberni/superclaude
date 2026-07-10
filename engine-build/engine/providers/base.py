@@ -8,7 +8,7 @@ interceptor, human-cadence typing, and a DOM-sweep completeness check.
 LAZY-IMPORT INVARIANT (load-bearing, mirrors registry.py): the daily poller must
 never load the browser stack. `engine.run` imports `engine.providers` (the package
 __init__, which pulls in `registry` only), NOT this module, and this module never
-imports patchright or `engine.browse` at load time. Every browser reference here is
+imports patchright or any browser-capture module at load time. Every browser reference here is
 resolved through the page/locator/route objects the caller passes in; the only
 cross-module import (`engine.fill`, itself patchright-free) happens at CALL time
 inside the re-export wrappers.
@@ -20,9 +20,10 @@ FILL-PRIMITIVE ACCESS -- re-export via call-time wrappers, NOT a top-level
   them and are surfaced here by thin pass-through wrappers.
 - The wrappers look the target up on the `engine.fill` module object at call time,
   so they honour the monkeypatch seam (a test patching `engine.fill._safe_click`
-  is reflected here) exactly as `registry.py` looks up `browse.capture_ashby` at
-  call time. A top-level `from engine.fill import _safe_click` would bind the
-  reference at import and defeat that seam.
+  is reflected here), the same call-time-lookup discipline the vendor capture
+  plugins use for their own monkeypatch seams. A top-level
+  `from engine.fill import _safe_click` would bind the reference at import and
+  defeat that seam.
 - Importing `engine.fill` lazily (inside the wrappers) also keeps this module's own
   import cheap and dodges any import-order fragility with the providers package.
 

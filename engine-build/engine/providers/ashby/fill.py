@@ -2,7 +2,7 @@
 contract (`engine.providers.protocol.Provider`), W5.3.
 
 Ashby FOLLOWS GREENHOUSE, not Lever, on completeness. Like Greenhouse it has a
-REAL SCHEMA: `browse.capture_ashby` intercepts the non-user-graphql
+REAL SCHEMA: `engine.providers.ashby.capture.capture_ashby` intercepts the non-user-graphql
 `ApiJobPosting` form and maps its typed field definitions onto the FieldMap
 (`source="ashby_graphql"`), so `fieldmap.required_fields()` is an INDEPENDENT,
 authoritative required-field oracle. The live `base.sweep_required(page)` at
@@ -81,7 +81,7 @@ DOM sweep (`base.sweep_required`), the completeness arithmetic
 stands on (never a reimplementation).
 
 LAZY-IMPORT INVARIANT (mirrors greenhouse.py / lever.py / base.py / _registry.py):
-this module must not import patchright / `engine.browse` at load time so the
+this module must not import patchright / a browser-capture module at load time so the
 daily poller (which imports `engine.providers` eagerly: `_registry` plus the
 four plugin packages, all browser-free) stays browser-free. Kernel primitives
 are imported at module scope (browser-free by construction); the vendor capture
@@ -96,8 +96,9 @@ SEEDED FIELD-NAME REFERENCE (neonwatty/job-apply-plugin, MIT; W5 spec section
 `_systemfield_email`, `_systemfield_phone`, and the resume file input
 `#_systemfield_resume`; custom questions carry a `custom_*` path. This module
 does NOT hardcode those as selectors: the per-field `fieldmap.Field.locator`
-(role + accessible name, derived from the graphql schema by `browse._parse_
-ashby`) is authoritative and always preferred (`base._locate` resolves it); the
+(role + accessible name, derived from the graphql schema by
+`engine.providers.ashby.capture._parse_ashby`) is authoritative and always
+preferred (`base._locate` resolves it); the
 resume input is found by its key stem through the shared `kernel.fill_toolkit._locate_file_
 input` (the `_systemfield_resume` key yields a "resume" token). The neonwatty
 paths are kept as a REFERENCE/FALLBACK note only; no code path consults them.

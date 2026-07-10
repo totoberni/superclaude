@@ -61,7 +61,7 @@ the `FillReport` dataclass -- is the SAME shared base/fill spine both providers
 stand on (never a reimplementation).
 
 LAZY-IMPORT INVARIANT (mirrors greenhouse.py / base.py / _registry.py): this
-module must not import patchright / `engine.browse` at load time so the daily
+module must not import patchright / a browser-capture module at load time so the daily
 poller (which imports `engine.providers` eagerly: `_registry` plus the four
 plugin packages, all browser-free) stays browser-free. Kernel primitives are
 imported at module scope (browser-free by construction); the vendor capture
@@ -77,7 +77,8 @@ Lever's stable native submission names are `name`, `email`, `phone`,
 demographic block, and the resume file input `input[type=file][name=resume]`.
 This module does NOT hardcode those names as selectors: the per-field
 `fieldmap.Field.locator` (role + accessible name, captured from the live DOM by
-`browse._parse_lever`) is authoritative and always preferred (`base._locate`
+`engine.providers.lever.capture._parse_lever`) is authoritative and always
+preferred (`base._locate`
 resolves it). The workpls names are kept here as a REFERENCE/FALLBACK note only,
 for a human debugging a selector miss offline; no code path consults them.
 """

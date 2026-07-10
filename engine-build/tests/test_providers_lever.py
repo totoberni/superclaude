@@ -7,13 +7,15 @@ harness mirroring the representative apply DOM at
 server-rendered NATIVE <select>, an EEO/demographic decline field, an optional
 marketing checkbox, a REQUIRED consent checkbox = the hCaptcha-hazard control,
 and a resume file input). The field map comes from that fixture parsed through
-the real (offline) `browse._parse_lever` -- Lever has NO custom-question schema,
+the real (offline) `engine.providers.lever.capture._parse_lever` -- Lever has NO
+custom-question schema,
 so the DOM IS the schema. The SSOT is a hand-built FAKE (no owner PII). A real
 live-browser HAR capture against the real DOM is a SEPARATE later step (the
 W5.2/W5.3 fixture-validation promise in providers/base.py); this suite proves
 the LOGIC offline, matching test_providers_base.py / test_providers_greenhouse.py.
 """
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -22,16 +24,33 @@ import pytest
 # patches socket.socket): lever.py imports engine.fill lazily at call time, and
 # a FIRST import under the socket patch would drag in ssl (class SSLSocket(
 # socket)) and fail. Mirrors test_providers_greenhouse.py.
+import importlib
+
 import engine.fill  # noqa: F401
-from engine import browse
-from engine.fieldmap import Field, FieldMap, Locator
+# `engine.providers.lever.capture` is a submodule shadowed at package scope by the
+# `capture` Provider callable, so reach the module object via importlib (the same
+# sys.modules / import_module seam the package NAME NOTE documents).
+lever_capture = importlib.import_module("engine.providers.lever.capture")
+from engine.fieldmap import Field, FieldMap, Locator, MANUAL_ONLY
 from engine.fill import FillAssets, FillSafetyError
+from engine.kernel.capture_toolkit import CaptureShapeError
 from engine.profile_map import profile_from_real_ssot
 from engine.providers import _registry, lever, protocol
+from engine.providers.lever.capture import LEVER_SOURCE, capture_lever
 from engine.ssot import SSOT
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "providers" / "lever"
 _PINNED = "2026-07-03T00:00:00+00:00"
+
+# DELIBERATE per-vendor duplication (owner-ratified 2026-07-10): vendor test files
+# stay self-contained so the per-vendor development loops never co-edit a shared
+# file (DRY exception: decoupling outweighs consolidation here). A stale copy is
+# self-catching: the schema-compliance assert (list(field.keys()) == _FIELD_KEYS)
+# fails loudly on drift. Do not consolidate.
+_TOP_KEYS = ["vendor", "posting_id", "schema_version", "captured_at", "fields"]
+_FIELD_KEYS = ["key", "label", "type", "required", "options", "source",
+               "locator", "step_index", "conditional_on", "decline_allowed",
+               "max_length", "accept_types", "norm_type", "section"]
 
 _SPONSOR_LABEL = ("Will you now or in the future require visa sponsorship for "
                   "employment?")
@@ -49,7 +68,7 @@ _SAFE_REQUIRED_LABELS = ("Full name", "Email", "Resume / CV", _SPONSOR_LABEL)
 def _fieldmap() -> FieldMap:
     """The full fixture field map, parsed through the REAL offline DOM parser."""
     html = (_FIXTURES / "dom.html").read_text()
-    return browse._parse_lever(html, "fauxcorp", "9001", now=lambda: _PINNED)
+    return lever_capture._parse_lever(html, "fauxcorp", "9001", now=lambda: _PINNED)
 
 
 def _fieldmap_without(*keys: str) -> FieldMap:
@@ -537,3 +556,184 @@ def test_fill_report_reuses_the_existing_fillreport_dataclass(tmp_path):
     blob = report.to_dict()
     assert blob["vendor"] == "lever"
     assert blob["company"] == "9001"      # posting_id fallback (no company slug)
+
+
+# =============================================================================
+# capture path: lever server-rendered DOM parse (offline, fake-driven)
+# =============================================================================
+# No playwright, no network: the capture path is driven through a fake browser
+# factory over a server-rendered lever apply-page DOM fixture. The autouse
+# no-network guard is satisfied throughout. Schema compliance, source tags, and
+# coverage() interop are asserted on the produced FieldMaps; shape drift is
+# proven to raise CaptureShapeError rather than yield an empty map.
+#
+# DELIBERATE per-vendor duplication (owner-ratified 2026-07-10): vendor test files
+# stay self-contained so the per-vendor development loops never co-edit a shared
+# file (DRY exception: decoupling outweighs consolidation here). The fake page
+# below will diverge as each vendor's capture path evolves; a shared copy would
+# become a co-edit surface. Do not consolidate.
+
+
+class _FakePage:
+    """A stand-in for a Playwright page: records the goto and serves the
+    server-rendered fixture DOM via content(). Lever's capture path reads
+    content() only; it drives no response handlers (unlike the ashby GraphQL
+    fake, whose page fires scripted responses into on("response") listeners)."""
+
+    def __init__(self, *, html=""):
+        self._html = html
+        self.goto_calls = []
+
+    def set_default_timeout(self, ms):
+        pass
+
+    def goto(self, url, **kwargs):
+        self.goto_calls.append((url, kwargs))
+
+    def content(self):
+        return self._html
+
+
+def _factory_for(page):
+    @contextlib.contextmanager
+    def factory():
+        yield page
+    return factory
+
+
+def test_lever_capture_parses_apply_dom(lever_apply_html):
+    page = _FakePage(html=lever_apply_html)
+    fm = capture_lever("globex", "req-77", _factory_for(page), now=lambda: _PINNED)
+
+    assert fm.vendor == "lever"
+    assert fm.posting_id == "req-77"
+    assert fm.captured_at == _PINNED
+    assert len(page.goto_calls) == 1
+    assert page.goto_calls[0][0] == "https://jobs.lever.co/globex/req-77/apply"
+
+    by_key = {f.key: f for f in fm.fields}
+    # fixed base fields (name, email, phone, org, urls, resume upload)
+    assert set(by_key) >= {"name", "email", "phone", "org",
+                           "urls[LinkedIn]", "urls[GitHub]", "resume"}
+    assert by_key["name"].label == "Full name"
+    assert by_key["name"].required is True
+    assert by_key["name"].source == LEVER_SOURCE
+    assert by_key["name"].type == "input_text"
+    assert by_key["phone"].required is False
+    assert by_key["resume"].type == "input_file"
+    assert by_key["resume"].required is True
+
+    # custom card: a required select carrying its enumerated options
+    select = by_key["cards[7f3a][field0]"]
+    assert select.label == "Years of professional experience"
+    assert select.type == "multi_value_single_select"
+    assert select.locator.role == "combobox"
+    assert select.required is True
+    assert select.options == ["0-2 years", "3-5 years", "6+ years"]
+
+    # custom card: a required freeform textarea (no options)
+    textarea = by_key["cards[7f3a][field1]"]
+    assert textarea.label == "Why do you want to work at Globex?"
+    assert textarea.type == "textarea"
+    assert textarea.required is True
+    assert textarea.options == []
+
+
+def test_lever_capture_dedups_hidden_base_field_mirrors(lever_apply_html):
+    """Round-3 live finding: the apply page renders every base field TWICE,
+    an invisible mirror carrying the true submission `name` with no label,
+    plus a labeled visible twin. The parser must collapse each duplicate
+    pair back into ONE logical Field, keeping the human label, OR-ing
+    `required` across the pair, and preferring the richer-source `type`."""
+    page = _FakePage(html=lever_apply_html)
+    fm = capture_lever("globex", "req-77", _factory_for(page), now=lambda: _PINNED)
+
+    # exactly one Field per logical base key: 7 base + 2 custom cards + 1
+    # inline-text consent checkbox = 10, never 17 raw duplicated entries
+    keys = [f.key for f in fm.fields]
+    assert len(keys) == len(set(keys)) == 10
+
+    by_key = {f.key: f for f in fm.fields}
+    assert by_key["name"].label == "Full name"
+    assert by_key["email"].label == "Email"
+    assert by_key["phone"].label == "Phone"
+    assert by_key["org"].label == "Current company"
+    assert by_key["urls[LinkedIn]"].label == "LinkedIn URL"
+    assert by_key["urls[GitHub]"].label == "GitHub URL"
+    assert by_key["resume"].label == "Resume / CV"
+
+    # `required` is the OR of the hidden mirror and its visible twin: the
+    # hidden `org` mirror is required even though the visible one is not
+    assert by_key["org"].required is True
+    # the hidden `resume` mirror is NOT required, but its visible twin is
+    assert by_key["resume"].required is True
+    # type comes from the richer source: the file-upload widget outranks
+    # the hidden mirror's default input_text
+    assert by_key["resume"].type == "input_file"
+
+
+def test_lever_capture_empty_label_falls_back_to_enclosing_text(lever_apply_html):
+    """Round-3 live finding: a consent checkbox's wording sits inline inside
+    its own <label>, not in a `.application-label` div. The captured field
+    must never carry an empty label (item 2)."""
+    page = _FakePage(html=lever_apply_html)
+    fm = capture_lever("globex", "req-77", _factory_for(page), now=lambda: _PINNED)
+
+    by_key = {f.key: f for f in fm.fields}
+    consent = by_key["consent[marketing]"]
+    assert consent.label == (
+        "I would like to receive occasional updates about new roles.")
+    assert consent.type == "boolean"
+    assert consent.required is False
+    for fld in fm.fields:
+        assert fld.label != ""
+
+
+def test_lever_custom_checkbox_with_no_extractable_text_falls_back_to_key():
+    """When NEITHER a label element, aria-label, placeholder, nor any
+    enclosing text can be found, the field falls back to a descriptive
+    `(unlabeled: <key>)` label rather than an empty string."""
+    html = (
+        "<html><body><form>"
+        "<ul class=\"application-fields\">"
+        "<li class=\"application-field\">"
+        "<label class=\"application-label\">Full name</label>"
+        "<input type=\"text\" name=\"name\" required>"
+        "</li>"
+        "</ul>"
+        "<div class=\"application-question\">"
+        "<input type=\"checkbox\" name=\"consent[opt_in]\">"
+        "</div>"
+        "</form></body></html>")
+    page = _FakePage(html=html)
+    fm = capture_lever("globex", "req-99", _factory_for(page))
+
+    by_key = {f.key: f for f in fm.fields}
+    assert by_key["consent[opt_in]"].label == "(unlabeled: consent[opt_in])"
+
+
+def test_lever_capture_schema_compliant_and_coverage_interop(
+        lever_apply_html, real_ssot_path):
+    page = _FakePage(html=lever_apply_html)
+    fm = capture_lever("globex", "req-77", _factory_for(page), now=lambda: _PINNED)
+
+    blob = fm.to_dict()
+    assert list(blob.keys()) == _TOP_KEYS
+    for field in blob["fields"]:
+        assert list(field.keys()) == _FIELD_KEYS
+
+    ssot = SSOT.load(real_ssot_path)
+    report = fm.coverage(ssot, profile_from_real_ssot(ssot))
+    # required: name, email, org, resume (base) + select + textarea (custom)
+    # = 6 (org is required post-dedup: its hidden mirror carries `required`
+    # even though the visible twin does not)
+    assert report.required_total == 6
+    by_key = {f.key: f for f in report.fields}
+    assert by_key["resume"].status == MANUAL_ONLY
+    assert isinstance(report.summary_line(), str)
+
+
+def test_lever_raises_when_form_absent():
+    page = _FakePage(html="<html><body><p>This position is closed.</p></body></html>")
+    with pytest.raises(CaptureShapeError, match="no recognizable form fields"):
+        capture_lever("globex", "req-77", _factory_for(page))

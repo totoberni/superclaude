@@ -10,7 +10,8 @@ run._collect_fieldmap). These tests pin two things:
 2. The three refactored call sites produce results byte-identical to the
    pre-refactor per-vendor branches (golden values), preserving every signature,
    URL, dispatch target, and error path. The lazy browser-vendor references are
-   verified to keep `engine.run` free of playwright / browse at import.
+   verified to keep `engine.run` free of playwright and of any reintroduced
+   `engine.browse` at import.
 """
 
 import subprocess
@@ -224,10 +225,11 @@ def test_collect_fieldmap_unsupported_vendor_preserves_error(vendor):
 
 def test_importing_run_does_not_import_browse_or_browser_driver():
     # engine.run imports the registry at top level; the registry must keep the
-    # browser-vendor refs lazy so the daily poll path never loads browse or the
-    # browser driver (patchright, or the legacy playwright name). Checked in a
-    # fresh interpreter because sibling tests in this session import engine.browse
-    # directly.
+    # browser-vendor refs lazy so the daily poll path never loads a browser-capture
+    # module or the browser driver (patchright, or the legacy playwright name).
+    # Checked in a fresh interpreter so in-process module caching cannot mask the
+    # check; the `engine.browse` probe below is a tripwire against reintroducing
+    # that module (dissolved in Stage 4).
     script = (
         "import sys, engine.run; "
         "print('browse' if 'engine.browse' in sys.modules else 'no-browse'); "

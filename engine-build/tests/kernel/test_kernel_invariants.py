@@ -42,10 +42,12 @@ from pathlib import Path
 
 import pytest
 
+from engine.providers.lever.capture import capture_lever
+
 # Pre-warm `ssl` at collection time. The suite's autouse `no_network` fixture
 # (tests/conftest.py) replaces `socket.socket` with a plain function for the
 # duration of every test. If `ssl` is imported for the FIRST time DURING a test
-# (as the shim-identity test would, via engine.browse/engine.fetch), ssl.py's
+# (as the shim-identity test would, via engine.fetch), ssl.py's
 # `class SSLSocket(socket)` subclasses that function and dies with a spurious
 # `TypeError`. Importing `ssl` here -- during collection, before any per-test
 # fixture runs and while `socket.socket` is still the real class -- caches the
@@ -202,7 +204,6 @@ _FORBIDDEN_PREFIXES = (
     "engine.draft",
     "engine.fill",
     "engine.fieldmap",
-    "engine.browse",
     "engine.notify",
     "engine.store",
     "engine.queue_sm",
@@ -424,7 +425,6 @@ def test_shim_paths_are_identity_reexports():
     import engine.kernel.fill_toolkit
     import engine.providers.base
     import engine.kernel.never_send
-    import engine.browse
     import engine.kernel.capture_toolkit
     import engine.fetch
 
@@ -436,8 +436,6 @@ def test_shim_paths_are_identity_reexports():
             is engine.kernel.never_send.install_never_send)
     assert engine.providers.base.type_human is engine.kernel.fill_toolkit.type_human
     assert engine.fill._readback is engine.kernel.fill_toolkit._readback
-    assert (engine.browse.CaptureShapeError
-            is engine.kernel.capture_toolkit.CaptureShapeError)
     # UA is a str constant, not a class/function: the re-export contract is VALUE
     # equality (a string's identity across a `from ... import` is a CPython
     # interning implementation detail, not part of the contract), so `==`.
@@ -490,3 +488,24 @@ def test_posting_vendor_extra_seam():
         "ashby_form_secondary_locations": ["NYC", "SF"],
         "lever_workplace_type": 3,
     }
+
+
+def test_invoking_default_factory_without_patchright_raises_clear_error():
+    """A kernel ``capture_toolkit`` invariant: the default browser factory fails
+    with a clear, actionable install error when patchright is absent (never a
+    bare ImportError). Invoked via ``capture_lever`` with no browser_factory,
+    which routes through the kernel default factory."""
+    try:
+        import patchright  # noqa: F401
+    except ImportError:
+        patchright_present = False
+    else:
+        patchright_present = True
+
+    if patchright_present:
+        pytest.skip("patchright is installed here; the not-installed error path "
+                    "cannot be exercised in this venv")
+    # No browser_factory -> the default factory imports patchright lazily and
+    # must raise a clear, actionable install error, not a bare ImportError.
+    with pytest.raises(RuntimeError, match=r"pip install patchright==1\.61\.\*"):
+        capture_lever("globex", "req-77")

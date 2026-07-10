@@ -33,7 +33,7 @@ LIGHT: no browser module is loaded. `capture`/`fill` are registered as LAZY
 path-based callables (`lazy_call`, below) that import + invoke the plugin function
 only when CALLED, so (1) a monkeypatched plugin function is honoured at call time
 and (2) importing the registry never forces a browser driver. This module imports
-NO pipeline module (`engine.discover`, `engine.fieldmap`, `engine.browse`,
+NO pipeline module (`engine.discover`, `engine.fieldmap`,
 `engine.fill`).
 
 Field parity with `engine.providers.registry.ProviderSpec` is deliberate so the

@@ -1,14 +1,15 @@
 """Generic, vendor-agnostic browser/HTML capture primitives (W5.1 kernel).
 
-Moved verbatim from `engine.browse` (the Patchright lifecycle + the minimal
-stdlib HTML tree) plus `UA` from `engine.fetch` (W5.1 stage 5): the shared
-plumbing every vendor's browser-based field-map capture (ashby graphql
+Moved verbatim from the former `engine.browse` shim (the Patchright lifecycle +
+the minimal stdlib HTML tree) plus `UA` from `engine.fetch` (W5.1 stage 5): the
+shared plumbing every vendor's browser-based field-map capture (ashby graphql
 interception, lever DOM parse, and future vendor plugins) and every vendor's
-HTTP capture builds on. Vendor-specific parsing (ashby/lever field mapping)
-stays in `engine.browse` for now (Stage 2 moves it into per-vendor plugin
-packages) and reaches this module through `engine.browse`'s re-export shim.
+HTTP capture builds on. Vendor-specific parsing (ashby/lever field mapping) now
+lives in the per-vendor plugin packages (`engine.providers.ashby.capture`,
+`engine.providers.lever.capture`), which import these primitives straight from
+this kernel module; the `engine.browse` re-export shim was dissolved in Stage 4.
 
-Import guard (unchanged from `engine.browse`): this module imports cleanly
+Import guard: this module imports cleanly
 WITHOUT the browser driver installed (stdlib + kernel only). Patchright is
 imported lazily inside `_require_patchright`, only when a capture is actually
 invoked with the default (real) browser factory.

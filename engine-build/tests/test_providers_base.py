@@ -882,7 +882,7 @@ def test_reexported_locate_and_upload_delegate_to_fill(monkeypatch):
 
 def test_importing_base_does_not_load_browser_stack():
     # engine.providers.base is the fill-primitive re-export home; importing it must
-    # NOT pull in the browser stack (browse or patchright) -- that is the load-
+    # NOT pull in the browser stack (a browser-capture module or patchright) -- that is the load-
     # bearing invariant keeping the daily poller browser-free. base.py's own
     # wrappers still import engine.fill lazily at call time, so engine.fill must
     # not be loaded by the import transit either: since the Stage-4 repoint the

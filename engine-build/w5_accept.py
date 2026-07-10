@@ -1,7 +1,7 @@
 """W5 live fill-acceptance harness: capture -> resolve from SSOT -> fill a LIVE throwaway apply page,
 with an independent network audit proving ZERO application-submit POSTs completed.
 
-The never-send guard is the engine's own (install_never_send via browse._default_browser_page).
+The never-send guard is the engine's own (install_never_send via kernel.capture_toolkit._default_browser_page).
 The audit is INDEPENDENT: it re-applies base._is_submit_request to every request/response the
 context saw, so a submit that slipped past the guard would show as a completed submit POST.
 
@@ -15,7 +15,7 @@ from engine.profile_map import profile_from_real_ssot
 from engine.providers import greenhouse, lever, ashby, workable
 from engine.providers.base import _is_submit_request
 from engine.fill import FillAssets
-from engine import browse
+from engine.kernel import capture_toolkit
 
 VENDOR, SLUG, JOB_ID, APPLY_URL = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 PROV = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby,
@@ -47,7 +47,7 @@ try:
 
     audit = {"requests": 0, "posts": 0, "completed_submits": [], "aborted_submits": []}
     result["stage"] = "browser"
-    with browse._default_browser_page() as page:
+    with capture_toolkit._default_browser_page() as page:
         ctx = page.context
 
         def on_req(r):

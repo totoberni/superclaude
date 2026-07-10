@@ -57,7 +57,7 @@ FIELD-DRIVING SPECIFICS (W5.4 spec PART B):
 - boolean / checkbox / dropdown / multiple_choice / group -> HUMAN HAND-OFF.
 
 LAZY-IMPORT INVARIANT (mirrors greenhouse.py / lever.py / base.py / _registry.py):
-this module must not import patchright / `engine.browse` at load time so the daily
+this module must not import patchright / a browser-capture module at load time so the daily
 poller (which imports `engine.providers` eagerly: `_registry` plus the four
 plugin packages, all browser-free) stays browser-free. Kernel primitives are
 imported at module scope (browser-free by construction). Dataclasses come

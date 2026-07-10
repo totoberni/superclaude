@@ -29,7 +29,7 @@ reachable via `sys.modules` / `importlib.import_module`, which is exactly how th
 members (never via the package attribute).
 
 Kept LIGHT (matching the old module's import cost): importing this package loads
-NO patchright / `engine.browse`; the fill body reaches the kernel's private
+NO patchright / browser-capture module; the fill body reaches the kernel's private
 helpers (`kernel.resolve._completeness`, the `kernel.fill_toolkit` upload
 primitives) and the capture body the `engine.fieldmap` seam via CALL-TIME
 imports -- this package has NO `engine.fill` import at any scope. It

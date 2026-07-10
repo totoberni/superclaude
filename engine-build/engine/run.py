@@ -226,7 +226,8 @@ def _capture_fieldmaps(config, queue, store, discovered_index, ssot, profile,
     attaching a one-line coverage summary to each (W4 3.3).
 
     OFF by default (all-zero dict); operator-triggered only. Greenhouse is
-    browserless; ashby/lever route through browse.py (lazy playwright import).
+    browserless; ashby/lever route through their per-vendor capture modules
+    (engine/providers/{ashby,lever}/capture.py; lazy playwright import).
     The cache key is vendor+posting_id+updated_at, so a posting whose board
     updated_at moved is recaptured, not reused. Every item is fail-soft: a bad
     capture (including a browser/playwright failure) is counted and never aborts
@@ -263,7 +264,8 @@ _FIELDMAP_VENDORS = ("greenhouse", "ashby", "lever")
 def _fieldmap_targets(queue, discovered_index, cap) -> list[tuple]:
     """Vendor-spread top-`cap` visible automatable capture-supported items.
 
-    All three tier-1 vendors are eligible now that browse.py lands; greenhouse
+    All three tier-1 vendors are eligible now that browser capture landed (since
+    dissolved into the per-vendor capture modules); greenhouse
     is browserless, ashby/lever go through the headless browser. A plain
     global top-N (score order across ALL vendors) previously starved ashby/
     lever whenever greenhouse's higher-scoring items filled the whole cap, so
@@ -336,7 +338,8 @@ def _collect_fieldmap(vendor: str, posting, opener):
     """Dispatch to the vendor's field-map collector.
 
     Greenhouse is a browserless HTTP GET (fetch.py opener conventions);
-    ashby/lever need a headless browser and live in browse.py, imported LAZILY
+    ashby/lever need a headless browser and live in their per-vendor capture
+    modules (engine/providers/{ashby,lever}/capture.py), imported LAZILY
     so the daily timer run never imports playwright. Browser capture stays
     operator-triggered (only reached under --capture-fieldmaps), never
     default-on.
