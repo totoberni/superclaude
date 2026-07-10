@@ -19,13 +19,8 @@ from pathlib import Path
 
 import pytest
 
-# Import engine.fill at module load (before the autouse no_network fixture
-# patches socket.socket): greenhouse.py's fill()/resolve_values() import it
-# lazily at call time, and a FIRST import under the socket patch would drag
-# in ssl (class SSLSocket(socket)) and fail. Mirrors test_providers_base.py.
-import engine.fill  # noqa: F401
 from engine.fieldmap import Field, FieldMap, Locator, parse_greenhouse
-from engine.fill import FillAssets, FillSafetyError
+from engine.kernel.contracts import FillAssets, FillSafetyError
 from engine.profile_map import profile_from_real_ssot
 from engine.providers import base, greenhouse, protocol
 from engine.providers._registry import PROVIDERS
@@ -251,7 +246,7 @@ class _FakeFileInput:
         whether Greenhouse's own React widget has rendered a confirmation
         yet (`_rendered_confirmed` models that separate, later signal).
         `script` is ignored -- this fake only ever receives the one
-        `el.files.length` probe `engine.fill._upload_attached` sends."""
+        `el.files.length` probe `engine.kernel.fill_toolkit._upload_attached` sends."""
         return 1 if self.uploaded else 0
 
     def locator(self, css):
@@ -944,7 +939,7 @@ def test_fill_raises_on_navigation_during_fill(tmp_path):
 
 
 def test_fill_report_reuses_the_existing_fillreport_dataclass(tmp_path):
-    from engine.fill import FillReport
+    from engine.kernel.contracts import FillReport
 
     fieldmap = _fieldmap()
     values = _resolved_values(fieldmap, tmp_path=tmp_path)

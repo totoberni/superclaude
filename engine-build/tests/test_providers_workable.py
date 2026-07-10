@@ -21,14 +21,9 @@ from pathlib import Path
 
 import pytest
 
-# Import engine.fill at module load (before the autouse no_network fixture patches
-# socket.socket): workable.py imports engine.fill lazily at call time, and a FIRST
-# import under the socket patch would drag in ssl (class SSLSocket(socket)) and
-# fail. Mirrors test_providers_lever.py / test_providers_greenhouse.py.
-import engine.fill  # noqa: F401
 import engine.fieldmap as fieldmap
 from engine.fieldmap import FieldType, Section, capture_workable, parse_workable
-from engine.fill import FieldValue, FillAssets, FillSafetyError, ResolvedValues
+from engine.kernel.contracts import FieldValue, FillAssets, FillSafetyError, ResolvedValues
 from engine.profile_map import profile_from_real_ssot
 from engine.providers import _registry, base, protocol, workable
 from engine.ssot import SSOT

@@ -12,29 +12,29 @@ from pathlib import Path
 
 import pytest
 
-from engine.fill import (
+from engine.fill import fill_form, default_assets, _resolve_photo, publish_evidence  # S5b-dying legacy block (fill_form harness + evidence CLI cluster)
+from engine.kernel.contracts import (
+    Field,
+    FieldMap,
     FillAssets,
     FillReport,
     FillSafetyError,
+    Locator,
     ResolvedValues,
-    _is_cover_letter_field,
-    _is_photo_field,
+)
+from engine.kernel.fill_toolkit import (
     _locate_file_input,
-    _resolve_photo,
     _safe_click,
     _safe_upload,
-    default_assets,
-    fill_form,
-    publish_evidence,
+)
+from engine.kernel.resolve import (
+    _DECLINE_SECTIONS,
+    _is_cover_letter_field,
+    _is_photo_field,
     resolve_values,
 )
-from engine.fieldmap import (
-    Field,
-    FieldMap,
-    Locator,
-    _DECLINE_SECTIONS,
-    _SECTION_FOR_SOURCE,
-)
+from engine.providers.greenhouse.capture import _SECTION_FOR_SOURCE
+from engine.providers.greenhouse.resolve import GREENHOUSE_WIDGET_RESOLVER
 from engine.profile_map import profile_from_real_ssot
 from engine.ssot import SSOT
 
@@ -669,7 +669,10 @@ def test_resume_text_and_cover_letter_text_fill_and_form_completes(tmp_path):
                required=False),
     )
     assets = _make_assets(tmp_path)
-    values = resolve_values(fm, ssot, {}, assets=assets)
+    # greenhouse-flavored: resume_text/cover_letter_text are Greenhouse portal
+    # key-text widgets that only GREENHOUSE_WIDGET_RESOLVER resolves.
+    values = resolve_values(fm, ssot, {}, assets=assets,
+                            vendor_resolver=GREENHOUSE_WIDGET_RESOLVER)
 
     assert values.values["resume_text"] == (
         "Ada Lovelace, mathematician and writer.")
@@ -700,7 +703,7 @@ def test_resume_text_skipped_missing_when_ssot_lacks_the_value():
 
 
 def _fv(key, label, type_, value, *, role="textbox"):
-    from engine.fill import FieldValue
+    from engine.kernel.contracts import FieldValue
     return FieldValue(key=key, label=label, type=type_,
                       locator=Locator(role=role, name=label), value=value)
 
@@ -1148,7 +1151,10 @@ def test_hidden_portal_widgets_excluded_from_denominator(
         _field("longitude", "Location", role="textbox"),   # pure portal telemetry
         _field("latitude", "Location", role="textbox"),
     )
-    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
+    # greenhouse-flavored: longitude/latitude are Greenhouse hidden portal
+    # telemetry widgets that only GREENHOUSE_WIDGET_RESOLVER classifies as hidden.
+    values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets,
+                            vendor_resolver=GREENHOUSE_WIDGET_RESOLVER)
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
                        fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
@@ -1366,7 +1372,7 @@ def test_readback_never_confirms_a_blank_intended_value_even_if_control_reads_bl
     # empty text), so "both sides are blank" is not a match, it is "nothing
     # happened". Exercised at the `_readback` function boundary directly so
     # the guard is proven to apply to every provider sharing it.
-    from engine.fill import _readback
+    from engine.kernel.fill_toolkit import _readback
 
     blank_control = _FakeLocator()          # input_value() defaults to ""
     actual, ok = _readback(blank_control, "   ")
@@ -1554,7 +1560,7 @@ def _report(*, vendor, company, fillable_total, filled, required_unfilled,
 # =============================================================================
 
 def _upload_fv(key, label, asset, value, *, role="button"):
-    from engine.fill import FieldValue
+    from engine.kernel.contracts import FieldValue
     return FieldValue(key=key, label=label, type="input_file",
                       locator=Locator(role=role, name=label), value=value,
                       asset=asset, upload_reason="test")

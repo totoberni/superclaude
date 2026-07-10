@@ -20,19 +20,14 @@ from pathlib import Path
 
 import pytest
 
-# Import engine.fill at module load (before the autouse no_network fixture
-# patches socket.socket): lever.py imports engine.fill lazily at call time, and
-# a FIRST import under the socket patch would drag in ssl (class SSLSocket(
-# socket)) and fail. Mirrors test_providers_greenhouse.py.
 import importlib
 
-import engine.fill  # noqa: F401
 # `engine.providers.lever.capture` is a submodule shadowed at package scope by the
 # `capture` Provider callable, so reach the module object via importlib (the same
 # sys.modules / import_module seam the package NAME NOTE documents).
 lever_capture = importlib.import_module("engine.providers.lever.capture")
 from engine.fieldmap import Field, FieldMap, Locator, MANUAL_ONLY
-from engine.fill import FillAssets, FillSafetyError
+from engine.kernel.contracts import FillAssets, FillSafetyError
 from engine.kernel.capture_toolkit import CaptureShapeError
 from engine.profile_map import profile_from_real_ssot
 from engine.providers import _registry, lever, protocol
@@ -546,7 +541,7 @@ def test_fill_raises_on_navigation_during_fill(tmp_path):
 
 
 def test_fill_report_reuses_the_existing_fillreport_dataclass(tmp_path):
-    from engine.fill import FillReport
+    from engine.kernel.contracts import FillReport
 
     fieldmap = _fieldmap_without(_CONSENT_KEY)
     values = _resolved_values(fieldmap, tmp_path=tmp_path)
