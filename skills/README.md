@@ -1,6 +1,6 @@
 # Superclaude Skill System: Reference
 
-The skills under `~/.claude/skills/*/SKILL.md` (70 of them) are the invocable capability layer of superclaude. Each skill is a self-contained protocol, a slash command a user types (`/converge`) and, by default, a capability the model can select autonomously through the Skill tool. This campaign added one property to the whole fleet: every skill is now loop-composable, and a small set of them forms a convergence engine that iterates an artefact through adversarial review rounds to an independent seal. This file is the deep mechanical reference. The entry-point summary, worked examples, and the "which skill do I reach for" tour live in the global `~/.claude/README.md`; this file does not repeat them. It owns the mechanics: the frontmatter contract, the two-token protocol, the bar levels, the engine bindings, the reviewer-resolution table, the wf-* family, and how a skill is converted to a workflow skill.
+The skills under `~/.claude/skills/*/SKILL.md` (72 of them) are the invocable capability layer of superclaude. Each skill is a self-contained protocol, a slash command a user types (`/converge`) and, by default, a capability the model can select autonomously through the Skill tool. This campaign added one property to the whole fleet: every skill is now loop-composable, and a small set of them forms a convergence engine that iterates an artefact through adversarial review rounds to an independent seal. This file is the deep mechanical reference. The entry-point summary, worked examples, and the "which skill do I reach for" tour live in the global `~/.claude/README.md`; this file does not repeat them. It owns the mechanics: the frontmatter contract, the two-token protocol, the bar levels, the engine bindings, the reviewer-resolution table, the wf-* family, and how a skill is converted to a workflow skill.
 
 ## Skill anatomy
 
@@ -96,7 +96,7 @@ Every resolved dispatch carries the four-part dispatch contract (`_shared/dispat
 
 ## The wf-* family
 
-Eight thin bindings that specialise `/converge` for a concrete artefact and cadence. Each PRINTS its ready-to-paste block and stops; none self-arms (DEC-R2). Three are flagship producing loops (B1); five are scheduled monitors and gardeners (B3, B4, B5).
+Eight thin bindings that specialise `/converge` for a concrete artefact and cadence, plus `wf-auto`, a ninth entry that configures the autonomous driver rather than binding one artefact to converge's producer/reviewer slots (see `## The autonomous driver` below). Each PRINTS its ready-to-paste block or launch command and stops; none self-arms (DEC-R2). Three are flagship producing loops (B1); five are scheduled monitors and gardeners (B3, B4, B5).
 
 | Skill | Binding | Purpose | Invocation |
 |---|---|---|---|
@@ -108,8 +108,19 @@ Eight thin bindings that specialise `/converge` for a concrete artefact and cade
 | `wf-hpc-watch` | B3 | Poll a long-running SLURM job read-only; act only on a RUNNING to DONE or FAILED transition; seal on a fresh terminal COMPLETED (plus an optional output audit). | `/wf-hpc-watch <job-id|job-name> [--interval 15m]` |
 | `wf-nb-watch` | B3 | Watch a notebook run through `nb-monitor`'s progress file; on BROKEN or HUNG dispatch a fix round and re-run; seal on a clean completion plus a fresh reviewer. | `/wf-nb-watch <notebook-path> [--interval 10m]` |
 | `wf-hygiene` | B4 | Gardener: a scheduled read-only pass over session health, memory-DB score, and checkpoint staleness. No artefact, no round cap, no SEAL; flags for the human only. | `/wf-hygiene [--interval daily]` |
+| `wf-auto` | n/a (driver config) | Configure the standalone autonomous driver (`converge_auto.py`) for any artefact class: validate the loop config, materialise the `/review-dispatch` reviewer resolution into `loop.json`, and print the launch command. Never launches (DEC-A1); the owner's one consent act is running the printed command. | `/wf-auto <target> --class <artifact-class> [--bar default\|gate\|strict] [--rounds N] [--budget-usd B]` |
 
 Every B1 and B3 binding emits a `/goal` block whose clause 1 requires a fresh `SEAL: ACCEPTED` (most recent, post-dating the last change) and whose clause 2 is the producer-completion signal: `STATUS: DONE` for a build, a clean compile for `wf-report`, saturation for `wf-websearch`, all-orks-DONE for `wf-wave-monitor`, a fresh terminal SLURM state for `wf-hpc-watch`. B4 (`wf-hygiene`) has no goal predicate: it emits only a `/loop` block and runs until the human stops it. The monitors carry a durability caveat: `/loop` schedules die with the session, so a run that must outlive the session goes headless (`claude -p`) or onto the toto scheduling layer.
+
+## The autonomous driver
+
+`converge_auto.py` is a detached Python orchestrator launched by the nohup command `wf-auto` prints (never by `wf-auto` itself); it runs produce-review-seal rounds headlessly, building and spawning a separate `claude -p` subprocess per phase (producer, round reviewer, seal auditor), enforcing every no-pre-approval guarantee mechanically instead of through a human pasting `/goal` each round. Every phase is a fresh session: the round-reviewer and seal-auditor prompts are built from artifact, diff, and rubric only, so isolation is prompt construction, not policy text; the producer prompt instead carries the objective (the task spec on round 1, the prior round's punch list thereafter) plus boundaries and a budget, no rubric, no diff, since it revises the artefact rather than critiquing it. This split is what makes the enforcement mechanical rather than aspirational: a `claude -p` turn is an LLM judgment call, while the driver's own Python is deterministic code that decides what each phase sees and whether its return is honored. The driver scans every producer return for `VERDICT:`/`SEAL:` line patterns and fails the round as a protocol violation on a match, the producer token ban enforced in code rather than by instruction. The seal binds to a real revision: in a git repo the driver commits the artefact scope as a pre-seal snapshot and binds the seal to that commit hash (`commit:<12hex>`), re-verifying after the seal returns that HEAD is unchanged and the scope is clean; for non-git artefacts, and for `/commit false` repos (detected the same way `hooks/modules/15-baseline-stash.sh` does), it binds to a content manifest (`sha256:<12hex>`) instead. Structural seal freshness comes from running the review and seal phases under `--no-session-persistence`, making a resume of any round-reviewer session impossible rather than merely forbidden, plus a `--disallowedTools` deny list that keeps the reviewer read-only (the grant itself is `--allowedTools`). A round cap (default 4) and a non-decreasing-findings clause (open findings flat or rising across 2 consecutive review rounds) force an ESCALATE rather than a further round.
+
+`--parallel <manifest.json>` runs up to 5 loops concurrently as separate child processes, each with its own runtime dir, ledger, and seal; the manifest is validated before any child spawns, including artefact-scope disjointness across the loops (a shared path between two loops is a config error, not a race), and no state is shared between loops, so a seal in one never transfers approval to another. An optional post-commit hook (`--install-void-hook <repo>`) makes seal-voiding live in git itself: any later commit that changes the sealed artefact's content manifest appends a `seal_voided_post_hoc` row to that loop's ledger, content-precise so a byte-identical re-commit does not void a real seal.
+
+The driver appends a structured ledger row per phase-completing event (`## R<round>.<phase> - <ts> - <event>`, schema in `w1-design.md`) to `<runtime-dir>/rounds.md`. This makes the ledger machine-parseable: `/swarm-observe` reads it deterministically into a loop-health table (VOIDED, SEALED, ESCALATED, STALL, OSCILLATION, RUNNING), and `/wf-watchdog` reads it as a heartbeat under the same stall/oscillation doctrine it applies to hand-run loops.
+
+SOT: driver `~/.claude/scripts/swarm/converge_auto.py`, config front end `~/.claude/skills/wf-auto/SKILL.md`, frozen phase graph and schema design `~/.claude/plans/wf-autonomy/checkpoints/w1-design.md`.
 
 ## Converting a skill to a workflow skill
 
@@ -125,9 +136,9 @@ Human gates are never auto-sealed. Design approval (`brainstorm`), memory deleti
 
 ## Skill catalogue by category
 
-All 70 skills, grouped by their `category` frontmatter, with the one-line "Use when" purpose.
+All 72 skills, grouped by their `category` frontmatter, with the one-line "Use when" purpose.
 
-**delegation** (7)
+**delegation** (8)
 | Skill | Use when |
 |---|---|
 | `converge` | converging an artefact through produce-review rounds to a seal |
@@ -137,8 +148,9 @@ All 70 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `promote` | promoting a recurring autocommission pattern to a permanent w-* |
 | `topology-producer-reviewer` | pairing a producer worker with a reviewer audit dyad |
 | `swarm-status` | viewing a live snapshot of in-flight workers and the reviewer queue |
+| `swarm-observe` | viewing live health of converge loops, ledgers and workers |
 
-**workflow** (19)
+**workflow** (20)
 | Skill | Use when |
 |---|---|
 | `brainstorm` | gating design before implementing a feature or architecture |
@@ -152,6 +164,7 @@ All 70 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `wrap-up` | bundling post-work outcome, mistake, good-idea, and recovery |
 | `rb` | refreshing bootstrap.md from state, directive, and pitfalls |
 | `notebook` | doing atomic .ipynb edit, execute, or validate work |
+| `wf-auto` | configuring an unattended converge loop the owner then launches |
 | `wf-design` | driving an experimental design to a hostile-review methodology seal |
 | `wf-report` | driving a LaTeX report to a sealed finish via /converge SEAL |
 | `wf-websearch` | driving multi-agent web research to a saturation seal |
@@ -250,6 +263,8 @@ wf-design · wf-report · wf-websearch · wf-wave-monitor · wf-watchdog ·
 wf-hpc-watch · wf-nb-watch · wf-hygiene ── fix converge's slots to one artefact
 ```
 
+`wf-auto` sits beside the wf-* bindings rather than inside this per-artefact chain: at config time it consumes `/review-dispatch`'s resolution (materialised once into `loop.json`, not re-queried per round), and at runtime `converge_auto.py` consumes `verdict-schema.md`'s token grammar mechanically, scanning producer output for the `VERDICT:`/`SEAL:` line pattern itself rather than trusting an LLM to withhold it.
+
 A concrete chain: `/wf-websearch` runs its search waves through `/swarm-dispatch` (the W-7 mixed-batch pattern), audits each synthesis through `/review-dispatch` (which resolves `w-hostile-reviewer` running the `hostile-review` gauntlet), and terminates on the `/goal` block it emits, whose token semantics come from `verdict-schema.md`. Reviewer rubrics are themselves skills (`code-quality`, `design-review`, `hostile-review`, `infra-security`, `sanity-check`), so `/review-dispatch` is a router over the skill fleet, not a fixed table of prompts.
 
 ## Cross-references
@@ -258,6 +273,8 @@ A concrete chain: `/wf-websearch` runs its search waves through `/swarm-dispatch
 - Two-token protocol, bar levels, no-pre-approval, canonical `/goal` block, severity map (SOT): `~/.claude/skills/_shared/verdict-schema.md`
 - Four-part dispatch contract, numeric budget, model split, reviewer isolation (SOT): `~/.claude/skills/_shared/dispatch-contract.md`
 - Reviewer resolution table: `~/.claude/skills/review-dispatch/SKILL.md`
+- Autonomous driver (headless produce-review-seal rounds, `--parallel`, void hook): `~/.claude/scripts/swarm/converge_auto.py`
+- Loop-health observer over driver and hand ledgers: `~/.claude/skills/swarm-observe/SKILL.md`
 - Worker model x effort matrix, swarm-first mandate: `~/.claude/rules/13-worker-first-mandate.md`
 - Swarm quality gates R-1 to R-5 (R-5 is no-pre-approval): `~/.claude/rules/40-swarm-quality-gates.md`
 - Entry-point summary and worked examples: `~/.claude/README.md`
