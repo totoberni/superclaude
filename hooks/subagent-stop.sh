@@ -38,6 +38,10 @@ agent_id=$(echo "$input" | jq -r '.agent_id // .subagent_id // ""' 2>/dev/null) 
 agent_id=$(printf '%s' "$agent_id" | tr -cd 'a-zA-Z0-9_-')
 agent_type=$(echo "$input" | jq -r '.agent_type // .subagent_type // "unknown"' 2>/dev/null) || agent_type="unknown"
 [ -z "$agent_type" ] && agent_type="unknown"
+# Sanitize at derivation (mirrors agent_id above) so every downstream row --
+# legacy EXIT, rich EXIT, and STOP -- is protected from a crafted agent_type
+# forging extra columns/rows via embedded TAB/NEWLINE bytes.
+agent_type=$(printf '%s' "$agent_type" | tr -d '\t\n')
 
 log_file="$HOME/.claude/comms/_spawns.log"
 rich_log="$HOME/.claude/comms/_spawns-rich.log"
@@ -122,15 +126,16 @@ fi
 # m1 fix (wf-skills review round 1, log-forgery): strip TAB/NEWLINE from the
 # payload-derived fields before they enter the tab-delimited row, so a crafted
 # field cannot forge extra columns/rows in _spawns.log. Row format and field
-# order below are unchanged.
-agent_type_safe=$(printf '%s' "$agent_type" | tr -d '\t\n')
+# order below are unchanged. agent_type is sanitized at derivation above (it
+# feeds all three row types), so only the two STOP-specific fields need it
+# here.
 agent_id_display_safe=$(printf '%s' "$agent_id_display" | tr -d '\t\n')
 transcript_path_safe=$(printf '%s' "$transcript_path" | tr -d '\t\n')
 
 printf '%s\t%s\t%s\tSTOP\t%s\t%s\t%s\t%s\n' \
   "$ts" \
   "" \
-  "$agent_type_safe" \
+  "$agent_type" \
   "$agent_id_display_safe" \
   "$duration_s" \
   "$outcome" \

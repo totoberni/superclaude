@@ -1178,6 +1178,63 @@ else
   fail "P7.4b subagent-stop.sh" "rc=$P74B_RC no STOP row for agent_id (log=$(cat "$ISO_HOME/.claude/comms/_spawns.log" 2>/dev/null))"
 fi
 
+# P7.4c: subagent-stop.sh FORGERY PROBE (wf-skills B3.1): agent_type carrying a
+#        literal TAB + NEWLINE must not forge extra columns/rows into _spawns.log's
+#        legacy EXIT/STOP rows or _spawns-rich.log's EXIT row. Both target logs are
+#        cleared first (same sanctioned ISO_HOME redirect as P7.3/P7.4b) so line and
+#        column counts are exact, not additive across earlier tests in this file.
+#        Pre-fix, the raw TAB/NEWLINE bytes in column 3 split each EXIT row into two
+#        physical log lines with the wrong column count each -- this probe fails
+#        against that hook (SPAWNS_LINES/RICH_LINES would read 3/2, not 2/1, and the
+#        extracted agent_type field would read "w-evil"/"w-evil", not the fully
+#        concatenated "w-evilforgedcol").
+rm -f "$ISO_HOME/.claude/comms/_spawns.log" "$ISO_HOME/.claude/comms/_spawns-rich.log" 2>/dev/null
+P74C_IN='{"hook_event_name":"SubagentStop","session_id":"hooktest-ss-074c","agent_id":"forge074c","agent_type":"w-evil\tforged\ncol","last_assistant_message":"ok"}'
+run_iso_hook "$SUBSTOP_HOOK" "$P74C_IN"
+P74C_RC=$?
+
+P74C_OK=true
+[ "$P74C_RC" = "0" ] || P74C_OK=false
+
+SPAWNS_LOG="$ISO_HOME/.claude/comms/_spawns.log"
+RICH_LOG="$ISO_HOME/.claude/comms/_spawns-rich.log"
+EXPECTED_TYPE="w-evilforgedcol"
+
+# _spawns.log: exactly 2 physical lines -- legacy EXIT row (5 cols) then STOP row
+# (8 cols). A forged NEWLINE in agent_type would split the EXIT row into extras.
+SPAWNS_LINES=0
+[ -f "$SPAWNS_LOG" ] && SPAWNS_LINES=$(wc -l < "$SPAWNS_LOG" 2>/dev/null || echo 0)
+[ "$SPAWNS_LINES" -eq 2 ] 2>/dev/null || P74C_OK=false
+EXIT_ROW=$(sed -n '1p' "$SPAWNS_LOG" 2>/dev/null)
+STOP_ROW=$(sed -n '2p' "$SPAWNS_LOG" 2>/dev/null)
+EXIT_COLS=$(printf '%s' "$EXIT_ROW" | awk -F'\t' '{print NF}')
+STOP_COLS=$(printf '%s' "$STOP_ROW" | awk -F'\t' '{print NF}')
+[ "$EXIT_COLS" = "5" ] || P74C_OK=false
+[ "$STOP_COLS" = "8" ] || P74C_OK=false
+
+# _spawns-rich.log: exactly 1 physical line (rich EXIT row, 6 cols).
+RICH_LINES=0
+[ -f "$RICH_LOG" ] && RICH_LINES=$(wc -l < "$RICH_LOG" 2>/dev/null || echo 0)
+[ "$RICH_LINES" -eq 1 ] 2>/dev/null || P74C_OK=false
+RICH_ROW=$(sed -n '1p' "$RICH_LOG" 2>/dev/null)
+RICH_COLS=$(printf '%s' "$RICH_ROW" | awk -F'\t' '{print NF}')
+[ "$RICH_COLS" = "6" ] || P74C_OK=false
+
+# No TAB/NEWLINE survives inside the agent_type field (col 3 of every row): the
+# sanitized value must read as the fully concatenated string, byte-exact.
+EXIT_AGENT_TYPE=$(printf '%s' "$EXIT_ROW" | cut -f3)
+STOP_AGENT_TYPE=$(printf '%s' "$STOP_ROW" | cut -f3)
+RICH_AGENT_TYPE=$(printf '%s' "$RICH_ROW" | cut -f3)
+[ "$EXIT_AGENT_TYPE" = "$EXPECTED_TYPE" ] || P74C_OK=false
+[ "$STOP_AGENT_TYPE" = "$EXPECTED_TYPE" ] || P74C_OK=false
+[ "$RICH_AGENT_TYPE" = "$EXPECTED_TYPE" ] || P74C_OK=false
+
+if [ "$P74C_OK" = true ]; then
+  pass "P7.4c subagent-stop.sh (forged TAB/NEWLINE in agent_type stripped, no forged columns/rows)"
+else
+  fail "P7.4c subagent-stop.sh" "rc=$P74C_RC spawns_lines=$SPAWNS_LINES exit_cols=$EXIT_COLS stop_cols=$STOP_COLS rich_lines=$RICH_LINES rich_cols=$RICH_COLS exit_type=$EXIT_AGENT_TYPE stop_type=$STOP_AGENT_TYPE rich_type=$RICH_AGENT_TYPE"
+fi
+
 # P7.5: stop.sh — Stop event → snapshots ephemeral state, exit 0.
 STOP_HOOK="$HOOK_DIR/stop.sh"
 run_iso_hook "$STOP_HOOK" '{"session_id":"hooktest-stop-075","hook_event_name":"Stop"}'
