@@ -160,9 +160,35 @@ os.makedirs(MOCK_DIR, exist_ok=True)
 with open(os.path.join(MOCK_DIR, "calls.jsonl"), "a") as fh:
     fh.write(json.dumps(argv) + "\n")
 
+# Liveness side channel (W2.5 item 3): if driver.pid exists in the loop's runtime
+# dir (this mock's cwd for non-git loops) while a phase runs, drop a marker so the
+# suite can assert the pid was LIVE during the run and GONE after every terminal.
+if os.path.isfile(os.path.join(os.getcwd(), "driver.pid")):
+    open(os.path.join(MOCK_DIR, "saw-driver-pid"), "w").close()
+
+# The driver requests --output-format stream-json --include-partial-messages; in
+# that mode emit a few stream-json lines (init, a tool_use, a partial, then the
+# terminal result carrying the scenario's usual JSON) so every existing scenario
+# flows through the driver's new stream reader unchanged.
+STREAM = "stream-json" in argv
+
 def emit(result, session_id="sess-1", is_error=False, subtype="success"):
-    print(json.dumps({"result": result, "session_id": session_id,
-                      "is_error": is_error, "subtype": subtype}))
+    if STREAM:
+        for line in (
+            {"type": "system", "subtype": "init", "session_id": session_id},
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash",
+                 "input": {"command": "echo mock phase work"}}]}},
+            {"type": "stream_event", "event": {"type": "content_block_delta"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "phase narrative line"}]}},
+            {"type": "result", "subtype": subtype, "result": result,
+             "session_id": session_id, "is_error": is_error, "total_cost_usd": 0.01},
+        ):
+            print(json.dumps(line), flush=True)
+    else:
+        print(json.dumps({"result": result, "session_id": session_id,
+                          "is_error": is_error, "subtype": subtype}))
     sys.exit(0)
 
 if "--version" in argv:
@@ -336,6 +362,18 @@ elif SCEN == "timeout":
     if role == "produce":
         time.sleep(5)
         default_produce()
+
+elif SCEN == "hb_sleep":
+    # produce sleeps ~3s so the driver's silent-phase heartbeat must fire
+    if role == "produce":
+        time.sleep(3)
+        default_produce()
+    if role == "produce-resume":
+        default_produce()
+    if role == "review":
+        default_review()
+    if role == "seal":
+        default_seal()
 
 elif SCEN == "review_mutation":
     if role in ("produce", "produce-resume"):
@@ -527,7 +565,7 @@ expect_exit 0 "S3 happy gate"
 for row in 'produce - .* - ok' 'review - .* - ok' 'seal - .* - ok' 'terminal - .* - sealed'; do
   if grep -qE "^## R[0-9]+\.$row$" "$RF" 2>/dev/null; then ok "S3 ledger row: $row"; else no "S3 ledger row: $row" "absent"; fi
 done
-BADHDR=$(grep -E '^## R' "$RF" 2>/dev/null | grep -cvE '^## R[0-9]+\.(produce|gate|review|seal|terminal|escalate) - [^ ]+ - [^ ]+$')
+BADHDR=$(grep -E '^## R' "$RF" 2>/dev/null | grep -cvE '^## R[0-9]+\.(produce|gate|review|seal|terminal|escalate|control) - [^ ]+ - [^ ]+$')
 if [ "${BADHDR:-1}" = 0 ]; then ok "S3 all headers match spec regex"; else no "S3 headers" "$BADHDR nonconforming"; fi
 # shellcheck disable=SC2016  # backticks are literal ledger-token delimiters, not command substitution
 BADTOK=$(grep -E '^- token:' "$RF" 2>/dev/null | grep -cvE '^- token: (none|`(VERDICT|SEAL): .*`)$')
@@ -927,12 +965,107 @@ NAFTER=$(git -C "$GREPO3" rev-list --count HEAD); CSM=$(seal_manifest_of "$S/rou
 if [ "$NBEFORE" = "$NAFTER" ] && echo "$CSM" | grep -qE '^sha256:'; then ok "S34 env /commit false: zero commits + sha256 binding"; else no "S34 env policy" "before=$NBEFORE after=$NAFTER seal=$CSM"; fi
 
 # ═══════════════════════════════════════════════════
+sect "supervision + monitorability (W2.5)"
+
+# W1: stream phases (item 1) — a happy run tees the raw stream AND renders live.log,
+# and the terminal result event still assembles the parsed dict that drives the guards.
+S="$ROOT/w1"; setup_scen "$S" '{"bar":"gate"}'
+drive "$S" happy "$S/artifact.txt"
+expect_exit 0 "W1 stream-mode happy run seals"
+if [ -f "$S/raw/round-1-produce.stream.jsonl" ]; then ok "W1 raw stream teed (round-1-produce.stream.jsonl)"; else no "W1 raw stream tee" "stream.jsonl absent"; fi
+if [ -f "$S/live.log" ] && grep -qF 'tool Bash' "$S/live.log" 2>/dev/null; then ok "W1 live.log renders tool-call events"; else no "W1 live tool render" "tool Bash line absent from live.log"; fi
+if grep -qF 'done cost=' "$S/live.log" 2>/dev/null; then ok "W1 live.log renders phase-completion cost"; else no "W1 live cost render" "done/cost line absent"; fi
+for row in 'produce - .* - ok' 'review - .* - ok' 'seal - .* - ok' 'terminal - .* - sealed'; do
+  if grep -qE "^## R[0-9]+\.$row$" "$S/rounds.md" 2>/dev/null; then ok "W1 stream-assembled ledger row: $row"; else no "W1 ledger row: $row" "absent (stream assembly broke a guard)"; fi
+done
+
+# W2: heartbeats (item 2) — a phase whose mock sleeps ~3s beats into driver.log even
+# though it is silent (hb interval tuned via the CONVERGE_HB_S env seam).
+S="$ROOT/w2"; setup_scen "$S"
+rm -rf "$S/mock"; mkdir -p "$S/mock"
+MOCK_DIR="$S/mock" MOCK_SCENARIO=hb_sleep MOCK_ARTIFACT="$S/artifact.txt" CONVERGE_HB_S=1 \
+  python3 "$DRIVER_PY" --config "$S/loop.json" --claude-cmd "$MOCK" >"$S/stdout.txt" 2>"$S/stderr.txt"
+EXIT=$?
+expect_exit 0 "W2 heartbeat run seals"
+if grep -qE '^\[.*\] \[hb\] round=1 phase=produce elapsed=[0-9]+s events=[0-9]+$' "$S/driver.log" 2>/dev/null; then
+  ok "W2 heartbeat line present for the silent (sleeping) produce phase"
+else
+  no "W2 heartbeat" "no conforming [hb] line in driver.log"
+fi
+
+# W3: liveness pid (item 3) — pid LIVE during the run, GONE after a happy terminal
+S="$ROOT/w3"; setup_scen "$S"
+drive "$S" happy "$S/artifact.txt"
+expect_exit 0 "W3 happy run (pid liveness)"
+if [ -f "$S/mock/saw-driver-pid" ]; then ok "W3 driver.pid present DURING the run (mock side channel)"; else no "W3 pid during run" "mock never saw driver.pid"; fi
+if [ ! -f "$S/driver.pid" ]; then ok "W3 driver.pid removed after happy terminal"; else no "W3 pid cleanup (happy)" "driver.pid persists"; fi
+
+# W4: pid removed on the escalate path too
+S="$ROOT/w4"; setup_scen "$S"
+drive "$S" failed "$S/artifact.txt"
+expect_exit 2 "W4 escalate run"
+if [ ! -f "$S/driver.pid" ]; then ok "W4 driver.pid removed after escalate"; else no "W4 pid cleanup (escalate)" "driver.pid persists"; fi
+
+# W5: control/PAUSE (item 4) — driver blocks at the round boundary and resumes on removal.
+# Backgrounded with a tight poll interval so the pause window is short and bounded.
+S="$ROOT/w5"; setup_scen "$S"
+mkdir -p "$S/control"; : > "$S/control/PAUSE"
+rm -rf "$S/mock"; mkdir -p "$S/mock"
+MOCK_DIR="$S/mock" MOCK_SCENARIO=happy MOCK_ARTIFACT="$S/artifact.txt" CONVERGE_CTL_POLL_S=0.2 \
+  python3 "$DRIVER_PY" --config "$S/loop.json" --claude-cmd "$MOCK" >"$S/stdout.txt" 2>"$S/stderr.txt" &
+WPID=$!
+PAUSED=false
+for _ in $(seq 1 100); do
+  if grep -qE '^## R[0-9]+\.control - .* - paused$' "$S/rounds.md" 2>/dev/null; then PAUSED=true; break; fi
+  sleep 0.1
+done
+if [ "$PAUSED" = true ]; then ok "W5 paused ledger row appears while control/PAUSE present"; else no "W5 pause" "paused row never appeared"; fi
+rm -f "$S/control/PAUSE"
+wait "$WPID"; EXIT=$?
+expect_exit 0 "W5 run completes after PAUSE removed"
+if grep -qE '^## R[0-9]+\.control - .* - resumed$' "$S/rounds.md" 2>/dev/null; then ok "W5 resumed ledger row after PAUSE removed"; else no "W5 resume" "resumed row absent"; fi
+
+# W6: control/ABORT (item 4) — graceful abort: exit 5, aborted row, handoff aborted, pid gone
+S="$ROOT/w6"; setup_scen "$S"
+mkdir -p "$S/control"; : > "$S/control/ABORT"
+drive "$S" happy "$S/artifact.txt"
+expect_exit 5 "W6 control/ABORT exits 5"
+if grep -qE '^## R[0-9]+\.control - .* - aborted$' "$S/rounds.md" 2>/dev/null; then ok "W6 aborted ledger row present"; else no "W6 aborted row" "absent"; fi
+if grep -qF '"status": "aborted"' "$S/handoff.json" 2>/dev/null; then ok "W6 handoff status aborted"; else no "W6 handoff status" "not aborted"; fi
+if [ ! -f "$S/driver.pid" ]; then ok "W6 driver.pid removed after abort"; else no "W6 pid cleanup (abort)" "driver.pid persists"; fi
+
+# W7: control/STEER.md (item 4) — steer reaches the round-2 producer objective, NEVER the
+# round-1 reviewer prompt (R-5), and STEER.md is renamed consumed. Rework scenario -> round 2.
+S="$ROOT/w7"; setup_scen "$S" '{"bar":"gate","rounds_cap":4}'
+mkdir -p "$S/control"; printf 'STEER_CANARY_XYZ operator guidance\n' > "$S/control/STEER.md"
+drive "$S" isolation "$S/artifact.txt"
+expect_exit 0 "W7 steer run seals"
+if grep -qF 'STEER_CANARY_XYZ' "$S/prompts/round-2-produce.txt" 2>/dev/null; then ok "W7 steer text reaches the round-2 producer objective"; else no "W7 steer -> producer" "canary absent from round-2 producer prompt"; fi
+if ! grep -qF 'STEER_CANARY_XYZ' "$S/prompts/round-1-review.txt" 2>/dev/null; then ok "W7 steer NEVER reaches the reviewer (R-5 isolation)"; else no "W7 steer isolation" "canary leaked into the round-1 review prompt"; fi
+if [ -f "$S/control/STEER.consumed-round1" ] && [ ! -f "$S/control/STEER.md" ]; then ok "W7 STEER.md renamed to STEER.consumed-round1"; else no "W7 steer consume" "STEER.md not renamed"; fi
+
+# W8: on_event hook (item 5) — a recorder script captures the happy-run event sequence
+S="$ROOT/w8"
+REC="$ROOT/w8-recorder.sh"
+cat > "$REC" <<RECEOF
+#!/bin/bash
+printf '%s\n' "\$1" >> "$ROOT/w8-events.log"
+RECEOF
+chmod +x "$REC"
+: > "$ROOT/w8-events.log"
+setup_scen "$S" "{\"bar\":\"gate\",\"on_event\":[\"$REC\"]}"
+drive "$S" happy "$S/artifact.txt"
+expect_exit 0 "W8 on_event happy run seals"
+EV=$(tr '\n' ',' < "$ROOT/w8-events.log" 2>/dev/null)
+if printf '%s' "$EV" | grep -qF 'phase_ok,review_verdict,seal,'; then ok "W8 on_event fires phase_ok -> review_verdict -> seal in order"; else no "W8 event sequence" "got: $EV"; fi
+
+# ═══════════════════════════════════════════════════
 sect "parallel multi-artifact convergence (--parallel)"
 
 # ledger well-formedness sweep (headers + token lines), reused across P-scenarios
 ledger_wellformed() {
   local rf="$1" badhdr badtok
-  badhdr=$(grep -E '^## R' "$rf" 2>/dev/null | grep -cvE '^## R[0-9]+\.(produce|gate|review|seal|terminal|escalate) - [^ ]+ - [^ ]+$')
+  badhdr=$(grep -E '^## R' "$rf" 2>/dev/null | grep -cvE '^## R[0-9]+\.(produce|gate|review|seal|terminal|escalate|control) - [^ ]+ - [^ ]+$')
   # shellcheck disable=SC2016  # backticks are literal ledger-token delimiters
   badtok=$(grep -E '^- token:' "$rf" 2>/dev/null | grep -cvE '^- token: (none|`(VERDICT|SEAL): .*`)$')
   [ "${badhdr:-1}" = 0 ] && [ "${badtok:-1}" = 0 ]
@@ -1178,6 +1311,26 @@ if [ "$DO_MUTATIONS" = true ]; then
     no "M8 apply/compile" "$(cat "$ROOT/m8.err" "$ROOT/m8.comp" 2>/dev/null)"
   fi
   rm -f "$MUT8"
+
+  # M9: INJECT a steer leak into the reviewer prompt (the shipped driver has NO
+  # reviewer steer code path at all; the mutation adds one) -> the canary must
+  # appear in the reviewer prompt under mutation, proving the isolation is
+  # load-bearing rather than incidental.
+  MUT9="$ROOT/m9.py"; cp "$REAL_DRIVER" "$MUT9"
+  if python3 "$MUTATE" "$MUT9" 'rubric. This is round {round_k}.\n\n' 'rubric. This is round {round_k}. {self._steer[0] if self._steer else str()}\n\n' 2>"$ROOT/m9.err" \
+     && python3 -m py_compile "$MUT9" 2>"$ROOT/m9.comp"; then
+    M9S="$ROOT/m9-run"; setup_scen "$M9S" '{"bar":"gate","rounds_cap":4}'
+    mkdir -p "$M9S/control"; printf 'STEER_CANARY_XYZ operator guidance\n' > "$M9S/control/STEER.md"
+    DRIVER_PY="$MUT9"; drive "$M9S" isolation "$M9S/artifact.txt"; DRIVER_PY="$REAL_DRIVER"
+    if grep -qF 'STEER_CANARY_XYZ' "$M9S/prompts/round-1-review.txt" 2>/dev/null; then
+      ok "M9 steer isolation guard (mutant leaks the steer canary into the reviewer prompt)"
+    else
+      no "M9" "steer canary did not leak into the reviewer prompt under mutation"
+    fi
+  else
+    no "M9 apply/compile" "$(cat "$ROOT/m9.err" "$ROOT/m9.comp" 2>/dev/null)"
+  fi
+  rm -f "$MUT9"
 fi
 
 # ── Driver-file integrity (real file untouched end to end) ──

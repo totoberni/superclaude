@@ -63,6 +63,7 @@ CLEAN, REWORK, or UNKNOWN (no anchored `VERDICT:`/`SEAL:` line found).
 bash ~/.claude/scripts/swarm/swarm-observe.sh                 # full text tables
 bash ~/.claude/scripts/swarm/swarm-observe.sh --stall-min 15  # tighter stall threshold
 bash ~/.claude/scripts/swarm/swarm-observe.sh --json          # one JSON object
+bash ~/.claude/scripts/swarm/swarm-observe.sh --watch 10      # clear-screen re-render loop
 bash ~/.claude/scripts/swarm/swarm-observe.sh --self-test     # fixture self-check, exit 0/1
 ```
 
@@ -93,6 +94,33 @@ Read it as: the r2 driver loop reached its terminal seal bound to commit `288de3
   loop's own fresh auditor (no pre-approval, R-5).
 - NEVER kill a process. A wedged-looking loop is surfaced, not intervened on.
 - READ-ONLY over every source, echoing the `/wf-watchdog` guarantee.
+
+## Owner surface (bin/loops + watch mode)
+
+`~/.claude/bin/loops` is the owner shortcut (sibling of `mem`) for supervising loops live: it
+wraps this observer for the read view and writes the driver's control files for steering.
+Read-only for `list`/`watch`/`paths`; `pause`/`resume`/`abort`/`steer` touch ONLY `control/`
+files the driver polls at PHASE BOUNDARIES. It never runs claude, never edits a ledger.
+
+| Verb | Effect |
+|------|--------|
+| `loops [list] [--json]` | this observe table (`--json` passes through) |
+| `loops watch [loop_id]` | no id: `swarm-observe --watch`; with id: `tail -F` the loop's `driver.log` + `live.log` |
+| `loops pause <loop_id>` | create `control/PAUSE` (driver waits at the next boundary) |
+| `loops resume <loop_id>` | remove `control/PAUSE` |
+| `loops abort <loop_id> [--yes]` | create `control/ABORT` after a y/N prompt (graceful, exit 5) |
+| `loops steer <loop_id> <text>` | write `control/STEER.md` for the NEXT PRODUCER prompt only; refuses if one is unconsumed |
+| `loops paths <loop_id>` | print the runtime files that exist |
+
+Runtime dir is resolved by globbing `~/.claude/plans/*/auto/<loop_id>/`; unknown or ambiguous
+ids error. `loops --self-test` exercises the control-file effects in a tempdir.
+
+**`--watch [SECONDS]`** (default 10) is this observer's clear-screen re-render loop until
+Ctrl-C, never combined with `--json`. The W2.5 upgrades it renders: a loop with a handoff but
+no ledger rows yet shows as `RUNNING` at its handoff `round.phase` (first-phase gap); a
+`running` handoff whose `driver.pid` is dead shows `DEAD`, and one with no pid file shows
+`RUNNING?` (both refining STALL/OSCILLATION/RUNNING, which now require a live pid); an
+`aborted` handoff shows `ABORTED`.
 
 ## Cross-References
 

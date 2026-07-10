@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# loops - owner surface for supervising converge-auto loops (sibling of ~/.claude/bin/mem).
+#
+# Thin wrapper over swarm-observe.sh (the read view) plus the driver control-file protocol
+# (W2.5 item 6). READ-ONLY for list/watch/paths; pause/resume/abort/steer write ONLY the
+# control/ files the driver polls at phase boundaries. It never runs claude, never edits a
+# ledger, handoff, or any loop artifact.
+#
+# Runtime dir per loop is resolved by globbing ~/.claude/plans/*/auto/<loop_id>/.
+set -uo pipefail
+
+CLAUDE_HOME="$HOME/.claude"
+OBSERVE="$CLAUDE_HOME/scripts/swarm/swarm-observe.sh"
+PLANS_GLOB="$CLAUDE_HOME/plans"
+
+usage() {
+  cat <<'EOF'
+loops - supervise converge-auto loops (owner surface, sibling of `mem`)
+
+  loops [list] [--json]             the swarm-observe table (--json passes through)
+  loops watch [loop_id]             no id: observe --watch; with id: tail -F driver.log + live.log
+  loops pause  <loop_id>            create control/PAUSE  (driver waits at the next phase boundary)
+  loops resume <loop_id>            remove control/PAUSE  (driver continues)
+  loops abort  <loop_id> [--yes]    create control/ABORT after a y/N prompt (graceful, exit 5)
+  loops steer  <loop_id> <text...>  write control/STEER.md (next PRODUCER prompt only; refuses if unconsumed)
+  loops paths  <loop_id>            print the runtime files that exist (ledger, handoff, prompts, raw, live, driver.log)
+  loops help                        this text
+  loops --self-test                 exercise the control-file effects in a tempdir, print pass/fail
+
+Runtime dir resolved by globbing ~/.claude/plans/*/auto/<loop_id>/. Read-only for list/watch/paths;
+pause/resume/abort/steer touch ONLY control/ files. Never runs claude, never edits a ledger.
+EOF
+}
+
+# resolve a loop_id to its runtime dir; prints the dir on stdout, else errors and returns 1.
+resolve_runtime() {
+  local lid=$1
+  local -a hits=()
+  shopt -s nullglob
+  hits=("$PLANS_GLOB"/*/auto/"$lid"/)
+  shopt -u nullglob
+  if (( ${#hits[@]} == 0 )); then
+    printf 'loops: no runtime dir for loop_id "%s" under %s/*/auto/\n' "$lid" "$PLANS_GLOB" >&2
+    return 1
+  fi
+  if (( ${#hits[@]} > 1 )); then
+    printf 'loops: ambiguous loop_id "%s" matches %d dirs:\n' "$lid" "${#hits[@]}" >&2
+    printf '  %s\n' "${hits[@]}" >&2
+    return 1
+  fi
+  printf '%s' "${hits[0]%/}"
+}
+
+do_list() { exec bash "$OBSERVE" "$@"; }
+
+do_watch() {
+  local lid="${1:-}"
+  if [[ -z "$lid" ]]; then exec bash "$OBSERVE" --watch; fi
+  local rt; rt=$(resolve_runtime "$lid") || return 1
+  # -F tolerates a live.log that the driver has not created yet (pre-first-phase)
+  exec tail -n 20 -F "$rt/driver.log" "$rt/live.log"
+}
+
+do_pause() {
+  local rt; rt=$(resolve_runtime "$1") || return 1
+  mkdir -p "$rt/control"
+  touch "$rt/control/PAUSE"
+  printf 'loops: paused "%s" (%s); driver waits at the next phase boundary\n' "$1" "$rt/control/PAUSE"
+}
+
+do_resume() {
+  local rt; rt=$(resolve_runtime "$1") || return 1
+  if [[ -e "$rt/control/PAUSE" ]]; then
+    rm -f "$rt/control/PAUSE"
+    printf 'loops: resumed "%s" (removed control/PAUSE)\n' "$1"
+  else
+    printf 'loops: "%s" was not paused (no control/PAUSE)\n' "$1"
+  fi
+}
+
+do_abort() {
+  local lid="" yes=0 a
+  for a in "$@"; do
+    case "$a" in
+      --yes|-y) yes=1 ;;
+      *) [[ -z "$lid" ]] && lid="$a" ;;
+    esac
+  done
+  [[ -n "$lid" ]] || { printf 'loops: abort needs a loop_id\n' >&2; return 1; }
+  local rt; rt=$(resolve_runtime "$lid") || return 1
+  if (( yes == 0 )); then
+    printf 'Really abort %s? [y/N] ' "$lid"
+    local reply=""; read -r reply || true
+    case "$reply" in
+      y|Y|yes|YES) ;;
+      *) printf 'loops: abort cancelled\n'; return 0 ;;
+    esac
+  fi
+  mkdir -p "$rt/control"
+  touch "$rt/control/ABORT"
+  printf 'loops: abort requested for "%s" (%s); driver stops gracefully at the next phase boundary (exit 5)\n' "$lid" "$rt/control/ABORT"
+}
+
+do_steer() {
+  local lid="${1:-}"; shift || true
+  [[ -n "$lid" ]] || { printf 'loops: steer needs a loop_id and text\n' >&2; return 1; }
+  local text="$*"
+  [[ -n "$text" ]] || { printf 'loops: steer needs steering text after the loop_id\n' >&2; return 1; }
+  local rt; rt=$(resolve_runtime "$lid") || return 1
+  if [[ -e "$rt/control/STEER.md" ]]; then
+    printf 'loops: refusing to overwrite an unconsumed %s (the driver has not applied the last steer yet)\n' "$rt/control/STEER.md" >&2
+    return 1
+  fi
+  mkdir -p "$rt/control"
+  printf '%s\n' "$text" > "$rt/control/STEER.md"
+  printf 'loops: steer written to %s (appended to the NEXT producer prompt only)\n' "$rt/control/STEER.md"
+}
+
+do_paths() {
+  local rt; rt=$(resolve_runtime "$1") || return 1
+  local p
+  local -a candidates=(
+    "$rt/rounds.md"
+    "$rt/handoff.json"
+    "$rt/loop.json"
+    "$rt/prompts"
+    "$rt/raw"
+    "$rt/live.log"
+    "$rt/driver.log"
+    "$rt/driver.pid"
+    "$rt/control"
+  )
+  for p in "${candidates[@]}"; do
+    [[ -e "$p" ]] && printf '%s\n' "$p"
+  done
+}
+
+self_test() {
+  local tmp; tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' RETURN
+  local lid="fakeloop"
+  local rt="$tmp/plans/camp/auto/$lid"
+  mkdir -p "$rt/prompts" "$rt/raw"
+  printf '{"loop_id":"%s","status":"running"}\n' "$lid" > "$rt/handoff.json"
+  printf '## R1.produce - x - ok\n' > "$rt/rounds.md"
+  printf 'driver start\n' > "$rt/driver.log"
+  PLANS_GLOB="$tmp/plans"   # point resolution at the tempdir
+
+  local pass=0 fail=0 r
+  _assert() { if [[ "$2" == 0 ]]; then pass=$((pass+1)); else fail=$((fail+1)); printf '  FAIL: %s\n' "$1"; fi; }
+
+  local got; got=$(resolve_runtime "$lid"); _assert "resolve_runtime finds fakeloop" $?
+  [[ "$got" == "$rt" ]]; _assert "resolve returns the exact runtime dir" $?
+
+  do_pause "$lid" >/dev/null; [[ -e "$rt/control/PAUSE" ]]; _assert "pause creates control/PAUSE" $?
+  do_resume "$lid" >/dev/null; [[ ! -e "$rt/control/PAUSE" ]]; _assert "resume removes control/PAUSE" $?
+
+  do_steer "$lid" tighten the scope >/dev/null; [[ -f "$rt/control/STEER.md" ]]; _assert "steer creates control/STEER.md" $?
+  grep -q 'tighten the scope' "$rt/control/STEER.md"; _assert "steer text captured" $?
+  if do_steer "$lid" second attempt >/dev/null 2>&1; then r=1; else r=0; fi
+  _assert "steer refuses to overwrite an unconsumed STEER.md" "$r"
+  grep -q 'tighten the scope' "$rt/control/STEER.md"; _assert "original steer text preserved on refusal" $?
+
+  do_abort "$lid" --yes >/dev/null; [[ -e "$rt/control/ABORT" ]]; _assert "abort --yes creates control/ABORT (no prompt)" $?
+
+  local pout; pout=$(do_paths "$lid")
+  grep -q "$rt/handoff.json" <<<"$pout"; _assert "paths lists handoff.json" $?
+  grep -q "$rt/driver.log" <<<"$pout"; _assert "paths lists driver.log" $?
+  if grep -q "$rt/live.log" <<<"$pout"; then r=1; else r=0; fi
+  _assert "paths omits the missing live.log" "$r"
+
+  if resolve_runtime nosuchloop >/dev/null 2>&1; then r=1; else r=0; fi
+  _assert "unknown loop_id errors (nonzero)" "$r"
+
+  printf '\nloops self-test: %d passed, %d failed\n' "$pass" "$fail"
+  [[ $fail == 0 ]]
+}
+
+verb="${1:-list}"
+case "$verb" in
+  list)           shift || true; do_list "$@" ;;
+  --json)         do_list --json ;;
+  watch)          shift; do_watch "${1:-}" ;;
+  pause)          shift; [[ -n "${1:-}" ]] || { usage >&2; exit 1; }; do_pause "$1" ;;
+  resume)         shift; [[ -n "${1:-}" ]] || { usage >&2; exit 1; }; do_resume "$1" ;;
+  abort)          shift; do_abort "$@" ;;
+  steer)          shift; do_steer "$@" ;;
+  paths)          shift; [[ -n "${1:-}" ]] || { usage >&2; exit 1; }; do_paths "$1" ;;
+  help|-h|--help) usage ;;
+  --self-test)    self_test; exit $? ;;
+  *)              printf 'loops: unknown verb: %s\n\n' "$verb" >&2; usage >&2; exit 1 ;;
+esac

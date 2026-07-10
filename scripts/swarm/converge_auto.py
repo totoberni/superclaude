@@ -40,6 +40,20 @@ loop's seal can never stand in for another. The parent validates the whole manif
 (1..5 loops, each config valid, artifact scopes disjoint, loop_ids unique) BEFORE
 spawning anything, waits on all children, and writes parallel-summary.md.
 
+Every phase session is monitorable live (W2.5): it runs with --output-format
+stream-json --include-partial-messages, the raw stream is teed to
+raw/round-K-<phase>.stream.jsonl, one human line per salient event is rendered
+into live.log, and driver.log gains a heartbeat every HEARTBEAT_S seconds. The
+driver writes driver.pid at start and removes it on every exit path, so a
+handoff that says "running" with a dead pid is a crashed loop. Owner control
+files (control/PAUSE, control/ABORT, control/STEER.md), polled only at phase
+boundaries, let the owner pause, abort (exit 5), or steer the next producer
+without ever touching reviewer/seal isolation (R-5). An optional on_event hook
+fires fail-safe on every salient transition.
+
+Exit codes: 0 sealed; 2 escalated; 3 config/validation error; 4 environment
+error (CLI/auth failure); 5 aborted by an owner control file (control/ABORT).
+
 Runs under ~/.claude/.venv/bin/python and system python3 alike (stdlib only).
 Design SOT: ~/.claude/plans/wf-autonomy/checkpoints/w1-design.md.
 Token grammar SOT: ~/.claude/skills/_shared/verdict-schema.md.
@@ -53,6 +67,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import shlex
 import shutil
 import subprocess
@@ -69,6 +84,15 @@ READ_ONLY_DENY = "Write,Edit,NotebookEdit"
 HOOK_MARKER = "converge-auto-seal-void-hook"
 PREFLIGHT_TIMEOUT_S = 30
 NOTIFY_TIMEOUT_S = 30
+EVENT_TIMEOUT_S = 30
+# Supervision/monitorability seams (W2.5). Read once at import; each driver run is
+# a fresh process, so tests set these in the child env before invocation.
+HEARTBEAT_S = float(os.environ.get("CONVERGE_HB_S", "30"))
+CONTROL_POLL_S = float(os.environ.get("CONVERGE_CTL_POLL_S", "10"))
+# R-5 isolation invariant: operator steer (control/STEER.md) is a PRODUCER-only
+# channel. No reviewer or seal code path consumes it AT ALL; the mutation harness
+# proves the isolation by INJECTING a leak into build_reviewer_prompt and
+# catching the canary (M9), rather than shipping a live toggle.
 # Margin added to the config-derived lock wait bound (2 * phase_timeout_s covers a
 # strict sibling's two seal sessions). Env seam for tests, like CONVERGE_NO_COMMIT_FILE.
 COMMIT_LOCK_MARGIN_S = int(os.environ.get("CONVERGE_LOCK_MARGIN_S", "120"))
@@ -226,6 +250,7 @@ def validate_config(cfg: dict) -> dict:
     cfg["allowed_tools"] = tools
     cfg["test_cmd"] = _as_arg_list(cfg["test_cmd"], "test_cmd") if cfg.get("test_cmd") else None
     cfg["notify_cmd"] = _as_arg_list(cfg["notify_cmd"], "notify_cmd") if cfg.get("notify_cmd") else None
+    cfg["on_event"] = _as_arg_list(cfg["on_event"], "on_event") if cfg.get("on_event") else None
     for opt in ("producer_model", "producer_effort", "reviewer_model", "reviewer_effort",
                 "seal_model", "seal_effort"):
         if cfg.get(opt) is not None and not isinstance(cfg[opt], str):
@@ -291,6 +316,9 @@ class Loop:
         self.open_findings = 0
         self.produce_files = 0
         self.produce_delta = ""
+        # (steer_text, round_consumed): consumed at a round boundary, applied to a
+        # LATER round's producer objective only (never a reviewer/seal prompt).
+        self._steer = None
         self.state = {
             "loop_id": cfg["loop_id"], "round": 1, "phase": "produce", "status": "running",
             "punch_list": None, "findings_history": [], "producer_status_last": None,
@@ -338,22 +366,151 @@ class Loop:
         except (OSError, subprocess.SubprocessError) as exc:
             self.log(f"notify_cmd failed: {exc}")
 
-    def run_cli(self, cmd: list[str], raw_path: Path):
-        """Run one headless claude phase. Returns (parsed_json_or_None, rc, timed_out)."""
+    def _live(self, msg: str) -> None:
+        with open(self.rt / "live.log", "a") as handle:
+            handle.write(f"[{iso_now()}] {msg}\n")
+
+    def _write_pid(self) -> None:
+        (self.rt / "driver.pid").write_text(str(os.getpid()))
+
+    def _remove_pid(self) -> None:
         try:
-            proc = subprocess.run(cmd, cwd=str(self.cwd), capture_output=True,
-                                  text=True, timeout=self.timeout)
-        except subprocess.TimeoutExpired as exc:
-            raw_path.write_text(exc.stdout or "" if isinstance(exc.stdout, str) else "")
-            return None, None, True
+            (self.rt / "driver.pid").unlink()
+        except OSError:
+            pass
+
+    def _emit_event(self, event: str, detail: str) -> None:
+        """Fire the optional on_event hook fail-safe: it NEVER blocks the loop and
+        never raises out. Three trailing args (event, loop_id, detail) let a wired
+        recorder route to hcom/ntfy without the driver knowing the transport."""
+        hook = self.cfg.get("on_event")
+        if not hook:
+            return
+        cmd = list(hook) + [event, self.cfg["loop_id"], detail]
+        try:
+            subprocess.run(cmd, timeout=EVENT_TIMEOUT_S, capture_output=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.log(f"on_event({event}) failed: {exc}")
+
+    @staticmethod
+    def _primary_tool_arg(inp) -> str:
+        """The most informative single argument of a tool_use block, for live.log."""
+        if not isinstance(inp, dict):
+            return ""
+        for key in ("command", "file_path", "path", "pattern", "url", "prompt", "query"):
+            val = inp.get(key)
+            if isinstance(val, str) and val:
+                return val.replace("\n", " ")[:80]
+        for val in inp.values():
+            if isinstance(val, str) and val:
+                return val.replace("\n", " ")[:80]
+        return ""
+
+    def _render_stream_event(self, obj: dict):
+        """One human line for a salient stream event, or None for partial/system
+        noise (which is teed raw but not rendered)."""
+        etype = obj.get("type")
+        if etype == "assistant":
+            content = (obj.get("message") or {}).get("content") or []
+            rendered = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
+                    rendered.append(f"tool {block.get('name', 'tool')}"
+                                    f"({self._primary_tool_arg(block.get('input'))})")
+                elif block.get("type") == "text":
+                    txt = (block.get("text") or "").strip().replace("\n", " ")
+                    if txt:
+                        rendered.append(f"msg {txt[:80]}")
+            return "; ".join(rendered) if rendered else None
+        if etype == "result":
+            cost = obj.get("total_cost_usd")
+            cost_s = f"${cost}" if cost is not None else "n/a"
+            return f"done cost={cost_s} result_len={len(obj.get('result') or '')}"
+        return None
+
+    def _handle_stream_line(self, line: bytes, tee, round_k, phase):
+        """Tee one raw line, then parse+render it. Returns (result_obj_or_None,
+        counted) where counted is True for any JSON object line. Non-JSON and
+        partial-message noise is teed but silently skipped from parsing."""
+        tee.write(line.decode("utf-8", "replace") + "\n")
+        tee.flush()
+        stripped = line.strip()
+        if not stripped:
+            return None, False
+        try:
+            obj = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            return None, False
+        if not isinstance(obj, dict):
+            return None, False
+        rendered = self._render_stream_event(obj)
+        if rendered:
+            self._live(f"round={round_k} phase={phase} {rendered}")
+        return (obj if obj.get("type") == "result" else None), True
+
+    def run_cli(self, cmd: list[str], raw_path: Path, round_k: int, phase: str):
+        """Run one headless claude phase as a streaming line-reader (W2.5).
+
+        build_cmd requests --output-format stream-json --include-partial-messages.
+        Every raw line is teed to raw/round-K-<phase>.stream.jsonl; one human line
+        per salient event lands in live.log; the terminal result event is assembled
+        into the SAME parsed dict the guards consume (mirrored to raw_path for
+        audit). driver.log gains an [hb] line every HEARTBEAT_S seconds even when
+        the phase is silent, because the read is bounded by a select timeout; that
+        same bound enforces the phase timeout (overrun kills the child, returns
+        timed_out=True). Returns (parsed_or_None, rc, timed_out); the guard, escalate
+        and resume paths downstream are unchanged.
+        """
+        stream_path = raw_path.with_suffix(".stream.jsonl")
+        try:
+            proc = subprocess.Popen(cmd, cwd=str(self.cwd), stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL)
         except FileNotFoundError:
             return None, 127, False
-        raw_path.write_text(proc.stdout)
-        try:
-            parsed = json.loads(proc.stdout)
-        except (json.JSONDecodeError, ValueError):
-            parsed = None
-        return (parsed if isinstance(parsed, dict) else None), proc.returncode, False
+        fd = proc.stdout.fileno()
+        start = last_hb = time.monotonic()
+        events = 0
+        result_obj = None
+        buf = b""
+        poll_s = min(HEARTBEAT_S, 1.0)
+        with open(stream_path, "a") as tee:
+            while True:
+                ready, _, _ = select.select([fd], [], [], poll_s)
+                now = time.monotonic()
+                if now - start > self.timeout:
+                    proc.kill()
+                    proc.wait()
+                    return None, None, True
+                if now - last_hb >= HEARTBEAT_S:
+                    self.log(f"[hb] round={round_k} phase={phase} "
+                             f"elapsed={int(now - start)}s events={events}")
+                    last_hb = now
+                if not ready:
+                    if proc.poll() is not None:
+                        break
+                    continue
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break  # EOF
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    res, counted = self._handle_stream_line(line, tee, round_k, phase)
+                    events += 1 if counted else 0
+                    if res is not None:
+                        result_obj = res
+            if buf.strip():  # a final line with no trailing newline at EOF
+                res, _ = self._handle_stream_line(buf, tee, round_k, phase)
+                if res is not None:
+                    result_obj = res
+        rc = proc.wait()
+        if result_obj is not None:
+            raw_path.write_text(json.dumps(result_obj, indent=2))
+            return result_obj, rc, False
+        raw_path.write_text("")
+        return None, rc, False
 
     def cli_result_or_escalate(self, parsed, rc, timed_out, round_k, phase) -> str:
         if timed_out:
@@ -397,8 +554,9 @@ class Loop:
 
     def build_cmd(self, prompt: str, phase: str, resume_sid: str = None) -> list[str]:
         agent, model, effort = self._phase_agent_overrides(phase)
-        cmd = [self.claude, "-p", prompt, "--output-format", "json",
-               "--max-budget-usd", self.budget, "--permission-mode", "acceptEdits",
+        cmd = [self.claude, "-p", prompt, "--output-format", "stream-json",
+               "--include-partial-messages", "--max-budget-usd", self.budget,
+               "--permission-mode", "acceptEdits",
                "--allowedTools", ",".join(self.cfg["allowed_tools"]), "--agent", agent]
         if model:
             cmd += ["--model", model]
@@ -564,6 +722,9 @@ class Loop:
         )
 
     def build_reviewer_prompt(self, round_k: int, diff: str) -> str:
+        # R-5 isolation: operator steer is a producer-only channel. There is NO
+        # reviewer code path consuming control/STEER.md; M9 injects one and
+        # asserts the canary is caught.
         return (
             f"# Objective\nReview the artifact below at its CURRENT revision against the "
             f"rubric. This is round {round_k}.\n\n"
@@ -605,11 +766,18 @@ class Loop:
             objective = Path(self.cfg["task_spec_file"]).expanduser().read_text()
         else:
             objective = self.state["punch_list"]["text"]
+        # Operator steer (control/STEER.md) is consumed at a round boundary and
+        # applied to a LATER round's producer objective only; never a reviewer/seal.
+        if self._steer and self._steer[1] < round_k:
+            objective += "\n\n# Operator steer (control/STEER.md)\n" + self._steer[0]
+            self.log(f"applied operator steer to round {round_k} producer objective")
+            self._steer = None
         checkpoint = str(self.rt / f"producer-round-{round_k}.md")
         prompt = self.build_producer_prompt(round_k, objective, checkpoint)
         self.archive_prompt(round_k, "produce", prompt)
         cmd = self.build_cmd(prompt, "produce")
-        parsed, rc, timed_out = self.run_cli(cmd, self.rt / "raw" / f"round-{round_k}-produce.json")
+        parsed, rc, timed_out = self.run_cli(
+            cmd, self.rt / "raw" / f"round-{round_k}-produce.json", round_k, "produce")
         result = self.cli_result_or_escalate(parsed, rc, timed_out, round_k, "produce")
         if PRODUCER_TOKEN_RE.search(result):
             return "violation"
@@ -646,7 +814,8 @@ class Loop:
         self.archive_prompt(round_k, "produce-resume", prompt)
         cmd = self.build_cmd(prompt, "produce", resume_sid=session_id)
         parsed, rc, timed_out = self.run_cli(
-            cmd, self.rt / "raw" / f"round-{round_k}-produce-resume.json")
+            cmd, self.rt / "raw" / f"round-{round_k}-produce-resume.json",
+            round_k, "produce-resume")
         result = self.cli_result_or_escalate(parsed, rc, timed_out, round_k, "produce-resume")
         if PRODUCER_TOKEN_RE.search(result):
             self.escalate(round_k, "producer authored VERDICT/SEAL on resume")
@@ -672,6 +841,7 @@ class Loop:
         self.open_findings = 1
         self.append_ledger(round_k, "gate", "fail", "deterministic gate FAIL", None, 1, None)
         self.write_handoff()
+        self._emit_event("gate_fail", f"round={round_k}")
         return False
 
     def review(self, round_k: int, attempt: int = 1) -> dict:
@@ -680,7 +850,8 @@ class Loop:
         tag = "review" if attempt == 1 else "review-retry"
         self.archive_prompt(round_k, tag, prompt)
         cmd = self.build_cmd(prompt, "review")
-        parsed, rc, timed_out = self.run_cli(cmd, self.rt / "raw" / f"round-{round_k}-{tag}.json")
+        parsed, rc, timed_out = self.run_cli(
+            cmd, self.rt / "raw" / f"round-{round_k}-{tag}.json", round_k, tag)
         result = self.cli_result_or_escalate(parsed, rc, timed_out, round_k, "review")
         seal_leak = re.search(SEAL_RE.pattern, result, re.MULTILINE) is not None
         match, count = self._unique_token(VERDICT_RE, result, "review")
@@ -707,7 +878,8 @@ class Loop:
             prompt = self.build_seal_prompt(diff, revision_label, revision12)
             self.archive_prompt(round_k, tag, prompt)
             cmd = self.build_cmd(prompt, "seal")
-            parsed, rc, to = self.run_cli(cmd, self.rt / "raw" / f"round-{round_k}-{tag}.json")
+            parsed, rc, to = self.run_cli(
+                cmd, self.rt / "raw" / f"round-{round_k}-{tag}.json", round_k, tag)
             result = self.cli_result_or_escalate(parsed, rc, to, round_k, "seal")
             match, count = self._unique_token(SEAL_RE, result, "seal")
             revision_ok = revision12 in result
@@ -828,6 +1000,7 @@ class Loop:
     def _record_seal(self, round_k, event, seal, bound_label, findings) -> None:
         self.append_ledger(round_k, "seal", event, f"seal by {self.cfg['seal_agent']}",
                            seal["line"], findings, bound_label)
+        self._emit_event("seal", seal["line"])
 
     def terminal(self, round_k: int, bound_full: str, bound_label: str, seal_line: str) -> None:
         self.append_ledger(round_k, "terminal", "sealed", f"sealed at {bound_label}",
@@ -837,6 +1010,7 @@ class Loop:
         self.log(f"SEALED round {round_k} at revision {bound_label}")
         self.notify(f"converge-auto {self.cfg['loop_id']} SEALED",
                     f"round {round_k} revision {bound_label}: {seal_line}")
+        self._remove_pid()
         sys.exit(0)
 
     def escalate(self, round_k: int, reason: str) -> None:
@@ -847,12 +1021,58 @@ class Loop:
         self.state.update({"status": "escalated", "phase": "escalate"})
         self.write_handoff()
         self.log(f"ESCALATE round {round_k}: {reason}")
+        self._emit_event("escalate", reason)
         self.notify(f"converge-auto {self.cfg['loop_id']} ESCALATE", f"round {round_k}: {reason}")
+        self._remove_pid()
         sys.exit(2)
 
     def trend_stalled(self) -> bool:
         history = self.state["findings_history"]
         return len(history) >= 2 and history[-1] >= history[-2] and history[-1] > 0
+
+    # -- owner control files (polled at phase boundaries only) --
+
+    def abort(self, round_k: int) -> None:
+        """Graceful abort on control/ABORT: a ledger row, handoff status aborted,
+        pid removed, exit 5. Never leaves the loop mid-phase (polled at boundaries)."""
+        self.append_ledger(round_k, "control", "aborted", "control/ABORT present", None,
+                           self.open_findings, None)
+        self.state.update({"status": "aborted", "phase": "control"})
+        self.write_handoff()
+        self.log(f"ABORTED round {round_k} (control/ABORT)")
+        self._emit_event("aborted", f"round={round_k}")
+        self.notify(f"converge-auto {self.cfg['loop_id']} ABORTED",
+                    f"round {round_k}: control/ABORT")
+        self._remove_pid()
+        sys.exit(5)
+
+    def _poll_control(self, round_k: int, steer: bool = True) -> None:
+        """Poll the control dir at a phase boundary. ABORT wins (exit 5); PAUSE
+        blocks (ledger paused/resumed) polling every CONTROL_POLL_S until removed;
+        STEER is consumed into the pending buffer and applied to a LATER producer
+        (never a reviewer/seal prompt: R-5). Steer is skipped before the seal."""
+        ctl = self.rt / "control"
+        if (ctl / "ABORT").exists():
+            self.abort(round_k)
+        if (ctl / "PAUSE").exists():
+            self.append_ledger(round_k, "control", "paused", "control/PAUSE present", None,
+                               self.open_findings, None)
+            self.log(f"paused at round {round_k} boundary (control/PAUSE present)")
+            self._emit_event("paused", f"round={round_k}")
+            while (ctl / "PAUSE").exists():
+                if (ctl / "ABORT").exists():
+                    self.abort(round_k)
+                time.sleep(CONTROL_POLL_S)
+            self.append_ledger(round_k, "control", "resumed", "control/PAUSE removed", None,
+                               self.open_findings, None)
+            self.log(f"resumed at round {round_k} boundary")
+        if steer:
+            steer_file = ctl / "STEER.md"
+            if steer_file.exists():
+                self._steer = (steer_file.read_text(errors="replace"), round_k)
+                steer_file.rename(ctl / f"STEER.consumed-round{round_k}")
+                self.log(f"consumed control/STEER.md at round {round_k} "
+                         f"(applies to a later producer objective)")
 
     def refuse_dirty_tree_or_exit(self) -> None:
         """A seal binds to a revision; a dirty starting scope poisons diff attribution (R-2).
@@ -868,6 +1088,7 @@ class Loop:
             self.log(f"artifact paths dirty at start:\n{proc.stdout}")
             print("config error: artifact_paths carry uncommitted changes at start; "
                   "commit or stash them, or set allow_dirty=true", file=sys.stderr)
+            self._remove_pid()
             sys.exit(3)
 
     # -- orchestration --
@@ -878,9 +1099,11 @@ class Loop:
                                   text=True, timeout=PREFLIGHT_TIMEOUT_S)
         except (OSError, subprocess.SubprocessError) as exc:
             self.log(f"preflight failed: {exc}")
+            self._remove_pid()
             sys.exit(4)
         if proc.returncode != 0:
             self.log(f"preflight non-zero exit ({proc.returncode}); CLI absent or auth dead")
+            self._remove_pid()
             sys.exit(4)
 
     def _run_round(self, round_k: int) -> None:
@@ -897,6 +1120,7 @@ class Loop:
         self.state["manifest_hash_last"] = manifest
         self.append_ledger(round_k, "produce", "ok", self.produce_delta, None,
                            self.open_findings, self._rev_label("sha256", manifest))
+        self._emit_event("phase_ok", f"round={round_k} phase=produce")
         verdict = self.review(round_k)
         if self.compute_manifest() != manifest:
             self.escalate(round_k, "artifact mutated during review")
@@ -905,6 +1129,7 @@ class Loop:
         self.open_findings = total
         self.append_ledger(round_k, "review", "ok", f"review by {self.cfg['reviewer_agent']}",
                            verdict["line"], total, self._rev_label("sha256", manifest))
+        self._emit_event("review_verdict", verdict["line"])
         if self.trend_stalled():
             self.escalate(round_k, "findings did not decrease across 2 rounds")
         self._triage(round_k, verdict)
@@ -913,6 +1138,7 @@ class Loop:
         clean = verdict["word"] == "CLEAN" and counts_within_bar(
             self.cfg["bar"], verdict["blocking"], verdict["major"], verdict["minor"], 0)
         if clean:
+            self._poll_control(round_k, steer=False)  # PAUSE/ABORT before the seal sequence
             self.attempt_seal(round_k)  # terminates on ACCEPT, returns "rejected" otherwise
         else:
             self.state["punch_list"] = {"text": verdict["body"], "source_round": round_k,
@@ -920,8 +1146,9 @@ class Loop:
             self.write_handoff()
 
     def run(self) -> None:
-        for sub in ("prompts", "raw"):
+        for sub in ("prompts", "raw", "control"):
             (self.rt / sub).mkdir(parents=True, exist_ok=True)
+        self._write_pid()
         self.write_handoff()
         policy = "/commit-false" if self.no_commit else "/commit-true"
         self.log(f"driver start loop_id={self.cfg['loop_id']} bar={self.cfg['bar']} "
@@ -932,6 +1159,7 @@ class Loop:
         while self.state["round"] <= self.cfg["rounds_cap"]:
             round_k = self.state["round"]
             self.state["phase"] = "produce"
+            self._poll_control(round_k)  # PAUSE/ABORT/STEER at each round boundary
             self._run_round(round_k)
             self.state["round"] += 1
             self.write_handoff()
@@ -961,6 +1189,9 @@ class Loop:
         print(f"  rubric      : {cfg['rubric_path']}")
         print(f"  test_cmd    : {cfg['test_cmd']}")
         print(f"  notify_cmd  : {cfg['notify_cmd']}")
+        print(f"  on_event    : {cfg.get('on_event')}")
+        print("  exit codes  : 0 sealed | 2 escalated | 3 config | 4 environment | "
+              "5 aborted (control/ABORT)")
         print("\n  phase plan per round: produce -> "
               + ("gate -> " if cfg["test_cmd"] else "") + "snapshot -> review -> triage -> seal")
         for phase in ("produce", "review", "seal"):
@@ -1154,11 +1385,21 @@ def run_parallel(manifest_path: Path, claude_cmd: str, dry_run: bool) -> int:
             print(f"\n===== parallel loop {entry['cfg']['loop_id']} =====")
             Loop(entry["cfg"], entry["cfg_path"].parent, claude_cmd).plan_only()
         return 0
-    started = iso_now()
-    results = run_children(entries, claude_cmd)
-    summary = write_parallel_summary(manifest_path, results, started, iso_now())
-    print(f"parallel summary: {summary}")
-    return 0 if all(rc == 0 for _, rc in results) else 2
+    # Parent liveness (item 3): its own pid next to the manifest; children write
+    # their per-runtime-dir driver.pid as any single-loop run does.
+    pid_path = manifest_path.parent / "parallel-driver.pid"
+    pid_path.write_text(str(os.getpid()))
+    try:
+        started = iso_now()
+        results = run_children(entries, claude_cmd)
+        summary = write_parallel_summary(manifest_path, results, started, iso_now())
+        print(f"parallel summary: {summary}")
+        return 0 if all(rc == 0 for _, rc in results) else 2
+    finally:
+        try:
+            pid_path.unlink()
+        except OSError:
+            pass
 
 
 def parse_args() -> argparse.Namespace:

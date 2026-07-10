@@ -16,7 +16,7 @@
 # EXIT-row outcome (derived from last_assistant_message) is the trustworthy signal.
 #
 # Structured ledger grammar (w1-design.md "Ledger row schema", R-1 pre-commit):
-#   ^## R<round>.<phase> - <ISO8601 ts> - <event>$   phase in produce|gate|review|seal|terminal|escalate
+#   ^## R<round>.<phase> - <ISO8601 ts> - <event>$   phase in produce|gate|review|seal|terminal|escalate|control
 #   ^- token: `<VERDICT|SEAL line>` | none$
 #   ^- findings-open: <N>$
 #   ^- manifest: sha256:<12hex> | commit:<12hex> | n/a$
@@ -26,13 +26,16 @@ set -uo pipefail
 STALL_MIN=30
 JSON=0
 SELFTEST=0
+WATCH=0
+WATCH_INT=10
 
 usage() {
   cat <<'EOF'
-Usage: swarm-observe.sh [--json] [--stall-min N] [--self-test]
-  --json        emit one JSON object (loops + workers + ephemeral) instead of tables
-  --stall-min N running driver loop with latest row older than N minutes is STALL (default 30)
-  --self-test   build tempdir fixtures, assert every classification, print pass/fail, exit 0/1
+Usage: swarm-observe.sh [--json] [--stall-min N] [--watch [SECONDS]] [--self-test]
+  --json          emit one JSON object (loops + workers + ephemeral) instead of tables
+  --stall-min N   running driver loop with latest row older than N minutes is STALL (default 30)
+  --watch [SECS]  clear-screen re-render every SECS (default 10) until Ctrl-C; not with --json
+  --self-test     build tempdir fixtures, assert every classification, print pass/fail, exit 0/1
 Read-only. Never mutates a watched loop. Exit 0 on scan complete, 1 only on internal error.
 EOF
 }
@@ -41,11 +44,19 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --json) JSON=1; shift ;;
     --stall-min) STALL_MIN="${2:-30}"; shift 2 ;;
+    --watch)
+      WATCH=1
+      if [[ "${2:-}" =~ ^[0-9]+$ ]]; then WATCH_INT="$2"; shift 2; else shift; fi
+      ;;
     --self-test) SELFTEST=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'unknown arg: %s\n' "$1" >&2; usage >&2; exit 1 ;;
   esac
 done
+
+if [[ $WATCH == 1 && $JSON == 1 ]]; then
+  printf 'error: --watch cannot be combined with --json\n' >&2; exit 1
+fi
 
 shopt -s nullglob
 
@@ -70,15 +81,34 @@ join_comma() { # join args with commas
   printf '%s' "$out"
 }
 
-# classify a driver loop by priority: VOIDED > SEALED > ESCALATED > STALL > OSCILLATION > RUNNING
+# liveness of a driver loop's process: alive | dead | nopid (W2.5 item 3).
+# reads driver.pid (single loop) or parallel-driver.pid (parallel child) if present.
+loop_pid_state() {
+  local d=$1 pidfile pid
+  for pidfile in "$d/driver.pid" "$d/parallel-driver.pid"; do
+    [[ -f "$pidfile" ]] || continue
+    pid=$(head -1 "$pidfile" 2>/dev/null | tr -dc '0-9')
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then echo alive; return; fi
+    echo dead; return
+  done
+  echo nopid
+}
+
+# classify a driver loop by priority:
+#   VOIDED > SEALED > ESCALATED > ABORTED > (running:) DEAD > RUNNING? > STALL > OSCILLATION > RUNNING
+# DEAD = handoff running but pid dead (crashed); RUNNING? = running but no pid file (pre-W2.5 or
+# crashed before pid write, kept honest rather than guessed STALL).
 classify_driver() {
-  local voided=$1 status=$2 age=$3 stallmin=$4 trend=$5
+  local voided=$1 status=$2 age=$3 stallmin=$4 trend=$5 pidstate=$6
   if [[ $voided == 1 ]]; then echo VOIDED; return; fi
   case "$status" in
     sealed) echo SEALED; return ;;
     escalated) echo ESCALATED; return ;;
+    aborted) echo ABORTED; return ;;
   esac
   if [[ $status == running ]]; then
+    if [[ $pidstate == dead ]]; then echo DEAD; return; fi
+    if [[ $pidstate == nopid ]]; then echo 'RUNNING?'; return; fi
     if (( age >= 0 )) && (( age > stallmin )); then echo STALL; return; fi
     if [[ $trend == flat || $trend == rise ]]; then echo OSCILLATION; return; fi
   fi
@@ -89,23 +119,28 @@ classify_driver() {
 
 run_scan() {
   local ROOT=$1
-  local -a L_ID L_KIND L_STATUS L_RP L_TREND L_REV L_AGE L_TOKEN
+  local -a L_ID L_KIND L_STATUS L_RP L_TREND L_REV L_AGE L_TOKEN L_PID
   local d handoff rounds lid status header rest roundphase tmp ts event
-  local age_min ep voided mline rev tline tok kls
+  local age_min ep voided mline rev tline tok kls hround hphase pidstate
   local -a RF
   local n a b trend
 
-  # (a) DRIVER loops
+  # (a) DRIVER loops. handoff.json is the entry criterion; rounds.md is optional so a loop
+  # in its first phase (no ledger rows yet) is still visible (W2.5 item 7, first-phase gap).
   for d in "$ROOT"/plans/*/auto/*/; do
-    rounds="$d/rounds.md"; handoff="$d/handoff.json"
-    [[ -f "$rounds" && -f "$handoff" ]] || continue
+    handoff="$d/handoff.json"
+    [[ -f "$handoff" ]] || continue
+    rounds="$d/rounds.md"
 
     lid=$(grep -oE '"loop_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$handoff" | head -1 | sed -E 's/.*"([^"]*)"$/\1/')
     [[ -z "$lid" ]] && lid=$(basename "$d")
     status=$(grep -oE '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$handoff" | head -1 | sed -E 's/.*"([^"]*)"$/\1/')
     [[ -z "$status" ]] && status="unknown"
+    hround=$(grep -oE '"round"[[:space:]]*:[[:space:]]*[0-9]+' "$handoff" | head -1 | grep -oE '[0-9]+' || true)
+    hphase=$(grep -oE '"phase"[[:space:]]*:[[:space:]]*"[^"]*"' "$handoff" | head -1 | sed -E 's/.*"([^"]*)"$/\1/')
 
-    header=$(grep -E '^## R[0-9]+\.(produce|gate|review|seal|terminal|escalate) - ' "$rounds" | tail -1)
+    header=""
+    [[ -f "$rounds" ]] && header=$(grep -E '^## R[0-9]+\.(produce|gate|review|seal|terminal|escalate|control) - ' "$rounds" | tail -1)
     if [[ -n "$header" ]]; then
       rest=${header#'## R'}
       roundphase=${rest%% - *}
@@ -113,7 +148,8 @@ run_scan() {
       ts=${tmp%% - *}
       event=${tmp#* - }
     else
-      roundphase="-"; ts=""; event=""
+      # handoff-only: no ledger rows yet, take round.phase from driver state
+      roundphase="${hround:-?}.${hphase:-?}"; ts=""; event=""
     fi
 
     age_min=-1
@@ -125,31 +161,33 @@ run_scan() {
     voided=0
     if find "$d" -maxdepth 1 -iname 'VOIDED*' 2>/dev/null | grep -q .; then voided=1; fi
 
-    mline=$(grep -E '^- manifest: ' "$rounds" | tail -1 || true)
-    rev=$(printf '%s' "$mline" | grep -oE '(commit|sha256):[0-9a-f]{6,}' | head -1 || true)
-    [[ -z "$rev" ]] && rev="-"
+    rev="-"; tok="none"; trend="-"
+    if [[ -f "$rounds" ]]; then
+      mline=$(grep -E '^- manifest: ' "$rounds" | tail -1 || true)
+      rev=$(printf '%s' "$mline" | grep -oE '(commit|sha256):[0-9a-f]{6,}' | head -1 || true)
+      [[ -z "$rev" ]] && rev="-"
 
-    tline=$(grep -E '^- token: ' "$rounds" | tail -1 || true)
-    tok=$(printf '%s' "$tline" | sed -E 's/^- token: //; s/^`//; s/`$//')
-    [[ -z "$tok" ]] && tok="none"
+      tline=$(grep -E '^- token: ' "$rounds" | tail -1 || true)
+      tok=$(printf '%s' "$tline" | sed -E 's/^- token: //; s/^`//; s/`$//')
+      [[ -z "$tok" ]] && tok="none"
 
-    # findings trend from review rows (last two)
-    mapfile -t RF < <(awk '
-      /^## R[0-9]+\.[a-z]+ - / { ph=$0; sub(/^## R[0-9]+\./,"",ph); sub(/ - .*/,"",ph); cur=ph; next }
-      cur=="review" && /^- findings-open: / { v=$0; sub(/^- findings-open: /,"",v); print v+0 }
-    ' "$rounds")
-    n=${#RF[@]}
-    if (( n >= 2 )); then
-      a=${RF[n-2]}; b=${RF[n-1]}
-      if (( b < a )); then trend=fall; elif (( b == a )); then trend=flat; else trend=rise; fi
-    else
-      trend="-"
+      # findings trend from review rows (last two)
+      mapfile -t RF < <(awk '
+        /^## R[0-9]+\.[a-z]+ - / { ph=$0; sub(/^## R[0-9]+\./,"",ph); sub(/ - .*/,"",ph); cur=ph; next }
+        cur=="review" && /^- findings-open: / { v=$0; sub(/^- findings-open: /,"",v); print v+0 }
+      ' "$rounds")
+      n=${#RF[@]}
+      if (( n >= 2 )); then
+        a=${RF[n-2]}; b=${RF[n-1]}
+        if (( b < a )); then trend=fall; elif (( b == a )); then trend=flat; else trend=rise; fi
+      fi
     fi
 
-    kls=$(classify_driver "$voided" "$status" "$age_min" "$STALL_MIN" "$trend")
+    pidstate=$(loop_pid_state "$d")
+    kls=$(classify_driver "$voided" "$status" "$age_min" "$STALL_MIN" "$trend" "$pidstate")
 
     L_ID+=("$lid"); L_KIND+=("driver"); L_STATUS+=("$kls"); L_RP+=("$roundphase")
-    L_TREND+=("$trend"); L_REV+=("$rev"); L_AGE+=("$age_min"); L_TOKEN+=("$tok")
+    L_TREND+=("$trend"); L_REV+=("$rev"); L_AGE+=("$age_min"); L_TOKEN+=("$tok"); L_PID+=("$pidstate")
   done
 
   # (b) HAND ledgers (tolerant)
@@ -168,7 +206,7 @@ run_scan() {
     hage=$(( (NOW - mtime) / 60 )); (( hage < 0 )) && hage=0
 
     L_ID+=("$lid"); L_KIND+=("hand"); L_STATUS+=("$hstatus"); L_RP+=("-")
-    L_TREND+=("-"); L_REV+=("-"); L_AGE+=("$hage"); L_TOKEN+=("$htoken")
+    L_TREND+=("-"); L_REV+=("-"); L_AGE+=("$hage"); L_TOKEN+=("$htoken"); L_PID+=("n-a")
   done
 
   # (c) LIVE workers from _spawns-rich.log
@@ -206,9 +244,9 @@ run_scan() {
     local -a lobjs=()
     for i in "${!L_ID[@]}"; do
       local agej="${L_AGE[i]}"; [[ "$agej" == "-1" ]] && agej=null
-      lobjs+=("$(printf '{"loop_id":"%s","kind":"%s","status":"%s","round_phase":"%s","trend":"%s","revision":"%s","age_min":%s,"token":"%s"}' \
+      lobjs+=("$(printf '{"loop_id":"%s","kind":"%s","status":"%s","round_phase":"%s","trend":"%s","revision":"%s","age_min":%s,"token":"%s","pid":"%s"}' \
         "$(json_escape "${L_ID[i]}")" "${L_KIND[i]}" "${L_STATUS[i]}" "${L_RP[i]}" \
-        "${L_TREND[i]}" "${L_REV[i]}" "$agej" "$(json_escape "${L_TOKEN[i]}")")")
+        "${L_TREND[i]}" "${L_REV[i]}" "$agej" "$(json_escape "${L_TOKEN[i]}")" "${L_PID[i]}")")
     done
     local -a btj=()
     for k in "${!BYTYPE[@]}"; do btj+=("$(printf '"%s":%s' "$(json_escape "$k")" "${BYTYPE[$k]}")"); done
@@ -257,27 +295,59 @@ self_test() {
 
   mkdir -p "$tmp/plans/camp/auto" "$tmp/comms" "$tmp/agents/_ephemeral"
 
-  _mk_loop() { # dir status header_ts extra_rows
+  local deadpid alivepid
+  deadpid=$(cat /proc/sys/kernel/pid_max 2>/dev/null || echo 4194304); deadpid=$((deadpid + 1))
+  alivepid=$$
+
+  _mk_loop() { # dir status header_ts extra_rows pid
     local ld="$tmp/plans/camp/auto/$1"; mkdir -p "$ld"
     printf '{"loop_id":"%s","round":1,"phase":"produce","status":"%s"}\n' "$1" "$2" > "$ld/handoff.json"
     {
       printf '## R1.produce - %s - ok\n- delta: files=2\n- token: none\n- findings-open: 0\n- manifest: sha256:aabbccddeeff\n\n' "$3"
       [[ -n "${4:-}" ]] && printf '%b' "$4"
     } > "$ld/rounds.md"
+    [[ -n "${5:-}" ]] && printf '%s\n' "$5" > "$ld/driver.pid"
     printf '%s' "$ld"
   }
 
   _mk_loop loop-sealed   sealed    "$now_iso" >/dev/null
   _mk_loop loop-escal    escalated "$now_iso" >/dev/null
-  _mk_loop loop-stall    running   "$old_iso" >/dev/null
+  # running fixtures carry a live driver.pid so the W2.5 pid check does not flip them to RUNNING?/DEAD
+  _mk_loop loop-stall    running   "$old_iso" "" "$alivepid" >/dev/null
   # oscillation: running, recent, two review rows findings 2,2 (flat)
   _mk_loop loop-osc      running   "$now_iso" \
-    "## R2.review - $now_iso - ok\n- delta: r\n- token: \`VERDICT: REWORK blocking=0 major=2 minor=0 round=1\`\n- findings-open: 2\n\n## R3.review - $now_iso - ok\n- delta: r\n- token: \`VERDICT: REWORK blocking=0 major=2 minor=0 round=2\`\n- findings-open: 2\n\n" >/dev/null
+    "## R2.review - $now_iso - ok\n- delta: r\n- token: \`VERDICT: REWORK blocking=0 major=2 minor=0 round=1\`\n- findings-open: 2\n\n## R3.review - $now_iso - ok\n- delta: r\n- token: \`VERDICT: REWORK blocking=0 major=2 minor=0 round=2\`\n- findings-open: 2\n\n" "$alivepid" >/dev/null
   # running: recent, two review rows findings 3,1 (falling) -> RUNNING not OSCILLATION
   _mk_loop loop-run      running   "$now_iso" \
-    "## R2.review - $now_iso - ok\n- token: \`VERDICT: REWORK blocking=0 major=3 minor=0 round=1\`\n- findings-open: 3\n\n## R3.review - $now_iso - ok\n- token: \`VERDICT: REWORK blocking=0 major=1 minor=0 round=2\`\n- findings-open: 1\n\n" >/dev/null
+    "## R2.review - $now_iso - ok\n- token: \`VERDICT: REWORK blocking=0 major=3 minor=0 round=1\`\n- findings-open: 3\n\n## R3.review - $now_iso - ok\n- token: \`VERDICT: REWORK blocking=0 major=1 minor=0 round=2\`\n- findings-open: 1\n\n" "$alivepid" >/dev/null
   # voided: marker present, handoff sealed -> VOIDED beats SEALED
   vd=$(_mk_loop loop-void sealed "$now_iso"); : > "$vd/VOIDED"
+
+  # --- W2.5 fixtures (item 3+7+8) ---
+  # handoff-only RUNNING: no rounds.md, alive pid, round.phase from handoff (first-phase gap)
+  mkdir -p "$tmp/plans/camp/auto/loop-hoff"
+  printf '{"loop_id":"loop-hoff","round":1,"phase":"produce","status":"running"}\n' > "$tmp/plans/camp/auto/loop-hoff/handoff.json"
+  printf '%s\n' "$alivepid" > "$tmp/plans/camp/auto/loop-hoff/driver.pid"
+
+  # DEAD: handoff running but driver.pid is a definitely-dead pid (pid_max+1, never allocatable)
+  mkdir -p "$tmp/plans/camp/auto/loop-dead"
+  printf '{"loop_id":"loop-dead","round":1,"phase":"review","status":"running"}\n' > "$tmp/plans/camp/auto/loop-dead/handoff.json"
+  printf '## R1.review - %s - ok\n- token: none\n- findings-open: 0\n- manifest: sha256:aabbccddeeff\n\n' "$now_iso" > "$tmp/plans/camp/auto/loop-dead/rounds.md"
+  printf '%s\n' "$deadpid" > "$tmp/plans/camp/auto/loop-dead/driver.pid"
+
+  # ABORTED: handoff status aborted (control/ABORT graceful stop, exit 5)
+  mkdir -p "$tmp/plans/camp/auto/loop-abort"
+  printf '{"loop_id":"loop-abort","round":2,"phase":"control","status":"aborted"}\n' > "$tmp/plans/camp/auto/loop-abort/handoff.json"
+  printf '## R2.control - %s - aborted\n- token: none\n- findings-open: 0\n- manifest: sha256:aabbccddeeff\n\n' "$now_iso" > "$tmp/plans/camp/auto/loop-abort/rounds.md"
+
+  # control paused row: running, alive pid, latest ledger row is a control/paused entry (must parse cleanly)
+  mkdir -p "$tmp/plans/camp/auto/loop-control"
+  printf '{"loop_id":"loop-control","round":2,"phase":"produce","status":"running"}\n' > "$tmp/plans/camp/auto/loop-control/handoff.json"
+  {
+    printf '## R1.review - %s - ok\n- token: `VERDICT: REWORK blocking=0 major=1 minor=0 round=1`\n- findings-open: 1\n- manifest: sha256:aabbccddeeff\n\n' "$now_iso"
+    printf '## R2.control - %s - paused\n- delta: paused by control/PAUSE\n- token: none\n- findings-open: 1\n- manifest: sha256:aabbccddeeff\n\n' "$now_iso"
+  } > "$tmp/plans/camp/auto/loop-control/rounds.md"
+  printf '%s\n' "$alivepid" > "$tmp/plans/camp/auto/loop-control/driver.pid"
 
   # hand ledger with a SEAL line
   printf '## wrap\n\nSEAL: ACCEPTED blocking=0 major=0 minor=0 nits=0\n' > "$tmp/plans/camp/rounds.md"
@@ -307,6 +377,11 @@ self_test() {
   grep -qE '^camp .* hand .* SEALED '    <<<"$out"; _assert "hand ledger -> SEALED" $?
   grep -qE 'WORKERS in-flight, last 24h \(1\)' <<<"$out"; _assert "workers in-flight == 1" $?
   grep -qE 'w-implementer +1' <<<"$out"; _assert "in-flight by_type w-implementer == 1" $?
+  # W2.5 additions
+  grep -qE '^loop-hoff .* RUNNING .* 1.produce'    <<<"$out"; _assert "handoff-only -> RUNNING R1.produce (first-phase gap)" $?
+  grep -qE '^loop-dead .* DEAD '                   <<<"$out"; _assert "running + dead pid -> DEAD" $?
+  grep -qE '^loop-abort .* ABORTED '               <<<"$out"; _assert "handoff aborted -> ABORTED" $?
+  grep -qE '^loop-control .* RUNNING .* 2.control' <<<"$out"; _assert "control paused row parses -> 2.control" $?
 
   local jout
   JSON=1; jout=$(run_scan "$tmp")
@@ -314,6 +389,10 @@ self_test() {
   grep -q '"in_flight":1' <<<"$jout"; _assert "json in_flight==1" $?
   grep -q '"w-implementer":1' <<<"$jout"; _assert "json by_type" $?
   grep -q '"status":"SEALED","round_phase":"-"' <<<"$jout"; _assert "json hand SEALED" $?
+  # W2.5 additions
+  grep -q '"loop_id":"loop-dead","kind":"driver","status":"DEAD"' <<<"$jout"; _assert "json DEAD" $?
+  grep -q '"loop_id":"loop-abort","kind":"driver","status":"ABORTED"' <<<"$jout"; _assert "json ABORTED" $?
+  grep -q '"loop_id":"loop-hoff","kind":"driver","status":"RUNNING","round_phase":"1.produce","trend":"-","revision":"-","age_min":null,"token":"none","pid":"alive"' <<<"$jout"; _assert "json handoff-only RUNNING (pid alive, age null)" $?
 
   printf '\nself-test: %d passed, %d failed\n' "$pass" "$fail"
   [[ $fail == 0 ]]
@@ -327,6 +406,19 @@ fi
 
 ROOT="${SWARM_OBSERVE_ROOT:-$HOME/.claude}"
 if [[ ! -d "$ROOT" ]]; then printf 'error: root not found: %s\n' "$ROOT" >&2; exit 1; fi
+
+if [[ $WATCH == 1 ]]; then
+  # clear-screen re-render loop until Ctrl-C (W2.5 item 7); plain tables only, never --json
+  while true; do
+    clear 2>/dev/null || printf '\033[2J\033[H'
+    printf 'swarm-observe --watch (every %ss, Ctrl-C to stop)  %s\n\n' "$WATCH_INT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    NOW=$(date -u +%s)
+    CUTOFF=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+    run_scan "$ROOT"
+    sleep "$WATCH_INT"
+  done
+fi
+
 NOW=$(date -u +%s)
 CUTOFF=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
 run_scan "$ROOT"
