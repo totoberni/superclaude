@@ -146,7 +146,14 @@ import json, os, re, subprocess, sys, time
 
 argv = sys.argv
 MOCK_DIR = os.environ["MOCK_DIR"]
-SCEN = os.environ.get("MOCK_SCENARIO", "happy")
+def _resolve_scenario():
+    # A per-loop .mock-scenario in cwd (the loop's runtime dir / repo) wins over the
+    # global MOCK_SCENARIO env, so --parallel loops sharing one env still differ.
+    f = os.path.join(os.getcwd(), ".mock-scenario")
+    if os.path.isfile(f):
+        return open(f).read().strip()
+    return os.environ.get("MOCK_SCENARIO", "happy")
+SCEN = _resolve_scenario()
 ART = os.environ.get("MOCK_ARTIFACT", "")
 os.makedirs(MOCK_DIR, exist_ok=True)
 
@@ -199,9 +206,17 @@ def revision_of():
     m = re.search(r"(?:commit|sha256):([0-9a-f]{12})", prompt)
     return m.group(1) if m else "deadbeef0000"
 
-def write_art(txt):
+def _targets():
+    # Single-loop tests pin MOCK_ARTIFACT; parallel loops leave it empty and let the
+    # producer prompt's allowlist name the file(s), resolved against the run cwd.
     if ART:
-        with open(ART, "w") as fh:
+        return [ART]
+    m = re.search(r"the allowlist\): (.+?)\. Touch nothing", prompt)
+    return [p.strip() for p in m.group(1).split(",")] if m else []
+
+def write_art(txt):
+    for path in _targets():
+        with open(path, "w") as fh:
             fh.write(txt)
 
 def default_produce():
@@ -912,6 +927,143 @@ NAFTER=$(git -C "$GREPO3" rev-list --count HEAD); CSM=$(seal_manifest_of "$S/rou
 if [ "$NBEFORE" = "$NAFTER" ] && echo "$CSM" | grep -qE '^sha256:'; then ok "S34 env /commit false: zero commits + sha256 binding"; else no "S34 env policy" "before=$NBEFORE after=$NAFTER seal=$CSM"; fi
 
 # ═══════════════════════════════════════════════════
+sect "parallel multi-artifact convergence (--parallel)"
+
+# ledger well-formedness sweep (headers + token lines), reused across P-scenarios
+ledger_wellformed() {
+  local rf="$1" badhdr badtok
+  badhdr=$(grep -E '^## R' "$rf" 2>/dev/null | grep -cvE '^## R[0-9]+\.(produce|gate|review|seal|terminal|escalate) - [^ ]+ - [^ ]+$')
+  # shellcheck disable=SC2016  # backticks are literal ledger-token delimiters
+  badtok=$(grep -E '^- token:' "$rf" 2>/dev/null | grep -cvE '^- token: (none|`(VERDICT|SEAL): .*`)$')
+  [ "${badhdr:-1}" = 0 ] && [ "${badtok:-1}" = 0 ]
+}
+
+write_manifest() {
+  local out="$1"; shift
+  python3 - "$out" "$@" <<'PYEOF'
+import json, sys
+json.dump({"loops": sys.argv[2:]}, open(sys.argv[1], "w"), indent=2)
+PYEOF
+}
+
+# Drive the driver in --parallel mode. MOCK_ARTIFACT is empty so each child's
+# producer prompt names its own artifact (resolved against that child's cwd).
+drive_parallel() {
+  local man="$1" md="$2" scen="$3"; shift 3
+  rm -rf "$md"; mkdir -p "$md"
+  MOCK_DIR="$md" MOCK_SCENARIO="$scen" MOCK_ARTIFACT="" \
+    python3 "$DRIVER_PY" --parallel "$man" --claude-cmd "$MOCK" "$@" \
+    >"$md/stdout.txt" 2>"$md/stderr.txt"
+  EXIT=$?
+}
+
+# P1: two non-git happy loops both seal; summary has 2 sealed rows; ledgers well-formed
+P1="$ROOT/p1"; mkdir -p "$P1"
+setup_scen "$P1/a" '{"loop_id":"p1a"}'
+setup_scen "$P1/b" '{"loop_id":"p1b"}'
+write_manifest "$P1/manifest.json" "$P1/a/loop.json" "$P1/b/loop.json"
+drive_parallel "$P1/manifest.json" "$P1/mock" happy
+expect_exit 0 "P1 parallel happy (both non-git loops seal)"
+SUM="$P1/parallel-summary.md"
+if [ -f "$SUM" ]; then ok "P1 parallel-summary.md written"; else no "P1 summary" "parallel-summary.md absent"; fi
+SEALED=$(cntE '^\| p1[ab] \| 0 \| sealed \|' "$SUM")
+if [ "$SEALED" = 2 ]; then ok "P1 summary shows 2 sealed rows"; else no "P1 sealed rows" "found $SEALED, expected 2"; fi
+if ledger_wellformed "$P1/a/rounds.md" && ledger_wellformed "$P1/b/rounds.md"; then
+  ok "P1 both child ledgers well-formed (header+token sweep)"
+else
+  no "P1 ledger sweep" "a or b child ledger nonconforming"
+fi
+
+# P2: mixed outcome — one loop seals (happy), one escalates (trend); parent exit 2
+P2="$ROOT/p2"; mkdir -p "$P2"
+setup_scen "$P2/a" '{"loop_id":"p2a"}'
+setup_scen "$P2/b" '{"loop_id":"p2b","rounds_cap":4}'
+printf 'happy\n' > "$P2/a/.mock-scenario"
+printf 'trend\n'  > "$P2/b/.mock-scenario"
+write_manifest "$P2/manifest.json" "$P2/a/loop.json" "$P2/b/loop.json"
+drive_parallel "$P2/manifest.json" "$P2/mock" happy
+expect_exit 2 "P2 mixed outcome (one seals, one escalates)"
+SUM="$P2/parallel-summary.md"
+SEALED=$(cntE '^\| p2a \| 0 \| sealed \|' "$SUM")
+ESCAL=$(cntE '^\| p2b \| 2 \| escalated \|' "$SUM")
+if [ "$SEALED" = 1 ] && [ "$ESCAL" = 1 ]; then ok "P2 summary shows one sealed one escalated"; else no "P2 summary rows" "sealed=$SEALED escalated=$ESCAL"; fi
+
+# P3: overlapping artifact scope -> exit 3 before any spawn (mock argv log empty)
+P3="$ROOT/p3"; mkdir -p "$P3"
+setup_scen "$P3/a" "{\"loop_id\":\"p3a\",\"artifact_paths\":[\"$P3/shared.txt\"]}"
+setup_scen "$P3/b" "{\"loop_id\":\"p3b\",\"artifact_paths\":[\"$P3/shared.txt\"]}"
+P3MAN="$P3/manifest.json"; write_manifest "$P3MAN" "$P3/a/loop.json" "$P3/b/loop.json"
+P3MOCK="$P3/mock"
+drive_parallel "$P3MAN" "$P3MOCK" happy
+expect_exit 3 "P3 overlapping artifact scope rejected"
+if [ ! -f "$P3MOCK/calls.jsonl" ]; then ok "P3 no child/mock spawned (argv log empty)"; else no "P3 no spawn" "mock was invoked"; fi
+if grep -qF 'artifact scope collision' "$P3MOCK/stderr.txt" 2>/dev/null; then ok "P3 error names the collision"; else no "P3 collision message" "$(cat "$P3MOCK/stderr.txt" 2>/dev/null)"; fi
+
+# P4: manifest with 6 loops -> exit 3 (hard cap 5)
+P4="$ROOT/p4"; mkdir -p "$P4"
+P4LOOPS=()
+for i in 1 2 3 4 5 6; do
+  setup_scen "$P4/l$i" "{\"loop_id\":\"p4l$i\"}"
+  P4LOOPS+=("$P4/l$i/loop.json")
+done
+write_manifest "$P4/manifest.json" "${P4LOOPS[@]}"
+drive_parallel "$P4/manifest.json" "$P4/mock" happy
+expect_exit 3 "P4 six loops exceed the hard cap of 5"
+if grep -qF 'hard cap of 5' "$P4/mock/stderr.txt" 2>/dev/null; then ok "P4 error cites the cap"; else no "P4 cap message" "$(cat "$P4/mock/stderr.txt" 2>/dev/null)"; fi
+
+# P5: two git-mode loops in ONE repo, disjoint files -> both seal, both pre-seal
+# commits present, no lock-timeout escalation (repo commit lock serializes them)
+GREPO5="$ROOT/gp5"; mkdir -p "$GREPO5"
+git -C "$GREPO5" init -q
+git -C "$GREPO5" config user.email t@t
+git -C "$GREPO5" config user.name t
+printf 'seed a\n' > "$GREPO5/artifact_a.txt"
+printf 'seed b\n' > "$GREPO5/artifact_b.txt"
+git -C "$GREPO5" add artifact_a.txt artifact_b.txt
+git -C "$GREPO5" -c user.email=t@t -c user.name=t commit -qm init >/dev/null 2>&1
+P5="$ROOT/p5"; mkdir -p "$P5"
+setup_scen "$P5/a" "{\"loop_id\":\"p5a\",\"repo\":\"$GREPO5\",\"artifact_paths\":[\"artifact_a.txt\"]}"
+setup_scen "$P5/b" "{\"loop_id\":\"p5b\",\"repo\":\"$GREPO5\",\"artifact_paths\":[\"artifact_b.txt\"]}"
+write_manifest "$P5/manifest.json" "$P5/a/loop.json" "$P5/b/loop.json"
+drive_parallel "$P5/manifest.json" "$P5/mock" happy
+expect_exit 0 "P5 same-repo serialization (both git loops seal)"
+CA=$(git -C "$GREPO5" log --format=%s | grep -cF 'chore(p5a): round 1 pre-seal snapshot')
+CB=$(git -C "$GREPO5" log --format=%s | grep -cF 'chore(p5b): round 1 pre-seal snapshot')
+if [ "$CA" = 1 ] && [ "$CB" = 1 ]; then ok "P5 both pre-seal commits present in git log"; else no "P5 commits" "p5a=$CA p5b=$CB"; fi
+if ! grep -qF 'pre-seal_commit_lock_timeout' "$P5/a/rounds.md" 2>/dev/null && ! grep -qF 'pre-seal_commit_lock_timeout' "$P5/b/rounds.md" 2>/dev/null; then
+  ok "P5 no lock-timeout escalation in either loop"
+else
+  no "P5 lock timeout" "a loop escalated on the commit lock"
+fi
+
+# P6: parallel dry-run validates + prints plans, spawns nothing, writes no summary, exit 0
+P6="$ROOT/p6"; mkdir -p "$P6"
+setup_scen "$P6/a" '{"loop_id":"p6a"}'
+setup_scen "$P6/b" '{"loop_id":"p6b"}'
+write_manifest "$P6/manifest.json" "$P6/a/loop.json" "$P6/b/loop.json"
+drive_parallel "$P6/manifest.json" "$P6/mock" happy --dry-run
+expect_exit 0 "P6 parallel dry-run"
+if [ ! -f "$P6/mock/calls.jsonl" ]; then ok "P6 dry-run spawned nothing"; else no "P6 dry-run" "mock invoked"; fi
+if [ ! -f "$P6/parallel-summary.md" ]; then ok "P6 dry-run wrote no summary"; else no "P6 dry-run summary" "summary written on dry-run"; fi
+if grep -qF 'p6a' "$P6/mock/stdout.txt" 2>/dev/null && grep -qF 'p6b' "$P6/mock/stdout.txt" 2>/dev/null; then ok "P6 dry-run printed both loop plans"; else no "P6 dry-run plans" "loop plans absent from stdout"; fi
+
+# P8: a stale commit lock (recorded holder PID is dead) is broken and the loop
+# still seals. Small margin via the CONVERGE_LOCK_MARGIN_S env seam so a
+# NON-broken lock would escalate fast (exactly what mutation M8 asserts).
+GREPO8="$ROOT/gp8"; mk_git_repo "$GREPO8" "seed p8\n"
+mkdir -p "$GREPO8/.git/converge-auto-commit.lock"
+sleep 0.01 & P8DEAD=$!
+wait "$P8DEAD" 2>/dev/null
+printf '%s' "$P8DEAD" > "$GREPO8/.git/converge-auto-commit.lock/pid"
+S="$ROOT/p8s"; setup_scen "$S" "{\"loop_id\":\"p8loop\",\"repo\":\"$GREPO8\",\"phase_timeout_s\":5}"
+export CONVERGE_LOCK_MARGIN_S=2
+drive "$S" happy "$GREPO8/artifact.txt"
+unset CONVERGE_LOCK_MARGIN_S
+expect_exit 0 "P8 stale commit lock broken, loop seals"
+if grep -qF 'breaking stale commit lock' "$S/driver.log" 2>/dev/null; then ok "P8 stale-break logged"; else no "P8 stale-break log" "log line absent"; fi
+if [ ! -d "$GREPO8/.git/converge-auto-commit.lock" ]; then ok "P8 lock released after run"; else no "P8 lock release" "lock dir persists"; fi
+
+# ═══════════════════════════════════════════════════
 # Mutation harness (genuineness proof) — behind --mutations
 # ═══════════════════════════════════════════════════
 run_mutation() {
@@ -987,6 +1139,45 @@ if [ "$DO_MUTATIONS" = true ]; then
     'if len(matches) == 0:' \
     two_verdicts '' "$ROOT/m6-run/artifact.txt"
   if [ "$EXIT" != 2 ]; then ok "M6 unique-token guard (mutant exit=$EXIT, not 2)"; else no "M6" "duplicate VERDICT still rejected under mutation"; fi
+
+  # M7: disable the artifact-scope disjointness check -> P3 overlap no longer rejected.
+  # Driven in --parallel mode (not run_mutation, which is --config-only).
+  MUT7="$ROOT/m7.py"; cp "$REAL_DRIVER" "$MUT7"
+  if python3 "$MUTATE" "$MUT7" 'if path in scope_owner:' 'if False and path in scope_owner:' 2>"$ROOT/m7.err" \
+     && python3 -m py_compile "$MUT7" 2>"$ROOT/m7.comp"; then
+    M7MOCK="$ROOT/m7-mock"; rm -rf "$M7MOCK"; mkdir -p "$M7MOCK"
+    MOCK_DIR="$M7MOCK" MOCK_SCENARIO=happy MOCK_ARTIFACT="" \
+      python3 "$MUT7" --parallel "$P3MAN" --claude-cmd "$MOCK" >/dev/null 2>&1
+    M7EXIT=$?
+    if [ "$M7EXIT" != 3 ]; then ok "M7 disjointness guard (mutant exit=$M7EXIT, not 3)"; else no "M7" "overlap still rejected under mutation"; fi
+  else
+    no "M7 apply/compile" "$(cat "$ROOT/m7.err" "$ROOT/m7.comp" 2>/dev/null)"
+  fi
+  rm -f "$MUT7"
+
+  # M8: disable the stale-lock break -> a P8-style run wedges on the dead-holder
+  # lock and escalates on the (margin-shrunk) bound instead of sealing.
+  MUT8="$ROOT/m8.py"; cp "$REAL_DRIVER" "$MUT8"
+  if python3 "$MUTATE" "$MUT8" 'self._break_lock_if_stale(lock)' 'pass  # M8: stale-break disabled' 2>"$ROOT/m8.err" \
+     && python3 -m py_compile "$MUT8" 2>"$ROOT/m8.comp"; then
+    GREPOM8="$ROOT/gm8"; mk_git_repo "$GREPOM8" "seed m8\n"
+    mkdir -p "$GREPOM8/.git/converge-auto-commit.lock"
+    sleep 0.01 & M8DEAD=$!
+    wait "$M8DEAD" 2>/dev/null
+    printf '%s' "$M8DEAD" > "$GREPOM8/.git/converge-auto-commit.lock/pid"
+    SM8="$ROOT/m8s"; setup_scen "$SM8" "{\"loop_id\":\"m8loop\",\"repo\":\"$GREPOM8\",\"phase_timeout_s\":2}"
+    export CONVERGE_LOCK_MARGIN_S=1
+    DRIVER_PY="$MUT8"; drive "$SM8" happy "$GREPOM8/artifact.txt"; DRIVER_PY="$REAL_DRIVER"
+    unset CONVERGE_LOCK_MARGIN_S
+    if [ "$EXIT" = 2 ] && grep -qF 'pre-seal_commit_lock_timeout' "$SM8/rounds.md" 2>/dev/null; then
+      ok "M8 stale-break guard (mutant wedges on the stale lock and escalates)"
+    else
+      no "M8 stale-break guard" "exit=$EXIT (expected 2 with lock-timeout escalate)"
+    fi
+  else
+    no "M8 apply/compile" "$(cat "$ROOT/m8.err" "$ROOT/m8.comp" 2>/dev/null)"
+  fi
+  rm -f "$MUT8"
 fi
 
 # ── Driver-file integrity (real file untouched end to end) ──

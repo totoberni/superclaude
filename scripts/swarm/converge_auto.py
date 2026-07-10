@@ -31,6 +31,15 @@ artifact_paths), quoted as sha256:<12hex>, detecting any edit including
 uncommitted ones. The content manifest is also the cheapest detector for the
 produce-to-review window and is retained for that check in both modes.
 
+Parallel mode (--parallel <manifest.json>) forks up to 5 CHILD PROCESSES of this
+same script, one per loop config, each a normal single-loop run with its own
+runtime dir, handoff, ledger, prompts, and raw returns. There is NO shared state
+between children and NO cross-loop approval transfer: every loop seals independently
+by construction (its own fresh seal auditor against its own bound revision), so one
+loop's seal can never stand in for another. The parent validates the whole manifest
+(1..5 loops, each config valid, artifact scopes disjoint, loop_ids unique) BEFORE
+spawning anything, waits on all children, and writes parallel-summary.md.
+
 Runs under ~/.claude/.venv/bin/python and system python3 alike (stdlib only).
 Design SOT: ~/.claude/plans/wf-autonomy/checkpoints/w1-design.md.
 Token grammar SOT: ~/.claude/skills/_shared/verdict-schema.md.
@@ -48,6 +57,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,6 +69,10 @@ READ_ONLY_DENY = "Write,Edit,NotebookEdit"
 HOOK_MARKER = "converge-auto-seal-void-hook"
 PREFLIGHT_TIMEOUT_S = 30
 NOTIFY_TIMEOUT_S = 30
+# Margin added to the config-derived lock wait bound (2 * phase_timeout_s covers a
+# strict sibling's two seal sessions). Env seam for tests, like CONVERGE_NO_COMMIT_FILE.
+COMMIT_LOCK_MARGIN_S = int(os.environ.get("CONVERGE_LOCK_MARGIN_S", "120"))
+COMMIT_LOCK_POLL_S = 0.2
 GATE_TAIL_CHARS = 2000
 VALID_BARS = ("default", "gate", "strict")
 
@@ -710,7 +724,74 @@ class Loop:
 
     # -- seal orchestration and terminal states --
 
+    def _commit_lock_path(self) -> Path:
+        return _hooks_dir(self.cwd).parent / "converge-auto-commit.lock"
+
+    def _acquire_commit_lock(self, round_k: int) -> None:
+        """Repo-scoped mkdir lock serializing a git-mode loop's pre-seal commit and
+        the guard-3 window that follows, so concurrent same-repo drivers never race
+        on the git index lock and never move HEAD under each other's post-seal check.
+        The wait bound covers a sibling's WHOLE lock hold (seal sessions run up to
+        phase_timeout_s each; strict holds two), derived from this loop's own timeout
+        as the proxy. A lock whose recorded holder PID is dead is broken as stale so
+        a crashed driver never wedges the repo. Released on every exit path via
+        attempt_seal."""
+        lock = self._commit_lock_path()
+        deadline = time.monotonic() + 2 * self.timeout + COMMIT_LOCK_MARGIN_S
+        last_note = time.monotonic()
+        while True:
+            try:
+                lock.mkdir()
+                (lock / "pid").write_text(str(os.getpid()))
+                return
+            except FileExistsError:
+                self._break_lock_if_stale(lock)
+                now = time.monotonic()
+                if now >= deadline:
+                    self.escalate(round_k, "pre-seal commit lock timeout")
+                if now - last_note >= 60:
+                    self.log(f"waiting for repo commit lock at {lock}")
+                    last_note = now
+                time.sleep(COMMIT_LOCK_POLL_S)
+
+    def _break_lock_if_stale(self, lock: Path) -> None:
+        """A crashed holder would wedge the repo forever; a dead recorded PID frees it."""
+        try:
+            pid = int((lock / "pid").read_text().strip())
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            # Must precede OSError: ProcessLookupError subclasses it.
+            self.log(f"breaking stale commit lock at {lock} (holder pid {pid} dead)")
+            self._release_lock_dir(lock)
+        except (FileNotFoundError, ValueError, OSError):
+            return  # no pid yet (holder mid-acquire), unreadable, or alive-other-uid
+
+    @staticmethod
+    def _release_lock_dir(lock: Path) -> None:
+        try:
+            (lock / "pid").unlink()
+        except OSError:
+            pass
+        try:
+            lock.rmdir()
+        except OSError:
+            pass
+
+    def _release_commit_lock(self) -> None:
+        self._release_lock_dir(self._commit_lock_path())
+
     def attempt_seal(self, round_k: int) -> str:
+        """Serialize the whole git-mode seal under the repo commit lock (a no-op for a
+        single uncontended loop); non-git loops need no lock (no commits, no HEAD)."""
+        if not self.commit_mode:
+            return self._run_seal_sequence(round_k)
+        self._acquire_commit_lock(round_k)
+        try:
+            return self._run_seal_sequence(round_k)
+        finally:
+            self._release_commit_lock()
+
+    def _run_seal_sequence(self, round_k: int) -> str:
         required = 2 if self.cfg["bar"] == "strict" else 1
         bound_full, bound_label = self._establish_bound_revision(round_k)
         seal_line = None
@@ -935,12 +1016,160 @@ def install_void_hook(repo: str) -> int:
     return 0
 
 
+# --- parallel mode -----------------------------------------------------------
+
+
+def resolved_artifact_paths(cfg: dict, loop_json_path: Path) -> list[Path]:
+    """Absolute, normalized artifact paths for one loop, mirroring Loop._resolve
+    (cwd = repo when set, else the loop.json's own directory)."""
+    cwd = Path(cfg["repo"]).expanduser() if cfg.get("repo") else loop_json_path.parent
+    out = []
+    for rel in cfg["artifact_paths"]:
+        path = Path(rel).expanduser()
+        out.append((path if path.is_absolute() else cwd / path).resolve())
+    return out
+
+
+def load_manifest(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ConfigError(f"manifest is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError("manifest must be a JSON object with a loops list")
+    return data
+
+
+def validate_manifest(manifest: dict, manifest_path: Path) -> list[dict]:
+    """Validate the manifest and every referenced loop.json; raise ConfigError
+    (exit 3) BEFORE any child is spawned. Enforces the hard cap (1..5), per-loop
+    config validity, loop_id uniqueness, and artifact-scope disjointness."""
+    loops = manifest.get("loops")
+    if not isinstance(loops, list) or not loops:
+        raise ConfigError("manifest loops must be a non-empty list of loop.json paths")
+    if not all(isinstance(x, str) and x for x in loops):
+        raise ConfigError("manifest loops must be a list of path strings")
+    if len(loops) > 5:
+        raise ConfigError(f"manifest exceeds the hard cap of 5 loops (got {len(loops)})")
+    entries, seen_ids, scope_owner = [], {}, {}
+    for raw in loops:
+        cfg_path = Path(raw).expanduser().resolve()
+        if not cfg_path.is_file():
+            raise ConfigError(f"manifest loop.json not found: {cfg_path}")
+        cfg = validate_config(load_config(cfg_path))
+        loop_id = cfg["loop_id"]
+        if loop_id in seen_ids:
+            raise ConfigError(f"duplicate loop_id across manifest loops: {loop_id}")
+        seen_ids[loop_id] = cfg_path
+        for path in resolved_artifact_paths(cfg, cfg_path):
+            if path in scope_owner:
+                raise ConfigError(f"artifact scope collision on {path}: loops "
+                                  f"{scope_owner[path]} and {loop_id} share it")
+            scope_owner[path] = loop_id
+        entries.append({"cfg_path": cfg_path, "cfg": cfg})
+    return entries
+
+
+def run_children(entries: list[dict], claude_cmd: str) -> list:
+    """Fork one child process per loop (each a normal --config single-loop run) and
+    wait on all of them. Each child owns its runtime dir; no shared state."""
+    running = []
+    for entry in entries:
+        rt = entry["cfg_path"].parent
+        out = open(rt / "parallel-child.out", "w")
+        err = open(rt / "parallel-child.err", "w")
+        cmd = [sys.executable, os.path.abspath(__file__),
+               "--config", str(entry["cfg_path"]), "--claude-cmd", claude_cmd]
+        running.append((entry, subprocess.Popen(cmd, stdout=out, stderr=err), out, err))
+    results = []
+    for entry, proc, out, err in running:
+        rc = proc.wait()
+        out.close()
+        err.close()
+        results.append((entry, rc))
+    return results
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _terminal_bound_label(rounds_path: Path) -> str:
+    """The bound-revision label (commit:/sha256:<12hex>) from the terminal ledger
+    row, or n/a when the loop never reached a terminal seal."""
+    if not rounds_path.is_file():
+        return "n/a"
+    in_terminal = False
+    for line in rounds_path.read_text(errors="replace").splitlines():
+        if line.startswith("## R") and ".terminal - " in line:
+            in_terminal = True
+        elif in_terminal and line.startswith("- manifest:"):
+            return line.split("manifest:", 1)[1].strip()
+    return "n/a"
+
+
+def _loop_summary_row(entry: dict, rc: int) -> str:
+    rt = entry["cfg_path"].parent
+    handoff = _read_json(rt / "handoff.json")
+    status = handoff.get("status", "unknown")
+    bound = _terminal_bound_label(rt / "rounds.md") if status == "sealed" else "n/a"
+    rounds = handoff.get("round", "n/a")
+    return (f"| {entry['cfg']['loop_id']} | {rc} | {status} | {bound} | "
+            f"{rounds} | {rt / 'rounds.md'} |")
+
+
+def write_parallel_summary(manifest_path: Path, results: list, started: str,
+                           ended: str) -> Path:
+    out = manifest_path.parent / "parallel-summary.md"
+    worst = max((rc for _, rc in results), default=0)
+    lines = ["# converge-auto parallel run summary", "",
+             f"- manifest: {manifest_path}", f"- started: {started}",
+             f"- ended: {ended}", f"- loops: {len(results)}",
+             f"- worst child exit: {worst}", "",
+             "| loop_id | exit | status | bound revision | rounds | ledger |",
+             "| --- | --- | --- | --- | --- | --- |"]
+    lines += [_loop_summary_row(entry, rc) for entry, rc in results]
+    out.write_text("\n".join(lines) + "\n")
+    return out
+
+
+def run_parallel(manifest_path: Path, claude_cmd: str, dry_run: bool) -> int:
+    """Validate the manifest, then either print each loop's dry-run plan (dry_run)
+    or fork the children, wait, and write the aggregate summary. Return the parent
+    exit code: 0 iff every child sealed (exited 0), else 2."""
+    if not manifest_path.is_file():
+        print(f"config error: manifest not found: {manifest_path}", file=sys.stderr)
+        return 3
+    try:
+        entries = validate_manifest(load_manifest(manifest_path), manifest_path)
+    except ConfigError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 3
+    if dry_run:
+        for entry in entries:
+            print(f"\n===== parallel loop {entry['cfg']['loop_id']} =====")
+            Loop(entry["cfg"], entry["cfg_path"].parent, claude_cmd).plan_only()
+        return 0
+    started = iso_now()
+    results = run_children(entries, claude_cmd)
+    summary = write_parallel_summary(manifest_path, results, started, iso_now())
+    print(f"parallel summary: {summary}")
+    return 0 if all(rc == 0 for _, rc in results) else 2
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Supervised-autonomous convergence driver.")
     parser.add_argument("--config", help="path to loop.json (required for a run)")
     parser.add_argument("--claude-cmd", default="claude", help="claude CLI path (default: claude)")
     parser.add_argument("--dry-run", action="store_true",
                         help="validate config and print the phase plan; spawn nothing")
+    parser.add_argument("--parallel", metavar="MANIFEST",
+                        help="path to a parallel manifest.json ('{\"loops\": [loop.json, ...]}'); "
+                             "mutually exclusive with --config")
     parser.add_argument("--install-void-hook", nargs="?", const="", metavar="REPO",
                         help="install seal-void-hook.sh as the repo's post-commit hook "
                              "(REPO from this arg, else from --config), then exit")
@@ -967,6 +1196,13 @@ def main() -> None:
                       file=sys.stderr)
                 sys.exit(3)
         sys.exit(install_void_hook(repo))
+    if args.parallel:
+        if args.config:
+            print("config error: --parallel and --config are mutually exclusive",
+                  file=sys.stderr)
+            sys.exit(3)
+        sys.exit(run_parallel(Path(args.parallel).expanduser().resolve(),
+                              args.claude_cmd, args.dry_run))
     if not args.config:
         print("config error: --config is required", file=sys.stderr)
         sys.exit(3)
