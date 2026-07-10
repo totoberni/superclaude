@@ -464,9 +464,11 @@ class Loop:
         and resume paths downstream are unchanged.
         """
         stream_path = raw_path.with_suffix(".stream.jsonl")
+        stderr_path = raw_path.with_suffix(".stderr.txt")
         try:
+            stderr_handle = open(stderr_path, "wb")
             proc = subprocess.Popen(cmd, cwd=str(self.cwd), stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL)
+                                    stderr=stderr_handle)
         except FileNotFoundError:
             return None, 127, False
         fd = proc.stdout.fileno()
@@ -506,17 +508,31 @@ class Loop:
                 if res is not None:
                     result_obj = res
         rc = proc.wait()
+        stderr_handle.close()
         if result_obj is not None:
             raw_path.write_text(json.dumps(result_obj, indent=2))
             return result_obj, rc, False
         raw_path.write_text("")
+        # A blind failure is undiagnosable (learned live 2026-07-10): surface the
+        # child's stderr tail in driver.log and stash it for the escalate reason.
+        tail = ""
+        try:
+            # Collapse ALL whitespace (stderr newlines would corrupt one-line ledger rows).
+            tail = " ".join(stderr_path.read_text(errors="replace").split())[-300:]
+        except OSError:
+            pass
+        if tail:
+            self.log(f"{phase} child stderr tail: {tail}")
+        self._last_stderr_tail = tail
         return None, rc, False
 
     def cli_result_or_escalate(self, parsed, rc, timed_out, round_k, phase) -> str:
         if timed_out:
             self.escalate(round_k, f"{phase} phase timeout")
         if parsed is None:
-            self.escalate(round_k, f"{phase} CLI returned non-JSON (rc={rc})")
+            tail = getattr(self, "_last_stderr_tail", "")
+            suffix = f"; stderr: {tail[:160]}" if tail else ""
+            self.escalate(round_k, f"{phase} CLI returned non-JSON (rc={rc}){suffix}")
         if parsed.get("is_error") or (rc not in (0, None)):
             subtype = str(parsed.get("subtype", "")).lower()
             reason = "budget breach" if "budget" in subtype else f"CLI error ({subtype or rc})"
@@ -554,8 +570,11 @@ class Loop:
 
     def build_cmd(self, prompt: str, phase: str, resume_sid: str = None) -> list[str]:
         agent, model, effort = self._phase_agent_overrides(phase)
+        # --verbose is REQUIRED by the CLI for -p + stream-json (verified live
+        # 2026-07-10: "Error: When using --print, --output-format=stream-json
+        # requires --verbose"); without it every phase dies rc=1 pre-spend.
         cmd = [self.claude, "-p", prompt, "--output-format", "stream-json",
-               "--include-partial-messages", "--max-budget-usd", self.budget,
+               "--include-partial-messages", "--verbose", "--max-budget-usd", self.budget,
                "--permission-mode", "acceptEdits",
                "--allowedTools", ",".join(self.cfg["allowed_tools"]), "--agent", agent]
         if model:

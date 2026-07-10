@@ -113,6 +113,10 @@ with open(calls_path) as f:
             return flag in argv
         def pair(flag, val):
             return flag in argv and argv.index(flag) + 1 < len(argv) and argv[argv.index(flag) + 1] == val
+        # Regression for the 2026-07-10 live failure: -p + stream-json REQUIRES
+        # --verbose or every phase dies rc=1 before any spend.
+        if not has("--verbose"):
+            errs.append(agent + " missing --verbose (required by -p + stream-json)")
         if agent in (rev, seal):
             if agent == rev:
                 seen_rev += 1
@@ -285,6 +289,12 @@ elif SCEN == "partial_twice":
 elif SCEN == "failed":
     if role == "produce":
         emit("STATUS: FAILED files=0 checkpoint=cp.md\nfailed")
+
+elif SCEN == "cli_stderr_fail":
+    # Real-CLI failure shape (2026-07-10 live): usage error on stderr, nothing
+    # valid on stdout, rc=1. The driver must SURFACE the stderr tail.
+    sys.stderr.write("Error: synthetic CLI usage failure STDERR_MARKER_QQQ\n")
+    sys.exit(1)
 
 elif SCEN == "producer_token":
     if role in ("produce", "produce-resume"):
@@ -610,6 +620,14 @@ S="$ROOT/s6"; setup_scen "$S"
 drive "$S" failed "$S/artifact.txt"
 expect_exit 2 "S6 producer FAILED"
 if grep -qF 'escalate:producer_STATUS:_FAILED' "$S/rounds.md" 2>/dev/null; then ok "S6 escalate row cites FAILED"; else no "S6 escalate row" "FAILED reason absent"; fi
+
+# S6b: CLI dies with a usage error on stderr (the 2026-07-10 live failure shape)
+# -> exit 2 AND the stderr tail is surfaced in driver.log and the escalate reason.
+S="$ROOT/s6b"; setup_scen "$S"
+drive "$S" cli_stderr_fail "$S/artifact.txt"
+expect_exit 2 "S6b CLI stderr failure escalates"
+if grep -qF 'STDERR_MARKER_QQQ' "$S/driver.log" 2>/dev/null; then ok "S6b stderr tail surfaced in driver.log"; else no "S6b driver.log stderr" "marker absent"; fi
+if grep -qF 'STDERR_MARKER_QQQ' "$S/rounds.md" 2>/dev/null; then ok "S6b stderr tail in the escalate row"; else no "S6b escalate stderr" "marker absent from rounds.md"; fi
 
 # S7: PARTIAL then DONE on resume -> exit 0, resume argv carries session id
 S="$ROOT/s7"; setup_scen "$S"
