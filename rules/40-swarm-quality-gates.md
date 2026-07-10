@@ -54,6 +54,8 @@ A SEAL binds to a **named artefact revision** (commit hash or round); any later 
 
 SOT: `skills/_shared/verdict-schema.md` (§ No pre-approval + Canonical /goal block). Consumer: `/converge`.
 
+R-5 is also enforced mechanically by the autonomous driver (`scripts/swarm/converge_auto.py`): fresh single-use sessions per phase, a producer token ban, commit-hash or content-manifest seal binding with post-seal re-verification, stale-seal rejection, and a post-commit seal-void hook.
+
 ## Enforcement
 
 - R-2 baseline-stash: enforced by `~/.claude/hooks/modules/15-baseline-stash.sh` (when policy=/commit false)
@@ -61,10 +63,11 @@ SOT: `skills/_shared/verdict-schema.md` (§ No pre-approval + Canonical /goal bl
 - R-1 schema spec: enforced by `/swarm-dispatch` skill checks
 - R-4 fleet expansion: enforced by `/promote` skill (queries DB `shared-global` tier for ≥3-occurrence patterns)
 - R-5 no pre-approval: enforced by `/converge` and `/review-dispatch` (fresh-auditor SEAL, most-recent and post-change); SOT `skills/_shared/verdict-schema.md`
+- R-5 mechanical enforcement (unattended loops): `scripts/swarm/converge_auto.py` (fresh sessions, producer token ban, manifest/commit seal binding) and `scripts/swarm/seal-void-hook.sh` (post-commit seal-void check; when installed via `--install-void-hook`)
 
 ## Cross-References
 
 - `13-worker-first-mandate.md` (matrix SOT — model × effort × thinking)
 - `12-agent-hierarchy.md` (write scopes for spawn-capable agents)
 - `skills/_shared/verdict-schema.md` (No pre-approval SOT for R-5)
-- Skills: `/swarm-dispatch`, `/autocommission`, `/promote`, `/converge`, `/review-dispatch`
+- Skills: `/swarm-dispatch`, `/autocommission`, `/promote`, `/converge`, `/review-dispatch`, `/wf-auto`, `/swarm-observe`

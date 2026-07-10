@@ -42,6 +42,8 @@ Use **Ork (handoff)** when ANY of:
 
 **Override**: explicit one-line reason in plan.md or chat justifying the deviation.
 
+A single-artifact convergence loop that meets the Meta+swarm criteria above can also run unattended via the autonomous converge driver: `/wf-auto` configures it, the owner launches it, and the no-pre-approval guards (R-5) are enforced mechanically rather than by a supervising agent. Authority: meta + orch only, same spawn-adjacent boundary as `/converge`.
+
 ## Model × Effort × Thinking Matrix (SOT)
 
 This is the canonical reference. All other files cross-reference here.
@@ -128,7 +130,7 @@ After ork reports DONE, Meta does small polish rounds directly (≤6 files, reve
 
 ## Critical Rules
 
-**SOT**: `~/.claude/rules/40-swarm-quality-gates.md` (R-1 schema spec, R-2 baseline-stash, R-3 worker verification, R-4 fleet expansion).
+**SOT**: `~/.claude/rules/40-swarm-quality-gates.md` (R-1 schema spec, R-2 baseline-stash, R-3 worker verification, R-4 fleet expansion, R-5 no pre-approval).
 
 ## Autocommission Protocol Summary
 
@@ -165,5 +167,5 @@ Convention: `[parallel: true]` declares safe-to-parallelize, `[depends_on: T*]` 
 - Hierarchy table: `12-agent-hierarchy.md` (write scopes)
 - Context management: `25-context-management.md` (delegation reduces parent context burn)
 - Programming principles: `15-programming-principles.md` (DRY/KISS govern w-* design)
-- Skills: `/autocommission`, `/swarm-dispatch`, `/topology-producer-reviewer`, `/super-health`
-- Plan: `plans/swarm-first-v2/plan.md`
+- Skills: `/autocommission`, `/swarm-dispatch`, `/topology-producer-reviewer`, `/super-health`, `/wf-auto`, `/swarm-observe`
+- Plan: `plans/swarm-first-v2/plan.md`, `plans/wf-autonomy/plan.md`
