@@ -141,6 +141,21 @@ def resolve(vendor: str) -> ProviderSpec:
         raise ValueError(f"unknown vendor {vendor!r}") from None
 
 
+def apply_url(vendor: str, slug: str, job_id: str) -> str:
+    """Build the public apply-page URL for `vendor`, `slug`, `job_id`.
+
+    Relocated from the deleted `engine.fill._apply_url` (W5.1a Stage 5): the
+    browser-free apply-URL builder belongs next to the registry it reads. Looks
+    the vendor's `apply_url` builder up in `PROVIDERS`; raises `ValueError` for an
+    unknown or unsupported vendor (preserving the prior error path).
+    """
+    spec = PROVIDERS.get(vendor)
+    if spec is None or not spec.supported or spec.apply_url is None:
+        raise ValueError(
+            f"unknown vendor {vendor!r} (expected greenhouse/lever/ashby/workable)")
+    return spec.apply_url(slug, job_id)
+
+
 def detect(url_or_host: str) -> str | None:
     """Map a posting URL or bare host to its vendor key, or None if unrecognised.
 

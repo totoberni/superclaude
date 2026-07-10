@@ -15,11 +15,12 @@ from pathlib import Path
 
 import pytest
 
-# Import engine.fill at module load (before the autouse no_network fixture patches
-# socket.socket): the base re-export wrappers import it lazily at call time, and a
-# FIRST import under the socket patch would drag in ssl (class SSLSocket(socket))
-# and fail. Mirrors test_providers_registry's top-level `from engine import fill`.
-import engine.fill  # noqa: F401
+# Import engine.kernel.fill_toolkit at module load (before the autouse no_network
+# fixture patches socket.socket): the base re-export wrappers import it lazily at
+# call time, and a FIRST import under the socket patch could drag in ssl (class
+# SSLSocket(socket)) and fail. (engine.fill was deleted in W5.1a Stage 5; the four
+# fill primitives now live in the kernel toolkit, which is what base re-exports.)
+import engine.kernel.fill_toolkit  # noqa: F401
 from engine.providers import base
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -853,25 +854,25 @@ def test_settle_event_loop_never_raises_with_neither_method():
 
 
 def test_reexported_safe_click_honours_patch_seam(monkeypatch):
-    import engine.fill as fill
+    import engine.kernel.fill_toolkit as fill_toolkit
     calls = []
-    monkeypatch.setattr(fill, "_safe_click",
+    monkeypatch.setattr(fill_toolkit, "_safe_click",
                         lambda target, name: calls.append((target, name)))
     base._safe_click("TARGET", "Next")
     assert calls == [("TARGET", "Next")]
 
 
 def test_reexported_readback_honours_patch_seam(monkeypatch):
-    import engine.fill as fill
-    monkeypatch.setattr(fill, "_readback",
+    import engine.kernel.fill_toolkit as fill_toolkit
+    monkeypatch.setattr(fill_toolkit, "_readback",
                         lambda locator, value: ("sentinel", True))
     assert base._readback(object(), "x") == ("sentinel", True)
 
 
-def test_reexported_locate_and_upload_delegate_to_fill(monkeypatch):
-    import engine.fill as fill
-    monkeypatch.setattr(fill, "_locate", lambda page, fv: "LOC")
-    monkeypatch.setattr(fill, "_safe_upload",
+def test_reexported_locate_and_upload_delegate_to_toolkit(monkeypatch):
+    import engine.kernel.fill_toolkit as fill_toolkit
+    monkeypatch.setattr(fill_toolkit, "_locate", lambda page, fv: "LOC")
+    monkeypatch.setattr(fill_toolkit, "_safe_upload",
                         lambda *a, **k: "UP")
     assert base._locate(object(), object()) == "LOC"
     assert base._safe_upload(object(), object(), object()) == "UP"
@@ -883,13 +884,11 @@ def test_reexported_locate_and_upload_delegate_to_fill(monkeypatch):
 def test_importing_base_does_not_load_browser_stack():
     # engine.providers.base is the fill-primitive re-export home; importing it must
     # NOT pull in the browser stack (a browser-capture module or patchright) -- that is the load-
-    # bearing invariant keeping the daily poller browser-free. base.py's own
-    # wrappers still import engine.fill lazily at call time, so engine.fill must
-    # not be loaded by the import transit either: since the Stage-4 repoint the
-    # vendor `.fill` modules take their dataclasses from kernel.contracts, so the
-    # package __init__'s eager plugin imports (self-registration) no longer pull
-    # engine.fill. This test guards BOTH: browser stack absent AND engine.fill
-    # absent (the S2e-1 declared deviation is CLOSED). Checked in a fresh
+    # bearing invariant keeping the daily poller browser-free. engine.fill was
+    # DELETED in W5.1a Stage 5 (its primitives now live in the kernel toolkit); the
+    # `'engine.fill' not in sys.modules` assertion below is now a REINTRODUCTION
+    # TRIPWIRE: no import transit may resurrect the retired module. This test guards
+    # BOTH: browser stack absent AND engine.fill absent. Checked in a fresh
     # interpreter.
     script = (
         "import sys, engine.providers.base; "

@@ -1,7 +1,7 @@
 """Provider registry: SSOT wiring, URL detection, and call-site equivalence.
 
 The registry consolidates the four W4-scattered vendor-detection sites
-(fetch.endpoint_for + _ADAPTERS + _VENDORS, fill._apply_url,
+(fetch.endpoint_for + _ADAPTERS + _VENDORS, _registry.apply_url,
 run._collect_fieldmap). These tests pin two things:
 
 1. `resolve` / `detect` behave as the single source of truth; all four vendors
@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from engine import fetch, fill, run
+from engine import fetch, run
 from engine.providers.ashby.discover import AshbyAdapter
 from engine.providers.greenhouse.discover import GreenhouseAdapter
 from engine.providers.lever.discover import LeverAdapter
@@ -146,7 +146,7 @@ def test_adapters_and_vendors_are_registry_projections():
         fetch.adapter_for("linkedin")
 
 
-# -- fill._apply_url: golden URLs + preserved error path -----------------------
+# -- _registry.apply_url: golden URLs + preserved error path -------------------
 
 @pytest.mark.parametrize("vendor,slug,job_id,expected", [
     ("greenhouse", "acme", "123", "https://boards.greenhouse.io/acme/jobs/123"),
@@ -154,16 +154,17 @@ def test_adapters_and_vendors_are_registry_projections():
     ("ashby", "initech", "abc", "https://jobs.ashbyhq.com/initech/abc/application"),
 ])
 def test_apply_url_golden(vendor, slug, job_id, expected):
-    assert fill._apply_url(vendor, slug, job_id) == expected
+    assert _registry.apply_url(vendor, slug, job_id) == expected
 
 
 def test_apply_url_unknown_vendor_preserves_error():
     # workable used to be the example UNKNOWN vendor here; W5.4 made it supported
-    # (fill._apply_url now returns its real apply URL), so the error-path coverage
-    # is repointed to a still-unknown vendor. "workday" is genuinely unregistered.
+    # (_registry.apply_url now returns its real apply URL), so the error-path
+    # coverage is repointed to a still-unknown vendor. "workday" is genuinely
+    # unregistered.
     with pytest.raises(ValueError,
                        match=r"unknown vendor 'workday' \(expected greenhouse"):
-        fill._apply_url("workday", "x", "y")
+        _registry.apply_url("workday", "x", "y")
 
 
 # -- run._collect_fieldmap: golden dispatch + preserved error path -------------

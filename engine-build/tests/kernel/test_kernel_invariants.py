@@ -421,7 +421,6 @@ def test_shim_paths_are_identity_reexports():
     import engine.kernel.protocol
     import engine.fieldmap
     import engine.kernel.contracts
-    import engine.fill
     import engine.kernel.fill_toolkit
     import engine.providers.base
     import engine.kernel.never_send
@@ -431,11 +430,9 @@ def test_shim_paths_are_identity_reexports():
     assert engine.ssot.SSOT is engine.kernel.ssot.SSOT
     assert engine.providers.protocol.Provider is engine.kernel.protocol.Provider
     assert engine.fieldmap.FieldMap is engine.kernel.contracts.FieldMap
-    assert engine.fill.FillReport is engine.kernel.contracts.FillReport
     assert (engine.providers.base.install_never_send
             is engine.kernel.never_send.install_never_send)
     assert engine.providers.base.type_human is engine.kernel.fill_toolkit.type_human
-    assert engine.fill._readback is engine.kernel.fill_toolkit._readback
     # UA is a str constant, not a class/function: the re-export contract is VALUE
     # equality (a string's identity across a `from ... import` is a CPython
     # interning implementation detail, not part of the contract), so `==`.

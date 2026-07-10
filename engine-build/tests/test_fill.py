@@ -5,6 +5,14 @@ over hand-built field maps, so the autouse no-network guard holds throughout.
 The safety invariants (no submit path, URL-unchanged, no file touch, EEO never
 touched) are each asserted directly. resolve_values is pure keyword matching
 against the synthetic v1.4 SSOT; every verdict is asserted explicitly.
+
+Scope: fill_form here is the relocated test-only harness (tests/kernel/_harness.py),
+which wires the real kernel primitives (_readback, _completeness, _locate,
+_safe_upload, _registry.apply_url) but reimplements the per-vendor fill()
+orchestration glue. These are kernel-primitive integration tests, not production
+fill() orchestration tests: green here does not by itself prove the per-vendor
+orchestration is safe. That is covered separately per vendor (see
+test_providers_greenhouse.py).
 """
 
 import contextlib
@@ -12,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from engine.fill import fill_form, default_assets, _resolve_photo, publish_evidence  # S5b-dying legacy block (fill_form harness + evidence CLI cluster)
+from tests.kernel._harness import fill_form  # relocated test-only harness (engine.fill deleted, W5.1a Stage 5)
 from engine.kernel.contracts import (
     Field,
     FieldMap,
@@ -437,41 +445,7 @@ def test_resolve_whitespace_only_ssot_value_is_skipped_not_a_confirmed_fill():
 # fill_form
 # =============================================================================
 
-def test_fill_records_fills_blur_and_screenshot(tmp_path):
-    text = _FakeLocator()
-    consent = _FakeLocator()
-    fields = [
-        _fv("first_name", "First Name", "input_text", "Test Candidate"),
-        _fv("q_consent", "I agree to the Privacy Policy.", "boolean", True,
-            role="checkbox"),
-    ]
-    controls = {"First Name": text, "I agree to the Privacy Policy.": consent}
-    page = _FakePage(url="https://jobs.lever.co/globex/req-77/apply",
-                     controls=controls)
-    values = ResolvedValues(fields=fields)
-
-    report = fill_form("lever", "globex", "req-77", values,
-                       browser_factory=_factory_for(page),
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
-
-    assert isinstance(report, FillReport)
-    assert report.filled == 2
-    assert text.filled == "Test Candidate"
-    assert text.blurred is True
-    assert consent.checked is True
-    assert consent.blurred is True
-    assert report.url_unchanged is True
-    assert report.readback_mismatches == []
-    # exactly one page load + one screenshot under artifacts_dir
-    assert len(page.goto_calls) == 1
-    assert page.goto_calls[0][0] == "https://jobs.lever.co/globex/req-77/apply"
-    assert len(page.screenshot_calls) == 1
-    assert page.screenshot_calls[0] == report.screenshot
-    assert str(tmp_path) in report.screenshot
-    assert report.ts == _PINNED
-
-
-def test_fill_detects_readback_mismatch(tmp_path):
+def test_fill_detects_readback_mismatch():
     # The fake mutates the readback value: the control does not hold what we
     # intended, so the diff must surface a mismatch. A value that did not take
     # must NOT count as filled (the readback-gating fix): a required field the
@@ -483,7 +457,7 @@ def test_fill_detects_readback_mismatch(tmp_path):
     report = fill_form("greenhouse", "acme", "1",
                        ResolvedValues(fields=fields),
                        browser_factory=_factory_for(page),
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       now=lambda: _PINNED)
 
     assert report.filled == 0
     assert len(report.readback_mismatches) == 1
@@ -493,23 +467,7 @@ def test_fill_detects_readback_mismatch(tmp_path):
     assert mismatch["actual"] == "Someone Else"
 
 
-def test_fill_harvests_validation_errors(tmp_path):
-    invalid = _FakeLocator(aria_invalid="true")
-    fields = [_fv("email", "Email", "input_text", "bad")]
-    page = _FakePage(url="https://x/1/apply", controls={"Email": invalid},
-                     error_texts=["Please enter a valid email address."])
-
-    report = fill_form("greenhouse", "acme", "1",
-                       ResolvedValues(fields=fields),
-                       browser_factory=_factory_for(page),
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
-
-    messages = [e["message"] for e in report.validation_errors]
-    assert "aria-invalid" in messages
-    assert "Please enter a valid email address." in messages
-
-
-def test_fill_report_json_serialises(tmp_path):
+def test_fill_report_json_serialises():
     import json
 
     fields = [_fv("first_name", "First Name", "input_text", "Test Candidate")]
@@ -519,7 +477,7 @@ def test_fill_report_json_serialises(tmp_path):
                        ResolvedValues(fields=fields, skipped=[("resume",
                                                                "file-upload")]),
                        browser_factory=_factory_for(page),
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       now=lambda: _PINNED)
 
     blob = json.loads(json.dumps(report.to_dict()))
     assert blob["vendor"] == "greenhouse"
@@ -550,22 +508,7 @@ def test_safe_click_allows_a_benign_name():
     assert target.clicks == 1
 
 
-def test_fill_raises_when_url_changes(tmp_path):
-    # A control whose interaction navigates the page must trip the
-    # URL-unchanged invariant (possible submission/redirect).
-    navigating = _FakeLocator()
-    page = _FakePage(url="https://jobs.lever.co/globex/req-77/apply",
-                     controls={"First Name": navigating})
-    navigating._page = page
-    navigating._navigate_to = "https://jobs.lever.co/globex/req-77/thanks"
-    fields = [_fv("first_name", "First Name", "input_text", "Test Candidate")]
-
-    with pytest.raises(FillSafetyError, match="navigated during fill"):
-        fill_form("lever", "globex", "req-77", ResolvedValues(fields=fields),
-                  browser_factory=_factory_for(page), artifacts_dir=tmp_path)
-
-
-def test_fill_never_touches_file_inputs(tmp_path, real_ssot_path):
+def test_fill_never_touches_file_inputs(real_ssot_path):
     # resolve_values already excludes the file field; fill_form must additionally
     # never construct a locator for it nor call set_input_files.
     ssot = SSOT.load(real_ssot_path)
@@ -582,7 +525,7 @@ def test_fill_never_touches_file_inputs(tmp_path, real_ssot_path):
                                "Resume / CV": file_control})
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(page),
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       now=lambda: _PINNED)
 
     # the file control was never looked up nor uploaded to
     assert ("label", "Resume / CV") not in page.requested
@@ -591,7 +534,7 @@ def test_fill_never_touches_file_inputs(tmp_path, real_ssot_path):
     assert dict(report.skipped)["resume"] == "file-upload"
 
 
-def test_fill_leaves_eeo_fields_untouched(tmp_path, real_ssot_path):
+def test_fill_leaves_eeo_fields_untouched(real_ssot_path):
     # A required EEO/demographic field is manual-only, so it never enters the
     # fill set and its control is never located.
     ssot = SSOT.load(real_ssot_path)
@@ -609,7 +552,7 @@ def test_fill_leaves_eeo_fields_untouched(tmp_path, real_ssot_path):
                      controls={"First Name": _FakeLocator(),
                                "Gender": eeo_control})
     fill_form("greenhouse", "acme", "1", values,
-              browser_factory=_factory_for(page), artifacts_dir=tmp_path,
+              browser_factory=_factory_for(page),
               now=lambda: _PINNED)
 
     assert ("role", "combobox", "Gender") not in page.requested
@@ -619,9 +562,27 @@ def test_fill_leaves_eeo_fields_untouched(tmp_path, real_ssot_path):
     assert dict(values.skipped)["demographic_gender"] == "demographic/EEO"
 
 
+def test_fill_raises_when_url_changes():
+    # A control whose interaction navigates the page must trip the
+    # URL-unchanged invariant (possible submission/redirect). Covers the
+    # HARNESS url_unchanged raise branch (tests/kernel/_harness.py:131-135)
+    # directly; the production-path invariant is covered per-vendor
+    # (greenhouse test_providers_greenhouse.py:927).
+    navigating = _FakeLocator()
+    page = _FakePage(url="https://jobs.lever.co/globex/req-77/apply",
+                     controls={"First Name": navigating})
+    navigating._page = page
+    navigating._navigate_to = "https://jobs.lever.co/globex/req-77/thanks"
+    fields = [_fv("first_name", "First Name", "input_text", "Test Candidate")]
+
+    with pytest.raises(FillSafetyError, match="navigated during fill"):
+        fill_form("lever", "globex", "req-77", ResolvedValues(fields=fields),
+                  browser_factory=_factory_for(page))
+
+
 # --- resolve_values -> fill_form integration ---------------------------------
 
-def test_resolve_then_fill_end_to_end(tmp_path, real_ssot_path):
+def test_resolve_then_fill_end_to_end(real_ssot_path):
     ssot = SSOT.load(real_ssot_path)
     fm = _fieldmap(
         _field("first_name", "First Name"),
@@ -639,7 +600,7 @@ def test_resolve_then_fill_end_to_end(tmp_path, real_ssot_path):
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(build()),
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       now=lambda: _PINNED)
 
     assert report.filled == 4          # name, email, visa, consent
     assert dict(report.skipped)["resume"] == "file-upload"
@@ -683,7 +644,7 @@ def test_resume_text_and_cover_letter_text_fill_and_form_completes(tmp_path):
                           url="https://boards.greenhouse.io/acme/jobs/1")
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(build()),
-                       artifacts_dir=tmp_path, fieldmap=fm, assets=assets,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
 
     assert report.required_unfilled == []
@@ -1051,7 +1012,7 @@ def test_completeness_complete_with_justified_demographic(
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
     assert report.fillable_total == 3
     assert report.filled == 2
@@ -1074,7 +1035,7 @@ def test_completeness_required_unfilled_forces_not_complete(
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
     assert report.fillable_total == 2
     assert report.filled == 1
@@ -1105,7 +1066,7 @@ def test_completeness_required_field_empty_ssot_value_is_not_complete(tmp_path):
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
 
     assert report.fillable_total == 2
@@ -1130,7 +1091,7 @@ def test_completeness_upload_counts_and_stays_complete(tmp_path, real_ssot_path)
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
     assert report.filled == 2                 # first_name + the uploaded CV
     assert report.uploads == [{"key": "resume", "asset": "cv-atsi",
@@ -1155,9 +1116,13 @@ def test_hidden_portal_widgets_excluded_from_denominator(
     # telemetry widgets that only GREENHOUSE_WIDGET_RESOLVER classifies as hidden.
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets,
                             vendor_resolver=GREENHOUSE_WIDGET_RESOLVER)
+    # DELIBERATE (owner-ratified 2026-07-10): the gh-default completeness shim died
+    # with engine.fill, so the resolver is injected into fill_form explicitly; only
+    # GREENHOUSE_WIDGET_RESOLVER excludes longitude/latitude from the denominator.
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
+                       vendor_resolver=GREENHOUSE_WIDGET_RESOLVER,
                        now=lambda: _PINNED)
     assert report.fillable_total == 1         # longitude/latitude are hidden
     assert report.filled == 1
@@ -1183,7 +1148,7 @@ def test_completeness_required_upload_missing_asset_is_required_unfilled(
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
 
     assert report.fillable_total == 2
@@ -1213,7 +1178,7 @@ def test_completeness_required_upload_with_asset_is_filled_and_complete(
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
 
     assert report.fillable_total == 2
@@ -1240,7 +1205,7 @@ def test_completeness_optional_upload_missing_asset_stays_justified(
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
 
     assert report.fillable_total == 2
@@ -1270,7 +1235,7 @@ def test_completeness_required_demographic_skip_stays_justified(
     values = resolve_values(fm, ssot, profile_from_real_ssot(ssot), assets=assets)
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
 
     assert report.fillable_total == 2
@@ -1309,7 +1274,7 @@ def test_completeness_required_eeo_keyword_label_but_not_demographic_section_is_
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
 
     assert report.fillable_total == 2
@@ -1344,7 +1309,7 @@ def test_completeness_3_of_10_with_missing_required_cv_is_not_complete(
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
 
     assert report.fillable_total == 10
@@ -1386,7 +1351,7 @@ def test_readback_never_confirms_a_blank_intended_value_even_if_control_reads_bl
     assert ok is True
 
 
-def test_readback_mismatch_required_text_field_forces_not_complete(tmp_path):
+def test_readback_mismatch_required_text_field_forces_not_complete():
     mutated = _FakeLocator(readback="Someone Else")
     fields = [_fv("first_name", "First Name", "input_text", "Test Candidate")]
     page = _FakePage(url="https://x/1/apply", controls={"First Name": mutated})
@@ -1394,7 +1359,7 @@ def test_readback_mismatch_required_text_field_forces_not_complete(tmp_path):
 
     report = fill_form("greenhouse", "acme", "1", ResolvedValues(fields=fields),
                        browser_factory=_factory_for(page), fieldmap=fm,
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       now=lambda: _PINNED)
 
     assert report.filled == 0
     assert len(report.readback_mismatches) == 1
@@ -1405,7 +1370,7 @@ def test_readback_mismatch_required_text_field_forces_not_complete(tmp_path):
     assert report.caption().endswith("NOT COMPLETE")
 
 
-def test_readback_mismatch_required_select_forces_not_complete(tmp_path):
+def test_readback_mismatch_required_select_forces_not_complete():
     # A React-combobox-like control that swallows the selection: input_value()
     # comes back empty even though select_option() was called.
     swallowed = _FakeLocator(readback="")
@@ -1418,7 +1383,7 @@ def test_readback_mismatch_required_select_forces_not_complete(tmp_path):
 
     report = fill_form("greenhouse", "acme", "1", ResolvedValues(fields=fields),
                        browser_factory=_factory_for(page), fieldmap=fm,
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       now=lambda: _PINNED)
 
     assert report.filled == 0
     assert len(report.readback_mismatches) == 1
@@ -1444,7 +1409,7 @@ def test_required_upload_that_does_not_attach_forces_not_complete(
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(page), fieldmap=fm,
-                       assets=assets, artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       assets=assets, now=lambda: _PINNED)
 
     assert resume_input.set_input_files_calls == 1
     assert report.uploads == []
@@ -1469,7 +1434,7 @@ def test_readback_confirmed_fill_and_upload_stays_complete(
 
     report = fill_form("lever", "globex", "req-77", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, assets=assets, artifacts_dir=tmp_path,
+                       fieldmap=fm, assets=assets,
                        now=lambda: _PINNED)
 
     assert report.filled == 2
@@ -1479,7 +1444,7 @@ def test_readback_confirmed_fill_and_upload_stays_complete(
     assert not report.caption().endswith("NOT COMPLETE")
 
 
-def test_readback_mismatch_optional_field_excluded_but_not_a_gap(tmp_path):
+def test_readback_mismatch_optional_field_excluded_but_not_a_gap():
     # An OPTIONAL field whose value did not take is excluded from filled (the
     # X/Y denominator stays honest) but must NOT force NOT COMPLETE, and it is
     # still recorded in readback_mismatches for the evidence trail.
@@ -1490,58 +1455,12 @@ def test_readback_mismatch_optional_field_excluded_but_not_a_gap(tmp_path):
 
     report = fill_form("greenhouse", "acme", "1", ResolvedValues(fields=fields),
                        browser_factory=_factory_for(page), fieldmap=fm,
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       now=lambda: _PINNED)
 
     assert report.filled == 0
     assert report.required_unfilled == []
     assert len(report.readback_mismatches) == 1
     assert report.complete is True
-
-
-# =============================================================================
-# Evidence publisher (criterion 4) + toto asset defaults (criterion 5)
-# =============================================================================
-
-def test_publish_evidence_sends_screenshot_captioned():
-    from engine.notify import FakeTransport
-    report = _report(vendor="ashby", company="initech", fillable_total=4,
-                     filled=4, required_unfilled=[], justified_skips=0,
-                     screenshot="/artifacts/fill-ashby-9.png")
-    transport = FakeTransport()
-    publish_evidence(report, "abe-jobsearch", transport)
-    assert transport.sent_files == [(
-        "abe-jobsearch", "/artifacts/fill-ashby-9.png",
-        "Ashby (initech): 4/4 fields filled, 0 required unfilled - COMPLETE",
-        "fill-ashby-9.png")]
-
-
-def test_resolve_photo_globs_case_insensitively(tmp_path):
-    root = tmp_path / "career-archive"
-    pics = root / "weird" / "PROFILE PICS"
-    pics.mkdir(parents=True)
-    (pics / "ME.JPG").write_bytes(b"stub")
-    (pics / "ME.PNG").write_bytes(b"stub")
-    got = _resolve_photo(archive_root=root)
-    assert got is not None
-    assert got.name == "ME.PNG"               # png preferred over jpg
-
-
-def test_resolve_photo_override_wins(tmp_path):
-    override = tmp_path / "custom.png"
-    override.write_bytes(b"stub")
-    assert _resolve_photo(override=str(override)) == override
-
-
-def test_resolve_photo_missing_root_is_none(tmp_path):
-    assert _resolve_photo(archive_root=tmp_path / "nope") is None
-
-
-def test_default_assets_fail_soft_when_absent(tmp_path):
-    assets = default_assets(documents_dir=tmp_path / "docs",
-                            archive_root=tmp_path / "arch")
-    assert assets.cv_ats is None
-    assert assets.cv_atsi is None
-    assert assets.photo is None
 
 
 def _report(*, vendor, company, fillable_total, filled, required_unfilled,
@@ -1639,7 +1558,7 @@ def test_cv_lands_on_greenhouse_resume_input_via_set_input_files(
     page = _control_page(values.fields, file_inputs=[resume_input])()
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(page), fieldmap=fm,
-                       assets=assets, artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       assets=assets, now=lambda: _PINNED)
     assert resume_input.set_input_files_calls == 1
     assert resume_input.uploaded == str(assets.cv_atsi)
     assert resume_input.clicks == 0                  # direct upload, no click
@@ -1658,7 +1577,7 @@ def test_cv_lands_on_lever_resume_upload_input(tmp_path, real_ssot_path):
     page = _control_page(values.fields, file_inputs=[decoy, lever_input])()
     fill_form("lever", "globex", "req-77", values,
               browser_factory=_factory_for(page), fieldmap=fm, assets=assets,
-              artifacts_dir=tmp_path, now=lambda: _PINNED)
+              now=lambda: _PINNED)
     assert lever_input.uploaded == str(assets.cv_atsi)
     assert decoy.set_input_files_calls == 0          # image input untouched
 
@@ -1675,7 +1594,7 @@ def test_photo_lands_on_image_accept_input(tmp_path, real_ssot_path):
                          file_inputs=[resume_input, photo_input])()
     fill_form("greenhouse", "acme", "1", values,
               browser_factory=_factory_for(page), fieldmap=fm, assets=assets,
-              artifacts_dir=tmp_path, now=lambda: _PINNED)
+              now=lambda: _PINNED)
     assert photo_input.uploaded == str(assets.photo)
     assert Path(photo_input.uploaded).name == "Me.png"
     assert resume_input.set_input_files_calls == 0
@@ -1693,7 +1612,7 @@ def test_required_resume_with_no_file_input_stays_required_unfilled(
     page = _control_page(values.fields, file_inputs=[])()      # no file inputs
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(page), fieldmap=fm,
-                       assets=assets, artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       assets=assets, now=lambda: _PINNED)
     assert dict(report.skipped)["resume"] == "no file input located"
     assert [r["key"] for r in report.required_unfilled] == ["resume"]
     assert report.complete is False
@@ -1765,7 +1684,7 @@ def test_marketing_wording_beats_consent_wording(real_ssot_path):
     assert "q_mkt" not in resolved.values
 
 
-def test_fill_ticks_consent_via_check_leaves_marketing(tmp_path, real_ssot_path):
+def test_fill_ticks_consent_via_check_leaves_marketing(real_ssot_path):
     ssot = SSOT.load(real_ssot_path)
     fm = _fieldmap(
         _field("q_consent", "I agree to the Privacy Policy.",
@@ -1781,7 +1700,7 @@ def test_fill_ticks_consent_via_check_leaves_marketing(tmp_path, real_ssot_path)
                                "Subscribe to our newsletter": news})
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(page), fieldmap=fm,
-                       artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       now=lambda: _PINNED)
     assert consent.checked is True          # ticked via the safe check() path
     assert consent.clicks == 0              # no deny-listed click
     assert news.checked is None             # marketing box never touched
@@ -1829,7 +1748,7 @@ def test_yesno_sponsorship_resolves_no_via_phrase_options(real_ssot_path):
 
 
 def test_yesno_us_authorization_is_skipped_and_required_unfilled(
-        tmp_path, real_ssot_path):
+        real_ssot_path):
     ssot = SSOT.load(real_ssot_path)
     fm = _fieldmap(
         _field("first_name", "First Name"),
@@ -1846,7 +1765,7 @@ def test_yesno_us_authorization_is_skipped_and_required_unfilled(
 
     report = fill_form("greenhouse", "acme", "1", values,
                        browser_factory=_factory_for(_control_page(values.fields)()),
-                       fieldmap=fm, artifacts_dir=tmp_path, now=lambda: _PINNED)
+                       fieldmap=fm, now=lambda: _PINNED)
     assert [r["key"] for r in report.required_unfilled] == ["q_auth_us"]
     assert report.complete is False
 

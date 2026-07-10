@@ -2,30 +2,29 @@
 
 This module is the single home for the cross-vendor fill mechanics that the
 per-vendor providers (greenhouse/lever/ashby/workable, landing in W5.2) reuse:
-the four live fill primitives from `engine.fill`, a STRUCTURAL never-send network
-interceptor, human-cadence typing, and a DOM-sweep completeness check.
+the four live fill primitives from `engine.kernel.fill_toolkit`, a STRUCTURAL
+never-send network interceptor, human-cadence typing, and a DOM-sweep
+completeness check.
 
 LAZY-IMPORT INVARIANT (load-bearing, mirrors registry.py): the daily poller must
 never load the browser stack. `engine.run` imports `engine.providers` (the package
 __init__, which pulls in `registry` only), NOT this module, and this module never
 imports patchright or any browser-capture module at load time. Every browser reference here is
 resolved through the page/locator/route objects the caller passes in; the only
-cross-module import (`engine.fill`, itself patchright-free) happens at CALL time
-inside the re-export wrappers.
+cross-module import (`engine.kernel.fill_toolkit`, itself patchright-free) happens
+at CALL time inside the re-export wrappers.
 
 FILL-PRIMITIVE ACCESS -- re-export via call-time wrappers, NOT a top-level
-`from engine.fill import ...` and NOT a code move out of fill.py:
-- No code is moved out of the live W4 `fill.py` (the running jobhunt fills through
-  it); a move would be a needless risk. The primitives stay where `fill_form` uses
-  them and are surfaced here by thin pass-through wrappers.
-- The wrappers look the target up on the `engine.fill` module object at call time,
-  so they honour the monkeypatch seam (a test patching `engine.fill._safe_click`
-  is reflected here), the same call-time-lookup discipline the vendor capture
-  plugins use for their own monkeypatch seams. A top-level
-  `from engine.fill import _safe_click` would bind the reference at import and
-  defeat that seam.
-- Importing `engine.fill` lazily (inside the wrappers) also keeps this module's own
-  import cheap and dodges any import-order fragility with the providers package.
+`from engine.kernel.fill_toolkit import ...`:
+- The four primitives live in the kernel (`engine.kernel.fill_toolkit`); they are
+  surfaced here by thin pass-through wrappers so provider fill code keeps calling
+  `base._safe_click` / `base._readback` / etc.
+- The wrappers look the target up on the `engine.kernel.fill_toolkit` module object
+  at call time, so they honour the monkeypatch seam (a test patching
+  `engine.kernel.fill_toolkit._safe_click` is reflected here), the same
+  call-time-lookup discipline the vendor capture plugins use for their own
+  monkeypatch seams. A top-level `from engine.kernel.fill_toolkit import _safe_click`
+  would bind the reference at import and defeat that seam.
 
 The NEW primitives (`install_never_send`, `type_human`, `sweep_required` +
 `completeness_mismatch`) are pure-Python in the kernel: they drive whatever
@@ -59,34 +58,36 @@ from engine.kernel.fill_toolkit import (  # noqa: F401
 # -- re-exported fill primitives (call-time lookup preserves the patch seam) ----
 
 
-def _fill():
-    """The live `engine.fill` module, imported lazily so this module stays cheap
-    to load and the reference is resolved fresh on every call (patch seam)."""
-    from engine import fill
-    return fill
+def _toolkit():
+    """The `engine.kernel.fill_toolkit` module, resolved fresh on every call so
+    the wrappers honour the monkeypatch seam (a test patching
+    `engine.kernel.fill_toolkit._safe_click` is reflected through them)."""
+    from engine.kernel import fill_toolkit
+    return fill_toolkit
 
 
 def _safe_click(*args, **kwargs):
-    """Re-export of `engine.fill._safe_click` (the sole sanctioned click gateway;
-    refuses any submit-like accessible name)."""
-    return _fill()._safe_click(*args, **kwargs)
+    """Re-export of `engine.kernel.fill_toolkit._safe_click` (the sole sanctioned
+    click gateway; refuses any submit-like accessible name)."""
+    return _toolkit()._safe_click(*args, **kwargs)
 
 
 def _safe_upload(*args, **kwargs):
-    """Re-export of `engine.fill._safe_upload` (whitelisted-asset attach; never
-    submits)."""
-    return _fill()._safe_upload(*args, **kwargs)
+    """Re-export of `engine.kernel.fill_toolkit._safe_upload` (whitelisted-asset
+    attach; never submits)."""
+    return _toolkit()._safe_upload(*args, **kwargs)
 
 
 def _readback(*args, **kwargs):
-    """Re-export of `engine.fill._readback` (reads a control back to confirm a
-    value actually landed)."""
-    return _fill()._readback(*args, **kwargs)
+    """Re-export of `engine.kernel.fill_toolkit._readback` (reads a control back to
+    confirm a value actually landed)."""
+    return _toolkit()._readback(*args, **kwargs)
 
 
 def _locate(*args, **kwargs):
-    """Re-export of `engine.fill._locate` (role/label locator resolution)."""
-    return _fill()._locate(*args, **kwargs)
+    """Re-export of `engine.kernel.fill_toolkit._locate` (role/label locator
+    resolution)."""
+    return _toolkit()._locate(*args, **kwargs)
 
 
 # -- STRUCTURAL never-send (HOLE-FIX a): moved to engine.kernel.never_send, frozen
