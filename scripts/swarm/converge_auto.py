@@ -98,6 +98,12 @@ CONTROL_POLL_S = float(os.environ.get("CONVERGE_CTL_POLL_S", "10"))
 COMMIT_LOCK_MARGIN_S = int(os.environ.get("CONVERGE_LOCK_MARGIN_S", "120"))
 COMMIT_LOCK_POLL_S = 0.2
 GATE_TAIL_CHARS = 2000
+# Linux MAX_ARG_STRLEN caps a single argv token at 128 KiB; a seal prompt embedding
+# a large artifact dump exceeds it and Popen dies E2BIG ("Argument list too long",
+# hit live 2026-07-10 on a 28-file artifact scope). Prompts above this byte size are
+# fed via stdin instead ("claude -p" reads the prompt from stdin when the positional
+# prompt argument is absent).
+PROMPT_ARGV_MAX = int(os.environ.get("CONVERGE_PROMPT_ARGV_MAX", "100000"))
 VALID_BARS = ("default", "gate", "strict")
 
 # Anchored token grammar (verdict-schema.md). Line 1 of an agent's final message.
@@ -465,12 +471,25 @@ class Loop:
         """
         stream_path = raw_path.with_suffix(".stream.jsonl")
         stderr_path = raw_path.with_suffix(".stderr.txt")
+        # Oversized-prompt fallback: move a too-big "-p <prompt>" positional to stdin
+        # (see PROMPT_ARGV_MAX). The child reads stdin to EOF at startup, so writing
+        # then closing stdin before the stdout read loop cannot deadlock.
+        stdin_payload = None
+        if "-p" in cmd:
+            p_i = cmd.index("-p")
+            if p_i + 1 < len(cmd) and len(cmd[p_i + 1].encode()) > PROMPT_ARGV_MAX:
+                stdin_payload = cmd[p_i + 1].encode()
+                cmd = cmd[:p_i + 1] + cmd[p_i + 2:]
         try:
             stderr_handle = open(stderr_path, "wb")
             proc = subprocess.Popen(cmd, cwd=str(self.cwd), stdout=subprocess.PIPE,
-                                    stderr=stderr_handle)
+                                    stderr=stderr_handle,
+                                    stdin=subprocess.PIPE if stdin_payload else None)
         except FileNotFoundError:
             return None, 127, False
+        if stdin_payload:
+            proc.stdin.write(stdin_payload)
+            proc.stdin.close()
         fd = proc.stdout.fileno()
         start = last_hb = time.monotonic()
         events = 0
