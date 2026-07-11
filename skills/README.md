@@ -102,7 +102,7 @@ Eight thin bindings that specialise `/converge` for a concrete artefact and cade
 |---|---|---|---|
 | `wf-design` | B1 | Drive a research experimental design (13 `/research design` steps) to a `w-hostile-reviewer` methodology seal. | `/wf-design <phenomenon> [--rounds N] [--strict]` |
 | `wf-report` | B1 | Drive a LaTeX report to a DUAL seal: a deterministic compile gate (`latexmk`, zero material warnings) plus a fresh `w-hostile-reviewer` SEAL. | `/wf-report <report-target> [--rounds N] [--strict] [--publish]` |
-| `wf-websearch` | B1 | Drive multi-agent web research: waves of up to 5 parallel searchers, conductor-only synthesis, to a DUAL stop of saturation (zero new sources) plus a clean hostile seal. | `/wf-websearch "<question>" [--waves N] [--searches-per-wave 5]` |
+| `wf-websearch` | B1 | Drive multi-agent web research: waves of up to 5 parallel searchers, conductor-only synthesis, to a DUAL stop of saturation (zero new sources) plus a clean hostile seal. | `/wf-websearch "<question>" [--waves N] [--searches-per-wave 5] [--strict]` |
 | `wf-wave-monitor` | B3 | Meta polls the HCOM broker for orch health each interval; seals when every ork reports DONE with zero unanswered ESC. | `/wf-wave-monitor [--interval 15m] [--orchs <list|all>]` |
 | `wf-watchdog` | B5 | Supervise another converge loop by reading its `rounds.md` heartbeat; escalate on stall or oscillation, note convergence on a latest `SEAL: ACCEPTED`. | `/wf-watchdog <ledger-path> [--interval 10m]` |
 | `wf-hpc-watch` | B3 | Poll a long-running SLURM job read-only; act only on a RUNNING to DONE or FAILED transition; seal on a fresh terminal COMPLETED (plus an optional output audit). | `/wf-hpc-watch <job-id|job-name> [--interval 15m]` |
@@ -128,7 +128,7 @@ The campaign mandate was convert-to-nature, not force-a-loop-everywhere. A skill
 
 | Treatment | Applies to | Pattern |
 |---|---|---|
-| Full converge binding | Genuinely iterable artefacts and the reviewers that audit them | A `## Loop integration` section states how the skill plugs into `/converge`: a reviewer skill (`sanity-check`, `code-quality`, `design-review`, `hostile-review`, `infra-security`) declares its round-reviewer role and severity mapping and a conductor-driven `--loop` shorthand that prints the `/converge` invocation; a driver (`wf-design`, `wf-report`, `wf-websearch`) fixes the artefact, producer, and reviewer slots. Never self-seals. |
+| Full converge binding | Genuinely iterable artefacts and the reviewers that audit them | A `## Loop integration` section states how the skill plugs into `/converge`: a reviewer skill (`review`, `design-review`, `sanity-check`) declares its round-reviewer role and severity mapping and a conductor-driven `--loop` shorthand that prints the `/converge` invocation; a driver (`wf-design`, `wf-report`, `wf-websearch`) fixes the artefact, producer, and reviewer slots. Never self-seals. The remaining reviewer rubrics (`code-quality`, `hostile-review`, `infra-security`) are consumed by those reviewers rather than carrying their own loop-integration section (see `## Skill catalogue by category` for their standalone use). |
 | Light single-self-check note | One-shot skills: retrospectives, advisory scans (`wrap-up`, `mistake`, `good-idea`, `verify`, `memory-search`) | A short note that the skill runs once and self-checks its own output; it does not spin a produce-review loop, and pretending otherwise would be theatre. |
 | Deterministic gate | Computed-result checkers (`figure-validate`, `test-infra`, `hook-health`; the compile leg of `wf-report`) | Gates on a computed value (failed-count, score, exit code), NO LLM token. The `/goal` predicate reads the checker output directly; severity maps via the verdict-schema deterministic-checker row, not a VERDICT line. |
 
@@ -259,8 +259,17 @@ converge ── drives produce/review rounds, consumes review-dispatch each roun
             consumes dispatch-contract for the producer, emits the /goal block
         │
         ▼
-wf-design · wf-report · wf-websearch · wf-wave-monitor · wf-watchdog ·
-wf-hpc-watch · wf-nb-watch · wf-hygiene ── fix converge's slots to one artefact
+wf-design · wf-report · wf-websearch (B1) ── fix converge's slots to one
+    artefact
+        │
+        ▼
+wf-wave-monitor · wf-watchdog · wf-hpc-watch · wf-nb-watch (B3/B5) ── schedule
+    or watch on a cadence rather than fixing producer/reviewer slots to a
+    single artefact
+        │
+        ▼
+wf-hygiene (B4) ── scheduled gardener pass; no artefact, no /goal block, flags
+    for the human only
 ```
 
 `wf-auto` sits beside the wf-* bindings rather than inside this per-artefact chain: at config time it consumes `/review-dispatch`'s resolution (materialised once into `loop.json`, not re-queried per round), and at runtime `converge_auto.py` consumes `verdict-schema.md`'s token grammar mechanically, scanning producer output for the `VERDICT:`/`SEAL:` line pattern itself rather than trusting an LLM to withhold it.

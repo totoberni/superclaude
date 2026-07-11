@@ -52,7 +52,7 @@ claude --agent o-<name>      # Named orch instance (project-specific thin alias)
 | Concept | Location | Purpose |
 |---------|----------|---------|
 | **Rules** | `rules/` | Auto-loaded behavioral constraints. Numbered for order, path-scoped via frontmatter |
-| **Skills** | `skills/` | ~70 slash commands and workflow skills: user-invocable or model-invocable, every one loop-composable. See [Skills and Workflow Skills](#skills-and-workflow-skills) |
+| **Skills** | `skills/` | 72 slash commands and workflow skills: user-invocable or model-invocable, every one loop-composable. See [Skills and Workflow Skills](#skills-and-workflow-skills) |
 | **Comms** | `comms/` | Structured message bus: directives (meta->orch), reports (orch->meta), escalations |
 | **Hooks** | `hooks/` | Session timer (35/40/48 min), pre-compaction snapshots, cleanup |
 | **Memory** | `agent-memory/` | Hybrid FTS5 + sqlite-vec SQLite store: shared project gotchas, per-agent instance context, wins. Self-maintains via `/lt-mem` (`memory_db.py compact` = FTS-optimize + vec-rebuild + VACUUM) |
@@ -61,7 +61,7 @@ claude --agent o-<name>      # Named orch instance (project-specific thin alias)
 
 ## Skills and Workflow Skills
 
-Skills are the reusable capabilities under `skills/`: roughly 70 of them, each a Markdown file with frontmatter and a slash name. A skill can be invoked two ways: by the human as a slash command (`/plan`, `/review`, `/tdd`, `/converge`), or by a model mid-task through the Skill tool. Both entry points run the same file. Every skill is now loop-composable: the `disable-model-invocation` flag defaults to false, so any skill can be model-invoked and driven inside a recurring loop, not just typed once by a human. The deep per-skill reference lives in [`skills/README.md`](skills/README.md); this section is the summative entry point plus worked examples.
+Skills are the reusable capabilities under `skills/`: 72 of them, each a Markdown file with frontmatter and a slash name. A skill can be invoked two ways: by the human as a slash command (`/plan`, `/review`, `/tdd`, `/converge`), or by a model mid-task through the Skill tool. Both entry points run the same file. Every skill is now loop-composable: the `disable-model-invocation` flag defaults to false, so any skill can be model-invoked and driven inside a recurring loop, not just typed once by a human. The deep per-skill reference lives in [`skills/README.md`](skills/README.md); this section is the summative entry point plus worked examples.
 
 ### The workflow-skill model
 
@@ -71,6 +71,8 @@ A workflow skill converges an artefact: it produces, reviews, and iterates until
 - **`/review-dispatch`** resolves the correct adversarial reviewer for an artefact class (a LaTeX report routes to `w-hostile-reviewer`, a frontend diff to `w-design-reviewer`), preloading the right rubric and effort.
 
 Two rules keep the loop honest. The **two-token protocol**: every round a reviewer emits one `VERDICT` line (`REWORK` or `CLEAN`, with blocking / major / minor counts); termination comes only from a `SEAL` line emitted by a FRESH auditor that examined the complete final state, never the round reviewer. The **no-pre-approval rule**: a seal binds to a named artefact revision, and any later change to the artefact voids it and forces a fresh seal, so approval never transfers across rounds. Full mechanics (bar levels, conductor context, the round ledger) are documented in [`skills/README.md`](skills/README.md).
+
+`/wf-auto` configures the autonomous variant of this same loop: instead of a human pasting a `/goal` block each round, the owner performs one consent act, launching the printed command, and a headless driver (`converge_auto.py`) iterates produce, review, and seal rounds unattended. Both rules above hold mechanically rather than by convention: the driver enforces a fresh reviewer per round and, in a git repo, binds each seal to a real commit hash from a pre-seal snapshot it commits itself, voiding the seal if that commit or the artefact scope later changes.
 
 ### The wf-* family
 
@@ -86,6 +88,8 @@ Each `wf-*` skill is a thin binding that fixes `/converge`'s slots to one domain
 | `wf-hpc-watch` | schedule | Poll a long-running SLURM job, act only on a state change |
 | `wf-nb-watch` | schedule | Watch a long notebook run, dispatch a fix on a BROKEN or HUNG cell |
 | `wf-hygiene` | schedule | Scheduled hygiene pass over sessions, memory, and checkpoints |
+
+`/swarm-status` gives a sub-second snapshot of in-flight workers, including background reviewers; `/swarm-observe` is the read-only portfolio view across every converge loop, classifying each driver loop as VOIDED, SEALED, ESCALATED, STALL, OSCILLATION, or RUNNING, and each hand-authored (`/converge`) round ledger by its last VERDICT/SEAL token, plus a tally of in-flight workers. Neither mutates a loop or a worker; both are safe to run at any time.
 
 ### Usage examples
 
@@ -118,6 +122,16 @@ Converge any artefact generically:
 ```
 /converge path/to/artefact
 # prints the /goal block; paste it, and the produce-review loop runs to a fresh SEAL
+```
+
+Configure and launch an unattended loop:
+
+```
+/wf-auto hooks/subagent-stop.sh scripts/test-hooks.sh --class infra --bar gate
+# prints the launch command; the owner runs it once and the driver takes it from there
+# real first run (b31-spawnlog-hardening-r2, allow_dirty set in loop.json): a
+# hook-hardening task went from a dirty tree to a hostile SEAL bound to a real
+# pre-seal commit in one round, about eleven minutes launch-to-seal, zero human touches after launch
 ```
 
 Schedule a monitor over a long job:
