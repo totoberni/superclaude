@@ -54,7 +54,6 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -67,7 +66,10 @@ from engine.kernel.contracts import (
 # Generic form-driving primitives the moved react-select / upload-poll widget
 # cluster (below) calls bare, exactly as it did when it lived in providers/base
 # (base re-exports these same kernel names). Not monkeypatched anywhere.
-from engine.kernel.fill_toolkit import _locator_text, _normalize_name, type_human
+from engine.kernel.fill_toolkit import (
+    _current_assets, _current_url, _is_upload, _locator_text, _normalize_name,
+    _strip_fragment, _sweep_gaps, type_human)
+from engine.kernel.capture_toolkit import _utc_now_iso
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
 from engine.providers import base
 from engine.providers.greenhouse.resolve import GREENHOUSE_WIDGET_RESOLVER
@@ -292,34 +294,6 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
         url_unchanged=url_unchanged, screenshot="", ts=ts)
 
 
-def _current_url(page) -> str:
-    return getattr(page, "url", "") or ""
-
-
-def _strip_fragment(url: str) -> str:
-    return url.split("#", 1)[0]
-
-
-def _sweep_gaps(mismatch: dict) -> list[dict]:
-    """Synthetic `required_unfilled` entries for a DOM-sweep mismatch.
-
-    Hole-fix d requires ANY mismatch (either direction) to force
-    NOT_COMPLETE; these entries make that concrete regardless of whether the
-    per-field fill loop otherwise landed every schema-known field."""
-    gaps: list[dict] = []
-    for name in mismatch.get("dom_only") or ():
-        gaps.append({
-            "key": f"dom-sweep:{name}", "label": name,
-            "reason": "DOM shows this field as required but it is absent "
-                      "from the schema"})
-    for name in mismatch.get("schema_only") or ():
-        gaps.append({
-            "key": f"dom-sweep:{name}", "label": name,
-            "reason": "schema marks this field required but the DOM sweep "
-                      "did not find it required"})
-    return gaps
-
-
 def _reconcile_uploaded_labels(dom_required: set[str], uploads: list[dict],
                                fieldmap: FieldMap) -> set[str]:
     """Fold a successfully-uploaded file field's POST-FILL DOM-sweep label
@@ -353,11 +327,6 @@ def _reconcile_uploaded_labels(dom_required: set[str], uploads: list[dict],
 
 # -- per-field driving: text/email/phone via type_human, react-select via -----
 # select_react_combobox, everything else via a native locator action ----------
-
-
-def _is_upload(fv) -> bool:
-    from pathlib import Path
-    return isinstance(fv.value, Path)
 
 
 def _is_react_combobox(fv) -> bool:
@@ -404,6 +373,7 @@ def _apply_native(locator, fv) -> None:
 _NATIVE_SELECT_TYPES = frozenset({"multi_value_multi_select"})
 
 
+# per-vendor variant (differs from the kernel generic): adds file_attached_keys + an upload-confirm widget gate (spec 3.3)
 def _fill_upload(page, fv, uploads: list[dict],
                  extra_skips: list[tuple[str, str]],
                  filled_keys: set[str],
@@ -568,20 +538,6 @@ def _drop_readback_mismatch(readback_mismatches: list[dict], key: str) -> None:
     as filled/satisfied must not also be reported as a readback mismatch)."""
     readback_mismatches[:] = [m for m in readback_mismatches
                               if m.get("key") != key]
-
-
-def _current_assets(fv):
-    """`base._safe_upload` requires a `FillAssets` whitelist; `fv.value` is
-    already ONE of that whitelist's resolved paths (produced by `resolve_
-    values` -- this module's kernel-delegating resolver -- upstream), so a single-path FillAssets
-    keyed to whichever asset slot `fv.asset` names reconstructs an
-    equivalent whitelist without threading the original object through the
-    Provider contract's `fill(page, fieldmap, values)` signature."""
-    return FillAssets.single_asset_whitelist(fv.asset, fv.value)
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # -- DEFERRED (see module docstring): intl-tel-input + async school typeahead --

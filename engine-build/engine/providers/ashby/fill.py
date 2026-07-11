@@ -106,12 +106,14 @@ paths are kept as a REFERENCE/FALLBACK note only; no code path consults them.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from engine.kernel.contracts import (
     FieldMap, FillAssets, FillReport, FillSafetyError, ResolvedValues)
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
+from engine.kernel.fill_toolkit import (
+    _current_url, _fill_upload, _is_upload, _strip_fragment, _sweep_gaps)
+from engine.kernel.capture_toolkit import _utc_now_iso
 from engine.providers import base
 
 vendor = "ashby"
@@ -258,36 +260,6 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
         url_unchanged=url_unchanged, screenshot="", ts=ts)
 
 
-def _current_url(page) -> str:
-    return getattr(page, "url", "") or ""
-
-
-def _strip_fragment(url: str) -> str:
-    return url.split("#", 1)[0]
-
-
-def _sweep_gaps(mismatch: dict) -> list[dict]:
-    """Synthetic `required_unfilled` entries for a DOM-sweep mismatch.
-
-    Ashby has a real graphql schema, so (like greenhouse, UNLIKE Lever) the
-    sweep is a CROSS-CHECK of an authoritative schema, not the primary oracle.
-    Any mismatch (either direction) still forces NOT_COMPLETE. `dom_only` = the
-    page requires a field the schema missed; `schema_only` = the schema marks a
-    field required but the live sweep did not find it required on the page."""
-    gaps: list[dict] = []
-    for name in mismatch.get("dom_only") or ():
-        gaps.append({
-            "key": f"dom-sweep:{name}", "label": name,
-            "reason": "DOM shows this field as required but it is absent "
-                      "from the schema"})
-    for name in mismatch.get("schema_only") or ():
-        gaps.append({
-            "key": f"dom-sweep:{name}", "label": name,
-            "reason": "schema marks this field required but the DOM sweep "
-                      "did not find it required"})
-    return gaps
-
-
 # -- per-field driving ---------------------------------------------------------
 # text/email/phone via base.type_human; an Ashby select/combobox via the OWN
 # controlled-component driver (NEVER react-select, NEVER native select_option);
@@ -330,11 +302,6 @@ _REACT_CONTROLLED_COMMIT_JS = """
     el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
 }
 """
-
-
-def _is_upload(fv) -> bool:
-    from pathlib import Path
-    return isinstance(fv.value, Path)
 
 
 def _is_ashby_select(fv) -> bool:
@@ -388,46 +355,3 @@ def _apply_ashby_controlled(locator, value) -> None:
     ignored the change reads back empty and is never counted as filled."""
     locator.evaluate(_REACT_CONTROLLED_COMMIT_JS,
                      list(value) if isinstance(value, list) else str(value))
-
-
-def _fill_upload(page, fv, uploads: list[dict],
-                 extra_skips: list[tuple[str, str]],
-                 filled_keys: set[str]) -> None:
-    """Attach a whitelisted asset via the reused `base._safe_upload` /
-    `kernel.fill_toolkit._locate_file_input` primitives (the real `#_systemfield_resume`
-    `<input type=file>`; the fieldmap's role=button hint never reaches it).
-    Counts as filled ONLY once the input's own readback confirms a file
-    attached, mirroring greenhouse's / lever's upload path exactly (the SAME
-    base/fill primitives, not a reimplementation)."""
-    from engine.kernel.fill_toolkit import _locate_file_input, _upload_attached
-
-    control = _locate_file_input(page, fv)
-    if control is None:
-        extra_skips.append((fv.key, "no file input located"))
-        return
-    try:
-        base._safe_upload(control, fv.value, _current_assets(fv),
-                          page=page, button_name=fv.locator.name or fv.label)
-    except FillSafetyError:
-        raise
-    except Exception as exc:  # per-field upload error is fail-soft
-        extra_skips.append((fv.key, f"upload-error: {exc}"))
-        return
-    if not _upload_attached(control):
-        extra_skips.append((fv.key, "upload did not attach (readback)"))
-        return
-    filled_keys.add(fv.key)
-    uploads.append({"key": fv.key, "asset": fv.asset,
-                    "path": str(fv.value), "reason": fv.upload_reason})
-
-
-def _current_assets(fv):
-    """Reconstruct a single-path `FillAssets` whitelist for `base._safe_upload`
-    from the already-resolved `fv.value`/`fv.asset` (the value is itself one of
-    the upstream whitelist's paths), without threading the original FillAssets
-    through the Provider contract's `fill(page, fieldmap, values)` signature."""
-    return FillAssets.single_asset_whitelist(fv.asset, fv.value)
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()

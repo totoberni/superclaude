@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import re
+from pathlib import Path
 from typing import Callable
 
 from engine.kernel.contracts import FieldValue, FillAssets, FillSafetyError
@@ -472,3 +473,85 @@ def _safe_get_attr(locator, name: str):
         return getter(name)
     except Exception:
         return None
+
+
+# -- vendor-agnostic fill helpers (SINGLE SOURCE; hoisted verbatim from the
+# -- provider plugins so a fix lands in ONE place, not once per vendor) ---------
+
+
+def _current_url(page) -> str:
+    return getattr(page, "url", "") or ""
+
+
+def _strip_fragment(url: str) -> str:
+    return url.split("#", 1)[0]
+
+
+def _is_upload(fv) -> bool:
+    return isinstance(fv.value, Path)
+
+
+def _current_assets(fv):
+    """Reconstruct a single-path `FillAssets` whitelist for `_safe_upload` from
+    the already-resolved `fv.value`/`fv.asset` (the value is itself one of the
+    upstream whitelist's paths), without threading the original FillAssets
+    through the Provider contract's `fill(page, fieldmap, values)` signature."""
+    return FillAssets.single_asset_whitelist(fv.asset, fv.value)
+
+
+def _sweep_gaps(mismatch: dict) -> list[dict]:
+    """Synthetic `required_unfilled` entries for a DOM-sweep mismatch.
+
+    For a vendor whose schema is the authoritative oracle, the sweep is a
+    CROSS-CHECK: ANY mismatch (either direction) forces NOT_COMPLETE. `dom_only`
+    = the page requires a field the schema missed; `schema_only` = the schema
+    marks a field required but the live sweep did not find it required."""
+    gaps: list[dict] = []
+    for name in mismatch.get("dom_only") or ():
+        gaps.append({
+            "key": f"dom-sweep:{name}", "label": name,
+            "reason": "DOM shows this field as required but it is absent "
+                      "from the schema"})
+    for name in mismatch.get("schema_only") or ():
+        gaps.append({
+            "key": f"dom-sweep:{name}", "label": name,
+            "reason": "schema marks this field required but the DOM sweep "
+                      "did not find it required"})
+    return gaps
+
+
+def _fill_upload(page, fv, uploads: list[dict],
+                 extra_skips: list[tuple[str, str]],
+                 filled_keys: set[str]) -> None:
+    """Attach a whitelisted asset via the reused `_safe_upload` /
+    `_locate_file_input` primitives (the real `<input type=file>`; the
+    fieldmap's role=button hint never reaches it). Counts as filled ONLY once
+    the input's own readback confirms a file attached (the SAME base/fill
+    primitives, not a reimplementation).
+
+    This is KERNEL-tier generic (single-sourced from the former per-vendor
+    copies, W5.1 Stage 7): it calls the kernel-local `_safe_upload` directly,
+    NOT through `base._safe_upload`. The `base.X` call-time wrapper seam is a
+    PROVIDER-tier convention (provider fill() code routes through base so a test
+    can monkeypatch the seam); reaching up into `base` from inside the kernel
+    would invert the layering. An upload-interception test patches
+    `fill_toolkit._safe_upload`, which intercepts BOTH this generic path and the
+    base wrapper (base delegates here at call time)."""
+    control = _locate_file_input(page, fv)
+    if control is None:
+        extra_skips.append((fv.key, "no file input located"))
+        return
+    try:
+        _safe_upload(control, fv.value, _current_assets(fv),
+                     page=page, button_name=fv.locator.name or fv.label)
+    except FillSafetyError:
+        raise
+    except Exception as exc:  # per-field upload error is fail-soft
+        extra_skips.append((fv.key, f"upload-error: {exc}"))
+        return
+    if not _upload_attached(control):
+        extra_skips.append((fv.key, "upload did not attach (readback)"))
+        return
+    filled_keys.add(fv.key)
+    uploads.append({"key": fv.key, "asset": fv.asset,
+                    "path": str(fv.value), "reason": fv.upload_reason})
