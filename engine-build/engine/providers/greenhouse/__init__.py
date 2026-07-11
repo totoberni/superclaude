@@ -25,13 +25,14 @@ Provider callables `capture` / `fill`. At PACKAGE scope the callables win (the
 `.fill` re-exports below run last), matching the old module where
 `greenhouse.capture` / `greenhouse.fill` were the functions. The submodules stay
 reachable via `sys.modules` / `importlib.import_module`, which is exactly how the
-`engine.fieldmap` / `engine.providers.base` re-export shims reach their moved
-members (never via the package attribute).
+`engine.providers.base` re-export shim reaches its moved members (never via the
+package attribute); the `engine.fieldmap` shim reached its members the same way
+until it was dissolved in Stage 5.
 
 Kept LIGHT (matching the old module's import cost): importing this package loads
 NO patchright / browser-capture module; the fill body reaches the kernel's private
 helpers (`kernel.resolve._completeness`, the `kernel.fill_toolkit` upload
-primitives) and the capture body the `engine.fieldmap` seam via CALL-TIME
+primitives) and the capture body its sibling `greenhouse.capture` module via CALL-TIME
 imports -- this package has NO `engine.fill` import at any scope. It
 SELF-REGISTERS into `engine.providers._registry` at import (Stage 2e-1) -- that
 is how `PROVIDERS` populates.

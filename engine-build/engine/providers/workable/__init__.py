@@ -25,15 +25,16 @@ NAME NOTE: `.capture` and `.fill` are submodules whose names collide with the
 Provider callables `capture` / `fill`. At PACKAGE scope the callables win (the
 `.fill` re-exports below run last), matching the old module where
 `workable.capture` / `workable.fill` were the functions. The submodules stay
-reachable via `sys.modules` / `importlib.import_module`, which is exactly how the
-`engine.fieldmap` re-export shim reaches `.capture`'s moved members (never via
-the package attribute).
+reachable via `sys.modules` / `importlib.import_module`, which is how the registry's
+CALL-TIME `PROVIDERS["workable"].capture` lookup reaches `.capture`'s members
+(never via the package attribute); the `engine.fieldmap` re-export shim used the
+same route until it was dissolved in Stage 5.
 
 Kept LIGHT (matching the old module's import cost): importing this package loads
 NO patchright / browser-capture module; the fill body reaches the kernel's private
 helpers (`kernel.resolve._completeness`,
 `kernel.fill_toolkit._locate_file_input`/`_upload_attached`) and the capture
-body the `engine.fieldmap` seam via CALL-TIME imports; the package has NO
+body its sibling `workable.capture` module via CALL-TIME imports; the package has NO
 `engine.fill` import at any scope (dataclasses come from `kernel.contracts`,
 Stage 4). This package
 SELF-REGISTERS into `engine.providers._registry` at import (Stage 2e-1) -- that

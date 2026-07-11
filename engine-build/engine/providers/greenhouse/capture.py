@@ -9,11 +9,15 @@ Only the GREENHOUSE-specific capture/parse code moved here. The generic helpers
 that Workable's own capture (`capture_workable` / `parse_workable`) also relies
 on -- `normalize_type` + `_HIDDEN_TYPES` (the shared vendor-native type mapper),
 `_read_body_text`, `_utc_now_iso` -- STAY in `engine.fieldmap` and are imported
-from there, so there is exactly one definition of each. `engine.fieldmap` keeps
-a lazy re-export shim for every name moved here, so existing importers
-(`engine.fill`, the tests; the old `registry.py` consumer was deleted in Stage
-3c) keep resolving them via `engine.fieldmap` unchanged, and the
-`monkeypatch.setattr(fieldmap, "capture_greenhouse", ...)` seam still works.
+from there, so there is exactly one definition of each. `capture_greenhouse` /
+`parse_greenhouse` now live ONLY here: their callers import them from this
+module directly (`greenhouse.fill.capture`'s call-time import, and the tests'
+`from engine.providers.greenhouse.capture import ...`). The registry looks
+`capture_greenhouse` up lazily as a CALL-TIME callable
+(`PROVIDERS["greenhouse"].capture`), resolving the attribute on this module when
+invoked, so the `monkeypatch.setattr(capture, "capture_greenhouse", ...)` seam
+on this module still works. (`engine.fieldmap`'s lazy re-export shim carried the
+old import paths until it was dissolved in Stage 5.)
 """
 
 from __future__ import annotations
