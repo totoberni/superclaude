@@ -247,7 +247,7 @@ class Scorer:
 
     def _term_length_fit(self, posting: Posting):
         # NEW axis: fixed-term / contract / internship / N-month / 1-year are the
-        # first-class bridge shape (the owner wants ~1 year pre-PhD).
+        # first-class bridge shape (the owner wants a short-term bridge role).
         text = f"{posting.title} {posting.description}"
         sub, label = term_length_sub(text, self._term_cfg)
         if sub >= self._term_cfg.get("bridge_score", 1.0):
@@ -273,7 +273,7 @@ class Scorer:
     def _eligibility_fit(self, posting: Posting):
         # NEW axis: EU/Italy work rights -> full; a role that needs sponsorship
         # the owner lacks is penalised + warned; a degree-in-hand requirement is
-        # warned against (the owner's degree pending).
+        # warned against (the owner's degree is still pending).
         cfg = self._eligibility_cfg
         text = f"{posting.title} {posting.description}".lower()
         caps = {c.lower() for c in self.profile.get("capabilities", [])}

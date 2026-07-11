@@ -14,7 +14,7 @@ ssot: job.yaml
 #   total = round(100 * family_mult * seniority_mult * soft_fit)
 # family and seniority are GATES (a wrong family or an over-senior role collapses
 # the whole score, a real discard); soft_fit is an additive quality score over
-# survivors. Owner goal: a 1-year ENTRY-level pre-PhD bridge job. Every number
+# survivors. Owner goal: a short-term ENTRY-level bridge role. Every number
 # below is tunable here without touching engine/match.py.
 scoring:
   # -- soft_fit: additive quality over survivors; weights MUST sum to 1.0 --------
@@ -272,14 +272,14 @@ scoring:
   # -- eligibility (soft_fit 0.10): work-auth + degree reality -----------------
   # EU/Italy work rights -> full. A role that needs US/non-EU sponsorship the
   # owner lacks is penalised and warned. A degree-in-hand requirement is warned
-  # against (the owner's degree pending); set `degree_in_hand: true`
+  # against (the owner's degree is still pending); set `degree_in_hand: true`
   # once graduated.
   eligibility:
     eu_score: 1.0
     us_sponsorship_score: 0.2
     degree_pending_score: 0.8
     degree_in_hand: false
-    degree_warn: "degree required; degree pending (not yet in hand)"
+    degree_warn: "degree required; owner's degree pending (not yet in hand)"
     us_signal_keywords:
       - us citizen
       - u.s. citizen
@@ -307,7 +307,7 @@ scoring:
     discard_on_match: true
 
   # -- commute gate behaviour --------------------------------------------------
-  # The operative commute policy VALUES (owner's allowed cities the allowed cities and
+  # The operative commute policy VALUES (the owner's allowed cities and
   # the on-site day caps) are owner data and live in the toto-only SSOT at
   # preferences.location_policy, never duplicated here (PII firewall + single
   # source of truth). Only the calendar conversion constant is tuned here.

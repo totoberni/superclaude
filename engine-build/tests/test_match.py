@@ -441,7 +441,7 @@ def test_senior_ai_engineer_no_overlap_below_threshold(jobhunt_config):
 def test_rome_five_days_onsite_is_discarded(jobhunt_config):
     # AUDIT case: a non-allowed-city (Rome) role demanding 5 on-site days/week
     # over the owner's 2-day Europe cap is a commute DISCARD, not a 66 score.
-    ssot = _onsite_ssot(["Milan", "Bologna"], 2, 4)
+    ssot = _onsite_ssot(["Turin", "Padua"], 2, 4)
     scorer = Scorer(jobhunt_config, _entry_owner_profile(), ssot=ssot)
     breakdown = scorer.score(_posting(
         ["Rome, Italy"], title="Machine Learning Engineer",
