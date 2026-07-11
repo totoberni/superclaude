@@ -11,10 +11,11 @@ disjoint from Greenhouse's `input_text`/`multi_value_*`, so `normalize_type` is
 NOT reused (workable owns `_WORKABLE_TYPE_MAP`).
 
 Only the WORKABLE-specific capture/parse code moved here. The generic helpers it
-shares with Greenhouse's own capture -- `_read_body_text`, `_utc_now_iso` -- STAY
-in `engine.fieldmap` and are imported from there, so there is exactly one
-definition of each (the 2a RULE: a helper used by BOTH vendor captures is GENERIC
-and keeps its single home in `engine.fieldmap`). `capture_workable` /
+shares with Greenhouse's own capture: `_read_body_text` STAYS in `engine.fieldmap`
+and is imported from there, and the generic timestamp `_utc_now_iso` is
+single-sourced in `engine.kernel.capture_toolkit` and imported from the kernel,
+so each has exactly one definition (the 2a RULE: a helper used by BOTH vendor
+captures is GENERIC and keeps a single home). `capture_workable` /
 `parse_workable` now live ONLY here: their callers import them from this module
 directly (`workable.fill.capture`'s call-time import, and the tests' `from
 engine.providers.workable.capture import capture_workable, parse_workable`,
@@ -38,8 +39,8 @@ from typing import Callable
 from engine.kernel.capture_toolkit import UA
 from engine.fieldmap import (
     _read_body_text,
-    _utc_now_iso,
 )
+from engine.kernel.capture_toolkit import _utc_now_iso
 from engine.kernel.contracts import (
     Field,
     FieldMap,

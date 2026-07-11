@@ -21,7 +21,6 @@ moved onto the canonical homes (`engine.kernel.contracts`,
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 
 from engine.kernel.contracts import FieldType
 
@@ -79,5 +78,3 @@ def _read_body_text(response) -> str:
     return body.decode("utf-8") if isinstance(body, (bytes, bytearray)) else body
 
 
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()

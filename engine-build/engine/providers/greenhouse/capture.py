@@ -7,9 +7,11 @@ payload onto the canonical `FieldMap` (no I/O).
 
 Only the GREENHOUSE-specific capture/parse code moved here. The generic helpers
 that Workable's own capture (`capture_workable` / `parse_workable`) also relies
-on -- `normalize_type` + `_HIDDEN_TYPES` (the shared vendor-native type mapper),
-`_read_body_text`, `_utc_now_iso` -- STAY in `engine.fieldmap` and are imported
-from there, so there is exactly one definition of each. `capture_greenhouse` /
+on -- `normalize_type` + `_HIDDEN_TYPES` (the shared vendor-native type mapper)
+and `_read_body_text` -- STAY in `engine.fieldmap` and are imported from there;
+the generic timestamp `_utc_now_iso` is single-sourced in
+`engine.kernel.capture_toolkit` and imported from the kernel. Each has exactly
+one definition. `capture_greenhouse` /
 `parse_greenhouse` now live ONLY here: their callers import them from this
 module directly (`greenhouse.fill.capture`'s call-time import, and the tests'
 `from engine.providers.greenhouse.capture import ...`). The registry looks
@@ -30,9 +32,9 @@ from engine.kernel.capture_toolkit import UA
 from engine.fieldmap import (
     _HIDDEN_TYPES,
     _read_body_text,
-    _utc_now_iso,
     normalize_type,
 )
+from engine.kernel.capture_toolkit import _utc_now_iso
 from engine.kernel.contracts import (
     Field,
     FieldMap,
