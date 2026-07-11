@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-import engine.fieldmap as fieldmap
-from engine.fieldmap import FieldType, Section, capture_workable, parse_workable
-from engine.kernel.contracts import FieldValue, FillAssets, FillSafetyError, ResolvedValues
+from engine.kernel.contracts import (
+    FieldType, FieldValue, FillAssets, FillSafetyError, ResolvedValues, Section)
+from engine.providers.workable.capture import capture_workable, parse_workable
 from engine.profile_map import profile_from_real_ssot
 from engine.providers import _registry, base, protocol, workable
 from engine.ssot import SSOT
@@ -271,15 +271,17 @@ class _FakeWorkablePage:
 def test_capture_delegates_to_registry_capture(monkeypatch):
     # _registry.get("workable").capture is a call-time lazy_call targeting
     # engine.providers.workable:capture, which lazily imports and calls
-    # fieldmap.capture_workable at CALL time; patching that
-    # module attribute proves capture() rides the SAME registry wiring end to end.
+    # engine.providers.workable.capture.capture_workable at CALL time; patching
+    # that module attribute proves capture() rides the SAME registry wiring.
+    from importlib import import_module
+    capture_mod = import_module("engine.providers.workable.capture")
     calls = []
 
     def fake_capture(slug, job_id, opener=None):
         calls.append((slug, job_id, opener))
         return "SENTINEL"
 
-    monkeypatch.setattr(fieldmap, "capture_workable", fake_capture)
+    monkeypatch.setattr(capture_mod, "capture_workable", fake_capture)
     result = workable.capture("powerlines", "57CFF1B2AF", opener="OPENER")
     assert result == "SENTINEL"
     assert calls == [("powerlines", "57CFF1B2AF", "OPENER")]

@@ -109,9 +109,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from engine.fieldmap import FieldMap
 from engine.kernel.contracts import (
-    FillAssets, FillReport, FillSafetyError, ResolvedValues)
+    FieldMap, FillAssets, FillReport, FillSafetyError, ResolvedValues)
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
 from engine.providers import base
 

@@ -4,10 +4,12 @@ engine.fieldmap).
 The `vendor_resolver` (spec 3.4) the kernel coverage classifier consults for
 Greenhouse's location-autocomplete `location` field, the paste-in
 `resume_text`/`cover_letter_text` textareas, and the `longitude`/`latitude`
-portal-telemetry fields. `engine.fieldmap.coverage()` injects
-`GREENHOUSE_WIDGET_RESOLVER` as its default, and `engine.fieldmap` keeps a lazy
-re-export shim for every name here so pre-Stage-2 callers keep resolving them via
-`engine.fieldmap` unchanged. Stage 2e/3 rewires callers onto the registry.
+portal-telemetry fields. It is injected EXPLICITLY by the live callers: the
+pipeline (`engine.run`) builds it per vendor from the registry and passes it into
+`coverage`; `engine.providers.greenhouse.fill` passes it into the kernel
+resolve/completeness calls; the test harness passes an explicit `vendor_resolver`.
+The kernel default is `_NOOP_RESOLVER` (a vendor with no portal-widget quirks),
+never this resolver.
 """
 
 from __future__ import annotations

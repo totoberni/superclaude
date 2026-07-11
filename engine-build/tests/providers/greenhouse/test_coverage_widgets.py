@@ -17,15 +17,13 @@ proves the pipeline (`engine.run`) builds the resolver from the registry PER
 vendor: greenhouse gets its widget resolver, lever gets the no-op.
 """
 
-from engine.fieldmap import (
+from engine.kernel.contracts import Field, FieldMap, Locator
+from engine.kernel.resolve import (
     ANSWERABLE,
     MANUAL_ONLY,
     MISSING_STATUS,
-    Field,
-    FieldMap,
-    Locator,
+    coverage,
 )
-from engine.kernel.resolve import coverage
 from engine.providers.greenhouse.resolve import GREENHOUSE_WIDGET_RESOLVER
 from engine.ssot import SSOT
 

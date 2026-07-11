@@ -170,7 +170,8 @@ def test_apply_url_unknown_vendor_preserves_error():
 # -- run._collect_fieldmap: golden dispatch + preserved error path -------------
 
 def test_collect_fieldmap_greenhouse_passes_opener(monkeypatch):
-    import engine.fieldmap as fieldmap
+    from importlib import import_module
+    capture_mod = import_module("engine.providers.greenhouse.capture")
     sentinel = object()
     calls = []
 
@@ -178,7 +179,7 @@ def test_collect_fieldmap_greenhouse_passes_opener(monkeypatch):
         calls.append((slug, job_id, opener))
         return sentinel
 
-    monkeypatch.setattr(fieldmap, "capture_greenhouse", fake_capture_greenhouse)
+    monkeypatch.setattr(capture_mod, "capture_greenhouse", fake_capture_greenhouse)
     opener = object()
     result = run._collect_fieldmap("greenhouse", _posting("acme", "5501001"), opener)
     assert result is sentinel

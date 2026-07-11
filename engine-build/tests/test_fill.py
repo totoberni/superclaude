@@ -859,7 +859,7 @@ def test_photo_field_detection_incl_italian(label):
 
 
 def test_photo_field_detection_is_label_based_only():
-    # `Field` (engine.fieldmap) carries no `accept` MIME attribute in
+    # `Field` (engine.kernel.contracts) carries no `accept` MIME attribute in
     # production; detection is driven entirely by the label regex (a former
     # accept-sniffing branch was dead code and has been removed).
     fld = _field("x", "Upload your photo", type_="input_file", role="button")

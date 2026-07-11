@@ -71,9 +71,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from engine.fieldmap import FieldMap
 from engine.kernel.contracts import (
-    FillAssets, FillReport, FillSafetyError, ResolvedValues)
+    FieldMap, FillAssets, FillReport, FillSafetyError, ResolvedValues)
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
 from engine.providers import base
 
@@ -84,14 +83,14 @@ vendor = "workable"
 
 
 def capture(slug: str, job_id: str, opener: Any = None) -> FieldMap:
-    """The schema fetch: `fieldmap.capture_workable`, the public
+    """The schema fetch: `capture_workable`, the public
     `.../jobs/<shortcode>/form` GET (browser-free, greenhouse-class). Reached via
-    a CALL-TIME lookup on `engine.fieldmap` so importing this module stays light
-    and the test monkeypatch seam `monkeypatch.setattr(fieldmap, "capture_
-    workable", ...)` still routes. No new capture logic here (the provider
-    registry looks this function up lazily as `_registry.get("workable").
+    a CALL-TIME import from `engine.providers.workable.capture` so importing this
+    module stays light and the test monkeypatch seam (patch `capture_workable` on
+    the workable `.capture` module) still routes. No new capture logic here (the
+    provider registry looks this function up lazily as `_registry.get("workable").
     capture`)."""
-    from engine.fieldmap import capture_workable
+    from engine.providers.workable.capture import capture_workable
     return capture_workable(slug, job_id, opener)
 
 

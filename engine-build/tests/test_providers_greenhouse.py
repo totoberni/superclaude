@@ -7,7 +7,8 @@ harness mirroring the representative DOM fixture at
 required text field, a required file input, an optional image-accept file
 input, and an EEOC decline field with no required marker). The captured
 schema comes from `tests/fixtures/providers/greenhouse/questions.json`
-parsed through the real (offline) `fieldmap.parse_greenhouse`. The SSOT is a
+parsed through the real (offline)
+`engine.providers.greenhouse.capture.parse_greenhouse`. The SSOT is a
 hand-built FAKE (no owner PII). Real live-browser HAR capture against the
 real DOM is a SEPARATE later step (W5.2 fixture-validation promise in
 providers/base.py); this suite proves the LOGIC offline, matching the
@@ -19,8 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from engine.fieldmap import Field, FieldMap, Locator, parse_greenhouse
-from engine.kernel.contracts import FillAssets, FillSafetyError
+from engine.kernel.contracts import (
+    Field, FieldMap, FillAssets, FillSafetyError, Locator)
+from engine.providers.greenhouse.capture import parse_greenhouse
 from engine.profile_map import profile_from_real_ssot
 from engine.providers import base, greenhouse, protocol
 from engine.providers._registry import PROVIDERS
@@ -412,18 +414,19 @@ def _resolved_values(fieldmap, *, tmp_path, assets_kwargs=None):
 def test_capture_delegates_to_registry_capture(monkeypatch):
     # PROVIDERS["greenhouse"].capture is a call-time lazy_call targeting
     # engine.providers.greenhouse:capture, which itself lazily imports and calls
-    # engine.fieldmap.capture_greenhouse at CALL time (mirrors
+    # engine.providers.greenhouse.capture.capture_greenhouse at CALL time (mirrors
     # test_providers_registry.py's own `test_collect_fieldmap_greenhouse_
     # passes_opener`), so patching that module attribute is what proves
     # capture() rides the SAME registry wiring end to end.
-    import engine.fieldmap as fieldmap_module
+    from importlib import import_module
+    capture_mod = import_module("engine.providers.greenhouse.capture")
     calls = []
 
     def fake_capture(slug, job_id, opener=None):
         calls.append((slug, job_id, opener))
         return "SENTINEL"
 
-    monkeypatch.setattr(fieldmap_module, "capture_greenhouse", fake_capture)
+    monkeypatch.setattr(capture_mod, "capture_greenhouse", fake_capture)
     result = greenhouse.capture("fakeco", "7701001", opener="OPENER")
     assert result == "SENTINEL"
     assert calls == [("fakeco", "7701001", "OPENER")]

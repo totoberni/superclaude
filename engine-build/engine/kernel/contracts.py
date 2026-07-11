@@ -3,19 +3,18 @@
 The dataclasses/enums shared by every vendor plugin and by the kernel's own
 fill/fieldmap/discover modules. This is the base of the kernel: at LOAD time it
 imports only the standard library, so any provider or kernel module can depend
-on it without pulling in classification/automation logic. One documented,
-transitional CALL-TIME seam remains: `FieldMap.coverage` delegates to the
-`engine.fieldmap.coverage` shim (which default-injects the Greenhouse widget
-resolver for today's method callers; see the method comment). The classifier
-itself already lives in `engine.kernel.resolve` (moved in W5.1 Stage 1); the
-seam dies in Stage 3 when callers inject a registry-built vendor_resolver,
-after which this module references nothing outside the kernel.
+on it without pulling in classification/automation logic. The one delegation it carries stays inside the kernel:
+`FieldMap.coverage` reaches the classifier (`engine.kernel.resolve.coverage`)
+through a kernel-internal CALL-TIME import, deferred only to avoid the
+load-order cycle with resolve (see the method comment). The upward seam to
+`engine.fieldmap` died in Stage 5, so this module now references nothing
+outside the kernel.
 
 Moved verbatim from `engine.fieldmap` / `engine.fill` / `engine.discover`
-(W5.1 stage 0); each origin module now re-exports these names via a shim
-import so existing importers (tests, providers, run.py) keep resolving to
-the SAME objects. See those modules' own docstrings for the domain context
-these types serve.
+(W5.1 stage 0). The transitional re-export shims those origin modules once
+carried dissolved in Stage 5, so every importer (tests, providers, run.py)
+now depends on these canonical kernel homes directly. See those modules' own
+docstrings for the domain context these types serve.
 """
 
 from __future__ import annotations
@@ -192,22 +191,16 @@ class FieldMap:
     def required_fields(self) -> list[Field]:
         return [f for f in self.fields if f.required]
 
-    def coverage(self, ssot: SSOT, profile: dict) -> "CoverageReport":
-        # TRANSITIONAL call-time seam (dies in W5.1 Stage 3): the classifier
-        # itself now lives in engine.kernel.resolve.coverage (vendor_resolver
-        # injection seam, spec 3.4), but THIS method must keep delegating to
-        # the engine.fieldmap.coverage SHIM because that shim default-injects
-        # the Greenhouse widget resolver -- the remaining live method callers
-        # (test_browse; run.py's two sites were moved onto the kernel function
-        # with registry-built injection in Stage 2e-2) rely on today's
-        # Greenhouse-widget classification. Stage 3 moves the remaining callers
-        # onto the kernel function likewise; then this seam and
-        # the `_KNOWN_UPWARD_EXCEPTIONS` allowlist entry in
-        # tests/kernel/test_kernel_invariants.py are removed together. An eager
-        # top-level import here would cycle back through fieldmap's own shim
-        # import of this module.
-        from engine.fieldmap import coverage as _coverage
-        return _coverage(self, ssot, profile)
+    def coverage(self, ssot: SSOT, profile: dict,
+                 vendor_resolver=None) -> "CoverageReport":
+        # Kernel-internal call-time import: it avoids the load-order cycle with
+        # resolve (resolve imports contracts at load, so an eager top-level
+        # import here would re-enter a half-initialised resolve). The upward
+        # seam to engine.fieldmap died in Stage 5; the kernel is structurally
+        # pure. `vendor_resolver` is passed through so a caller can inject a
+        # vendor's portal-widget quirks (default None -> the kernel no-op).
+        from engine.kernel.resolve import coverage
+        return coverage(self, ssot, profile, vendor_resolver=vendor_resolver)
 
 
 def _role_for_type(field_type: str) -> str:

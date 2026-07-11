@@ -10,11 +10,12 @@ the suite forever, not by one-off session checks. Six invariants:
                      guard is FROZEN.
 2. Layering        - no kernel module imports anything ABOVE the ssot line
                      (``engine.providers``/``run``/``fill``/``fieldmap``/... are
-                     forbidden anywhere in the tree), save two documented
-                     non-load-time seams (see ``_KNOWN_UPWARD_EXCEPTIONS``).
+                     forbidden anywhere in the tree). The allowlist
+                     ``_KNOWN_UPWARD_EXCEPTIONS`` is now EMPTY: the kernel is
+                     structurally pure (its last call-time seam died in Stage 5).
 3. Load-time clean - the STRICT form of (2): zero forbidden imports execute at
-                     kernel import time (proves the two allowlisted seams are the
-                     only exceptions and are both deferred, never load-bearing).
+                     kernel import time (with an empty allowlist there are no
+                     upward references at all, deferred or otherwise).
 4. Browser-free    - importing the kernel pulls in NEITHER patchright NOR
                      playwright (the daily poller must never load the browser
                      stack).
@@ -216,29 +217,17 @@ _FORBIDDEN_PREFIXES = (
 )
 
 # Documented, intentional NON-LOAD-TIME upward references, keyed by
-# (kernel_file_basename, imported_module), proven load-time-clean by
-# ``test_kernel_no_loadtime_upward_imports``:
-#   * contracts.py -- a TRANSITIONAL CALL-TIME import inside
-#                     ``FieldMap.coverage()``; the deliberate anti-cycle seam (an
-#                     eager import would recreate the fetch -> providers ->
-#                     fieldmap -> fetch cycle). The kernel module still imports
-#                     standalone. The classifier now lives in
-#                     ``engine.kernel.resolve``, but the method must keep routing
-#                     through the ``engine.fieldmap.coverage`` shim because that
-#                     shim default-injects the Greenhouse widget resolver for the
-#                     live method callers (run.py:301,621). Dies in W5.1 Stage 3
-#                     when callers inject via the registry -- remove the entry
-#                     then.
-# (protocol.py's TYPE_CHECKING FieldMap import was repointed to
-# ``engine.kernel.contracts`` during Stage-0 review remediation, so it no longer
-# needs an entry here.)
+# (kernel_file_basename, imported_module). ZERO entries is the TERMINAL STATE:
+# the kernel is structurally pure -- no kernel module references anything above
+# the ssot line, at any scope. The last entry (contracts.py -> engine.fieldmap,
+# ``FieldMap.coverage``'s transitional call-time shim) was retired in Stage 5
+# when that seam was repointed to the kernel-internal ``engine.kernel.resolve``
+# and the ``engine.fieldmap`` re-export shims dissolved.
 # This allowlist is SUBSET-checked: entries may be REMOVED (a refactor that drops
 # a seam is an improvement and must not break the suite) but adding a new entry
 # requires the same kernel-escalation review as a guard change -- a new forbidden
 # import is a layering regression, not a convenience.
-_KNOWN_UPWARD_EXCEPTIONS = frozenset({
-    ("contracts.py", "engine.fieldmap"),
-})
+_KNOWN_UPWARD_EXCEPTIONS: frozenset[tuple[str, str]] = frozenset()
 
 
 def _kernel_module_files() -> list[Path]:
@@ -272,8 +261,9 @@ def _all_imported_modules(tree: ast.AST) -> list[str]:
 
 def test_kernel_layering_no_forbidden_imports():
     """No kernel module imports anything above the ssot line, ANYWHERE in the
-    file (including function-local lazy imports), except the two documented
-    non-load-time seams in ``_KNOWN_UPWARD_EXCEPTIONS``."""
+    file (including function-local lazy imports), except any documented
+    non-load-time seams in ``_KNOWN_UPWARD_EXCEPTIONS`` (now EMPTY: the kernel
+    is structurally pure, so there are no remaining seams)."""
     violations: set[tuple[str, str]] = set()
     for path in _kernel_module_files():
         tree = ast.parse(path.read_text())
@@ -345,9 +335,9 @@ class _LoadTimeImportCollector(ast.NodeVisitor):
 def test_kernel_no_loadtime_upward_imports():
     """The STRICT layering invariant: ZERO forbidden imports execute at kernel
     import time. This is the property that makes the kernel independently
-    importable and browser-free (Test 3); it also proves the two allowlisted
-    seams in ``test_kernel_layering_no_forbidden_imports`` are BOTH deferred
-    (TYPE_CHECKING / call-time), never load-bearing."""
+    importable and browser-free (Test 3). With ``_KNOWN_UPWARD_EXCEPTIONS`` now
+    EMPTY there are no allowlisted seams left to defer -- the kernel carries no
+    upward reference at any scope, load-time or call-time."""
     load_time_violations: set[tuple[str, str]] = set()
     for path in _kernel_module_files():
         collector = _LoadTimeImportCollector()
@@ -419,7 +409,6 @@ def test_shim_paths_are_identity_reexports():
     import engine.kernel.ssot
     import engine.providers.protocol
     import engine.kernel.protocol
-    import engine.fieldmap
     import engine.kernel.contracts
     import engine.kernel.fill_toolkit
     import engine.providers.base
@@ -429,7 +418,6 @@ def test_shim_paths_are_identity_reexports():
 
     assert engine.ssot.SSOT is engine.kernel.ssot.SSOT
     assert engine.providers.protocol.Provider is engine.kernel.protocol.Provider
-    assert engine.fieldmap.FieldMap is engine.kernel.contracts.FieldMap
     assert (engine.providers.base.install_never_send
             is engine.kernel.never_send.install_never_send)
     assert engine.providers.base.type_human is engine.kernel.fill_toolkit.type_human

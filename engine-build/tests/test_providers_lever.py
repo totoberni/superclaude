@@ -26,8 +26,9 @@ import importlib
 # `capture` Provider callable, so reach the module object via importlib (the same
 # sys.modules / import_module seam the package NAME NOTE documents).
 lever_capture = importlib.import_module("engine.providers.lever.capture")
-from engine.fieldmap import Field, FieldMap, Locator, MANUAL_ONLY
-from engine.kernel.contracts import FillAssets, FillSafetyError
+from engine.kernel.contracts import (
+    Field, FieldMap, FillAssets, FillSafetyError, Locator)
+from engine.kernel.resolve import MANUAL_ONLY
 from engine.kernel.capture_toolkit import CaptureShapeError
 from engine.profile_map import profile_from_real_ssot
 from engine.providers import _registry, lever, protocol

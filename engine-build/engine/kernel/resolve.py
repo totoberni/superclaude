@@ -16,11 +16,12 @@ portal-widget knowledge. Greenhouse's location-autocomplete, paste-in
 resume/cover-letter textareas, and longitude/latitude telemetry are reconnected
 through a duck-typed `vendor_resolver` (methods `location_path`, `key_text_path`,
 `manual_reason`, `hidden_widget`). The default `_NOOP_RESOLVER` is a vendor with
-no quirks; `engine.fieldmap.GREENHOUSE_WIDGET_RESOLVER` supplies the Greenhouse
-behaviour and is injected by the `engine.fieldmap.coverage` /
-`engine.fill.resolve_values` / `engine.fill._completeness` shims. Stage 2
-relocates the adapter to the greenhouse plugin; Stage 3 moves callers onto the
-kernel + registry-built injection and dissolves those shims.
+no quirks; the Greenhouse behaviour lives in
+`engine.providers.greenhouse.resolve.GREENHOUSE_WIDGET_RESOLVER`. It is injected
+by the live callers: `engine.providers.greenhouse.fill` passes it into
+`resolve_values` / `_completeness`, the pipeline (`engine.run`) builds it PER
+vendor from the registry and passes it into `coverage`, and the test harness
+passes an explicit `vendor_resolver`.
 
 Layering: imports only stdlib + `engine.kernel.*`.
 Nothing from `engine.fieldmap` / `engine.fill` / `engine.providers` / pipeline
@@ -213,7 +214,9 @@ def coverage(fieldmap: FieldMap, ssot: SSOT, profile: dict,
 
     `vendor_resolver` (spec 3.4) reconnects any vendor portal-widget quirks; it
     is resolved to `_NOOP_RESOLVER` (no quirks) once and threaded down. The
-    Greenhouse behaviour is injected by `engine.fieldmap.coverage`.
+    Greenhouse behaviour is injected by the caller (the pipeline builds
+    `GREENHOUSE_WIDGET_RESOLVER` from the registry per vendor; the test harness
+    passes it explicitly).
     """
     resolver = vendor_resolver if vendor_resolver is not None else _NOOP_RESOLVER
     profile = profile or {}
@@ -404,7 +407,8 @@ def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
 
     `vendor_resolver` (spec 3.4) reconnects any vendor portal-widget quirks
     through `_classify_field`; it defaults to `_NOOP_RESOLVER`. The Greenhouse
-    behaviour is injected by the `engine.fill.resolve_values` shim.
+    behaviour is injected by `engine.providers.greenhouse.fill`, which passes its
+    `GREENHOUSE_WIDGET_RESOLVER` into this call.
     """
     resolver = vendor_resolver if vendor_resolver is not None else _NOOP_RESOLVER
     profile = profile or {}
@@ -440,7 +444,7 @@ def _is_photo_field(fld) -> bool:
     (criterion 3). Only consulted for fields that are already upload fields,
     so a stray text match cannot trigger an upload.
 
-    `Field` (engine.fieldmap) carries no `accept` MIME attribute, so an
+    `Field` (engine.kernel.contracts) carries no `accept` MIME attribute, so an
     accept-sniffing branch would be dead in production; the label regex is the
     sole detection signal."""
     return bool(_PHOTO_LABEL_RE.search(fld.label or ""))
@@ -889,7 +893,8 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
 
     Hidden portal-telemetry detection is delegated to the injected
     `vendor_resolver` (spec 3.4); it defaults to `_NOOP_RESOLVER` (no hidden
-    widgets). The Greenhouse behaviour is injected by `engine.fill._completeness`.
+    widgets). The Greenhouse behaviour is injected by
+    `engine.providers.greenhouse.fill`.
     """
     resolver = vendor_resolver if vendor_resolver is not None else _NOOP_RESOLVER
     skip_reason = dict(all_skips)

@@ -10,8 +10,9 @@ the DOM-sweep cross-check (`base.sweep_required` / `base.completeness_
 mismatch`) still runs so a schema/DOM divergence is never silently missed
 (hole-fix d is load-bearing everywhere, not only for the DOM-only vendors).
 
-`capture` reaches this vendor's schema fetch through the `engine.fieldmap`
-re-export seam at call time, and `apply_url` its own `.capture` URL builder --
+`capture` reaches this vendor's schema fetch through its own
+`engine.providers.greenhouse.capture` module at call time, and `apply_url`
+its own `.capture` URL builder --
 this module adds NO new schema-fetch or URL-building logic, only the `fill()`
 sequencing and the vendor-specific bits documented per step below (the
 registry's `_registry.PROVIDERS["greenhouse"]` spec looks both up lazily).
@@ -19,8 +20,8 @@ registry's `_registry.PROVIDERS["greenhouse"]` spec looks both up lazily).
 LAZY-IMPORT INVARIANT (mirrors `providers/base.py` and `_registry.py`): this
 module must not import patchright / a browser-capture module at load time, so the
 daily poller (which imports `engine.providers` eagerly) stays browser-free.
-Module-scope imports are the kernel, `providers/base`, the `engine.fieldmap`
-FieldMap re-export, and this package's own `.resolve` (all browser-free by
+Module-scope imports are the kernel (`engine.kernel.contracts` for `FieldMap`),
+`providers/base`, and this package's own `.resolve` (all browser-free by
 construction); this module no longer imports `engine.fill` at all.
 
 SEEDED FIELD-NAME REFERENCE (workpls greenhouse.js, Apache-2.0; W5 spec
@@ -57,15 +58,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from engine.fieldmap import FieldMap
 # Dataclasses come straight from their canonical kernel home rather than via
-# `engine.fill`: this package's `__init__` is reachable through the lazy
-# `engine.fieldmap` re-export shim while `engine.fill` is still mid-import, so
-# a top-level `from engine.fill import ...` here would re-enter a
+# `engine.fill`: a top-level `from engine.fill import ...` here would re-enter a
 # half-initialised `engine.fill` and raise. (Since wave 4B1 this module has NO
 # `engine.fill` import at any scope; primitives come from the kernel.)
 from engine.kernel.contracts import (
-    FillAssets, FillReport, FillSafetyError, ResolvedValues)
+    FieldMap, FillAssets, FillReport, FillSafetyError, ResolvedValues)
 # Generic form-driving primitives the moved react-select / upload-poll widget
 # cluster (below) calls bare, exactly as it did when it lived in providers/base
 # (base re-exports these same kernel names). Not monkeypatched anywhere.
@@ -91,13 +89,12 @@ _TEXT_UPLOAD_SIBLINGS = {"resume_text": "resume",
 
 def capture(slug: str, job_id: str, opener: Any = None) -> FieldMap:
     """The schema fetch: the public `boards-api.../questions=true` GET. Reaches
-    `engine.fieldmap.capture_greenhouse` (a re-export shim to this vendor's own
-    `.capture`) via a CALL-TIME lookup on the module object, so the test
-    monkeypatch seam `monkeypatch.setattr(fieldmap, "capture_greenhouse", ...)`
-    still routes and importing this module never eagerly loads fieldmap. No new
-    logic here (the provider registry looks this function up lazily as
-    `_registry.get("greenhouse").capture`)."""
-    from engine.fieldmap import capture_greenhouse
+    `engine.providers.greenhouse.capture.capture_greenhouse` via a CALL-TIME
+    import, so the test monkeypatch seam (patch `capture_greenhouse` on the
+    greenhouse `.capture` module) still routes and importing this module stays
+    light. No new logic here (the provider registry looks this function up lazily
+    as `_registry.get("greenhouse").capture`)."""
+    from engine.providers.greenhouse.capture import capture_greenhouse
     return capture_greenhouse(slug, job_id, opener)
 
 

@@ -850,7 +850,7 @@ def test_capture_fieldmaps_routes_ashby_to_vendor_capture(
     # An ashby item must dispatch to the vendor capture module's capture_ashby (NOT the greenhouse
     # HTTP path). A fake stands in for the browser capture so no playwright or
     # network is touched; threshold=0 guarantees the ashby posting is visible.
-    from engine.fieldmap import Field, FieldMap, Locator
+    from engine.kernel.contracts import Field, FieldMap, Locator
 
     calls = []
 
@@ -1003,7 +1003,7 @@ def test_assemble_report_data_uses_canned_surface_without_fieldmap(
 
 def test_assemble_report_data_reuses_captured_fieldmap_coverage(
         tmp_path, jobhunt_config, real_ssot_path):
-    from engine.fieldmap import Field, FieldMap, Locator
+    from engine.kernel.contracts import Field, FieldMap, Locator
 
     store = Store(tmp_path / "store.db")
     ssot = SSOT.load(real_ssot_path)

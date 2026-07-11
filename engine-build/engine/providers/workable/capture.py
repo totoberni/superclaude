@@ -14,12 +14,15 @@ Only the WORKABLE-specific capture/parse code moved here. The generic helpers it
 shares with Greenhouse's own capture -- `_read_body_text`, `_utc_now_iso` -- STAY
 in `engine.fieldmap` and are imported from there, so there is exactly one
 definition of each (the 2a RULE: a helper used by BOTH vendor captures is GENERIC
-and keeps its single home in `engine.fieldmap`). `engine.fieldmap` keeps a lazy
-re-export shim for every name moved here, so existing importers
-(`registry._capture_workable`, the tests' `from engine.fieldmap import
-capture_workable, parse_workable`) keep resolving them via `engine.fieldmap`
-unchanged, and the `monkeypatch.setattr(fieldmap, "capture_workable", ...)` seam
-still works.
+and keeps its single home in `engine.fieldmap`). `capture_workable` /
+`parse_workable` now live ONLY here: their callers import them from this module
+directly (`workable.fill.capture`'s call-time import, and the tests' `from
+engine.providers.workable.capture import capture_workable, parse_workable`,
+test_providers_workable.py:26). The registry looks `capture_workable` up lazily
+as a CALL-TIME callable (`PROVIDERS["workable"].capture`), resolving the attribute
+on this module when invoked, so the `monkeypatch.setattr(capture,
+"capture_workable", ...)` seam on this module still works
+(test_providers_workable.py:284).
 
 The read is HTTP-only (`json` + `urllib`), browser-free; the fetch-layer
 User-Agent comes from `engine.kernel.capture_toolkit` (the sanctioned capture UA),

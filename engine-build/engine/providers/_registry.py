@@ -16,17 +16,18 @@ package `engine.providers.__init__` -> `engine.providers.registry`, that transit
 loads and self-registers all four vendors; by the time control returns from
 `import engine.providers._registry`, `PROVIDERS` is fully populated.
 
-Crucially this module does NOT import the plugins at its own bottom. It would be
-the classic re-entrant self-registration pattern -- but one vendor's `__init__`
-is reachable (via `engine.fieldmap`'s lazy `__getattr__` shim for
-`GREENHOUSE_WIDGET_RESOLVER`) WHILE `engine.fill` is still mid-import; before the
-Stage-4 repoint (when the non-greenhouse `.fill` modules still imported their
-dataclasses from `engine.fill` -- all four now read `engine.kernel.contracts`) a
-cascade from that vendor into the others re-entered the half-initialised
-`engine.fill` and raised. Letting each vendor register itself in isolation --
-with no cross-plugin cascade from `register()` -- sidesteps that hazard class
-entirely, and the pinned `VENDOR_ORDER` walk in `engine.providers.__init__`
-depends on registration not cascading.
+Crucially this module does NOT import the plugins at its own bottom. That would be
+the classic re-entrant self-registration pattern, and the hazard was concrete
+before Stage 5: one vendor's `__init__` was reachable (via `engine.fieldmap`'s
+since-removed lazy `__getattr__` route for `GREENHOUSE_WIDGET_RESOLVER`) WHILE the
+now-deleted `engine.fill` was still mid-import, and before the Stage-4 repoint
+(when the non-greenhouse `.fill` modules still imported their dataclasses from
+`engine.fill` -- all four now read `engine.kernel.contracts`) a cascade from that
+vendor into the others re-entered the half-initialised `engine.fill` and raised.
+Those routes are gone now, but the rule stands: letting each vendor register
+itself in isolation -- with no cross-plugin cascade from `register()` -- sidesteps
+that hazard class entirely, and the pinned `VENDOR_ORDER` walk in
+`engine.providers.__init__` depends on registration not cascading.
 
 EAGER: after any `engine.providers.*` import, `PROVIDERS` holds all four vendors.
 LIGHT: no browser module is loaded. `capture`/`fill` are registered as LAZY
