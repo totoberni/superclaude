@@ -155,3 +155,7 @@ scripts/cockpit/cockpit.fish
 bin/tsudo
 bin/tsh
 .last-cleanup
+
+# daemon auth runtime state (repo root, 2026-07-11)
+daemon-auth-cooldown
+daemon-auth-status.json
