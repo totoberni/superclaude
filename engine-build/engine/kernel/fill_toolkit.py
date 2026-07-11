@@ -491,6 +491,28 @@ def _is_upload(fv) -> bool:
     return isinstance(fv.value, Path)
 
 
+# The click-hazard roles: a programmatic checkbox/radio tick is the anti-bot
+# (Turnstile / hCaptcha) hazard vendors defer to a human. Single-sourced here
+# (W5.1 Stage 7) from the byte-identical ashby + lever copies. Workable keeps a
+# per-vendor variant (it also defers combobox/listbox custom widgets and group
+# subfields), so it does NOT import this one.
+_CLICK_HAZARD_ROLES = frozenset({"checkbox", "radio"})
+
+
+def _needs_human_handoff(fv) -> bool:
+    """True for a control whose fill would require a PROGRAMMATIC checkbox/radio
+    click (the anti-bot hazard vendors hand off to a human). A boolean tick (a
+    `.check()`) qualifies, as does any field the fieldmap typed with a
+    checkbox/radio locator role. A native `<select>` / controlled-component
+    driver commits without a `.click()`/`.check()`, so it does NOT qualify and
+    is filled normally. Single-sourced generic (W5.1 Stage 7); a vendor whose
+    handoff set differs (e.g. workable's custom widgets + group subfields) keeps
+    its own local variant instead of importing this."""
+    if isinstance(fv.value, bool):
+        return True
+    return fv.locator.role in _CLICK_HAZARD_ROLES
+
+
 def _current_assets(fv):
     """Reconstruct a single-path `FillAssets` whitelist for `_safe_upload` from
     the already-resolved `fv.value`/`fv.asset` (the value is itself one of the

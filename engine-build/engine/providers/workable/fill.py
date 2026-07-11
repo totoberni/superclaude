@@ -243,7 +243,13 @@ _HUMAN_HANDOFF_REASON = (
 
 
 def _needs_human_handoff(fv) -> bool:
-    """True for a control whose fill would need a PROGRAMMATIC CLICK -- the
+    """Per-vendor variant (differs from the kernel generic
+    `fill_toolkit._needs_human_handoff`, W5.1 Stage 7): Workable ALSO hands off
+    its custom combobox/listbox widgets and flattened GROUP subfields, so its
+    hazard set is a superset of the generic checkbox/radio one and cannot import
+    the kernel helper.
+
+    True for a control whose fill would need a PROGRAMMATIC CLICK -- the
     Turnstile hazard. A boolean tick (a bool value) qualifies, as does any field
     the fieldmap typed with a checkbox/radio/combobox/listbox locator role
     (Workable's dropdown/multiple are CUSTOM widgets, not a Lever native

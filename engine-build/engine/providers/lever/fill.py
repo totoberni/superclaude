@@ -91,7 +91,8 @@ from engine.kernel.contracts import (
     FieldMap, FillAssets, FillReport, FillSafetyError, ResolvedValues)
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
 from engine.kernel.fill_toolkit import (
-    _current_url, _fill_upload, _is_upload, _strip_fragment)
+    _current_url, _fill_upload, _is_upload, _needs_human_handoff,
+    _strip_fragment)
 from engine.kernel.capture_toolkit import _utc_now_iso
 from engine.providers import base
 
@@ -264,8 +265,6 @@ def _sweep_gaps(mismatch: dict) -> list[dict]:
 # checkbox/radio never here (it is handed off before this is reached).
 
 
-_CLICK_HAZARD_ROLES = frozenset({"checkbox", "radio"})
-
 # A native (server-rendered) select or a resolved multi-select option list: the
 # full _SELECT_TYPES vocabulary, all driven by select_option -- NOT react-select
 # (that is the greenhouse-only override this module deliberately does not share).
@@ -277,17 +276,6 @@ _HUMAN_HANDOFF_REASON = (
     "checkbox/radio needs a human-operated trusted click: hCaptcha intercepts "
     "programmatic checkbox/radio clicks mid-form, so this control is handed off "
     "for a human (a required one forces NOT_COMPLETE, never a silent auto-click)")
-
-
-def _needs_human_handoff(fv) -> bool:
-    """True for a control whose fill would require a PROGRAMMATIC checkbox/radio
-    click -- the hCaptcha hazard. A boolean tick (a `.check()`) qualifies, as
-    does any field the fieldmap typed with a checkbox/radio locator role. A Lever
-    NATIVE `<select>` (locator role "combobox", driven by `select_option`, which
-    is not a click) does NOT qualify and is filled normally."""
-    if isinstance(fv.value, bool):
-        return True
-    return fv.locator.role in _CLICK_HAZARD_ROLES
 
 
 def _fill_field(page, fv) -> tuple[bool, Any]:

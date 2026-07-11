@@ -112,7 +112,8 @@ from engine.kernel.contracts import (
     FieldMap, FillAssets, FillReport, FillSafetyError, ResolvedValues)
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
 from engine.kernel.fill_toolkit import (
-    _current_url, _fill_upload, _is_upload, _strip_fragment, _sweep_gaps)
+    _current_url, _fill_upload, _is_upload, _needs_human_handoff,
+    _strip_fragment, _sweep_gaps)
 from engine.kernel.capture_toolkit import _utc_now_iso
 from engine.providers import base
 
@@ -266,8 +267,6 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
 # a checkbox/radio never here (it is handed off before this is reached).
 
 
-_CLICK_HAZARD_ROLES = frozenset({"checkbox", "radio"})
-
 # The Ashby SELECT-TYPE fields, decided by the vendor's own schema `type` (NOT by
 # locator role -- see the module docstring's role="combobox" trap). Every one is
 # driven by the controlled-component driver, never react-select or select_option.
@@ -312,18 +311,6 @@ def _is_ashby_select(fv) -> bool:
     unambiguous vendor signal, and every such field routes through the
     controlled-component driver."""
     return fv.type in _ASHBY_SELECT_TYPES
-
-
-def _needs_human_handoff(fv) -> bool:
-    """True for a control whose fill would require a PROGRAMMATIC checkbox/radio
-    click -- the Turnstile hazard. A boolean tick (a `.check()`) qualifies, as
-    does any field the fieldmap typed with a checkbox/radio locator role. An
-    Ashby SELECT is not a click (it commits through the controlled-component
-    driver, no `.click()`/`.check()`), so it does NOT qualify and is filled
-    normally."""
-    if isinstance(fv.value, bool):
-        return True
-    return fv.locator.role in _CLICK_HAZARD_ROLES
 
 
 def _fill_field(page, fv) -> tuple[bool, Any]:
