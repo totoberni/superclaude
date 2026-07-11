@@ -347,12 +347,7 @@ def _current_assets(fv):
     from the already-resolved `fv.value`/`fv.asset` (the value is itself one of
     the upstream whitelist's paths), without threading the original FillAssets
     through the Provider contract's `fill(page, fieldmap, values)` signature."""
-    kwargs = {"cv_ats": None, "cv_atsi": None, "photo": None}
-    slot = {"cv-ats": "cv_ats", "cv-atsi": "cv_atsi",
-           "photo": "photo"}.get(fv.asset)
-    if slot is not None:
-        kwargs[slot] = fv.value
-    return FillAssets(**kwargs)
+    return FillAssets.single_asset_whitelist(fv.asset, fv.value)
 
 
 def _utc_now_iso() -> str:

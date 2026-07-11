@@ -237,36 +237,75 @@ def _resolved(path) -> Path | None:
 
 @dataclass
 class FillAssets:
-    """The whitelisted upload assets: the two CVs, the profile photo, and an
-    optional cover-letter document.
+    """The whitelisted upload assets: the two CVs, the profile photo, an
+    optional cover-letter document, and any matched OPTIONAL/required extra
+    documents (transcripts, certifications).
 
     Every path is optional and runtime-verified: `verified()` drops any path
-    that does not exist on disk to None, so an absent asset becomes a skip
-    ("asset missing: <name>") rather than a crash (fail-soft, per the owner
-    override). The upload whitelist is EXACTLY these resolved paths;
-    `_safe_upload` refuses to upload anything else.
+    that does not exist on disk to None (extra_documents drop the whole entry),
+    so an absent asset becomes a skip ("asset missing: <name>") rather than a
+    crash (fail-soft, per the owner override). The upload whitelist is EXACTLY
+    these resolved paths -- the CVs, photo, cover_letter, AND every
+    extra_documents value -- and `_safe_upload` refuses to upload anything else.
+
+    `extra_documents` is an OPEN vocabulary of key -> document path. The seeded
+    canonical keys are `lse_certification`, `transcript_university`, and
+    `transcript_ib`; a vendor loop may add more. Owner rule (2026-07-10): when an
+    ATS posting exposes a slot for such a document (optional or required), we
+    ALWAYS attach the matching one. This plumbing is the formal successor of the
+    deleted `engine.fill.default_assets` asset-resolution role.
     """
     cv_ats: Path | None = None
     cv_atsi: Path | None = None
     photo: Path | None = None
     cover_letter: Path | None = None
+    extra_documents: dict[str, Path] = field(default_factory=dict)
 
     def verified(self) -> "FillAssets":
-        """A copy whose non-existent asset paths are collapsed to None."""
+        """A copy whose non-existent asset paths are collapsed to None; an
+        extra_documents entry whose path is missing on disk is dropped."""
         return FillAssets(cv_ats=_existing(self.cv_ats),
                           cv_atsi=_existing(self.cv_atsi),
                           photo=_existing(self.photo),
-                          cover_letter=_existing(self.cover_letter))
+                          cover_letter=_existing(self.cover_letter),
+                          extra_documents={
+                              key: existing
+                              for key, path in self.extra_documents.items()
+                              if (existing := _existing(path)) is not None})
 
     def is_whitelisted(self, path) -> bool:
-        """True iff `path` resolves to one of the (existing) asset paths."""
+        """True iff `path` resolves to one of the (existing) asset paths --
+        the CVs, photo, cover_letter, or any extra_documents value."""
         target = _resolved(path)
         if target is None:
             return False
         return any(_resolved(asset) == target
                    for asset in (self.cv_ats, self.cv_atsi, self.photo,
-                                 self.cover_letter)
+                                 self.cover_letter,
+                                 *self.extra_documents.values())
                    if asset is not None)
+
+    @classmethod
+    def single_asset_whitelist(cls, asset_name, path) -> "FillAssets":
+        """A one-path whitelist keyed to whichever slot `asset_name` names.
+
+        The vendor `_current_assets` reconstructors share this: `fill_form`
+        receives already-resolved `FieldValue`s (not the original `FillAssets`),
+        so each provider rebuilds an equivalent single-path whitelist from
+        `fv.asset`/`fv.value` to satisfy `_safe_upload`. A named CV/photo/
+        cover-letter asset fills its dedicated slot; any other name (an
+        `extra_documents` key such as `transcript_ib`) rides through
+        `extra_documents`. Either way `is_whitelisted(path)` is True for exactly
+        that one path. An empty/None `asset_name` yields an empty whitelist. This
+        lives on the kernel contract (not a cross-vendor helper) so the four
+        providers stay import-disjoint."""
+        slot = {"cv-ats": "cv_ats", "cv-atsi": "cv_atsi", "photo": "photo",
+                "cover-letter": "cover_letter"}.get(asset_name)
+        if slot is not None:
+            return cls(**{slot: path})
+        if asset_name:
+            return cls(extra_documents={asset_name: path})
+        return cls()
 
 
 @dataclass
@@ -275,8 +314,9 @@ class FieldValue:
     type needed to reach and drive the control (fill_form gets no fieldmap).
 
     For an upload field the `value` is the chosen asset `Path`; `asset` records
-    which asset ("cv-ats" | "cv-atsi" | "photo") and `upload_reason` records why
-    (owner calibration signal for the CV selection rule)."""
+    which asset ("cv-ats" | "cv-atsi" | "photo" | "cover-letter" | any
+    `FillAssets.extra_documents` key) and `upload_reason` records why (owner
+    calibration signal for the CV/attachment selection rule)."""
     key: str
     label: str
     type: str

@@ -37,11 +37,23 @@ try:
     # a full fill needs the CV pdf; photo stays None until a posting needs
     # it. cover_letter is likewise optional: verified() drops it to None when
     # the file is absent, so a run with no cover-letter document still works.
+    # extra_documents seeds the optional-attachment slots (transcripts,
+    # certification); the COMPRESSED university transcript is used ALWAYS -- the
+    # 14.7MB original exceeds ATS upload caps -- and verified() drops any entry
+    # whose file is absent, so a run missing one still works.
     assets = FillAssets(
         cv_ats=Path(os.path.expanduser("~/automations/documents/cv-ats.pdf")),
         cv_atsi=Path(os.path.expanduser("~/automations/documents/cv-atsi.pdf")),
         cover_letter=Path(os.path.expanduser(
             "~/automations/documents/cover_letter.pdf")),
+        extra_documents={
+            "lse_certification": Path(os.path.expanduser(
+                "~/automations/documents/lse-grade-letter.pdf")),
+            "transcript_university": Path(os.path.expanduser(
+                "~/automations/documents/transcript-university-compressed.pdf")),
+            "transcript_ib": Path(os.path.expanduser(
+                "~/automations/documents/transcript-ib.pdf")),
+        },
     ).verified()
     values = PROV.resolve_values(fieldmap, ssot, profile, assets=assets)
 

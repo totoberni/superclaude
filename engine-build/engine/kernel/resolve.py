@@ -375,6 +375,33 @@ _PHOTO_LABEL_RE = re.compile(
 # `avatar`/`photo` keys that merely share a stray token.
 _COVER_LETTER_RE = re.compile(r"cover[\s_-]*letter", re.I)
 
+# Ordered (pattern-tuple -> extra_documents key) matchers for an upload field
+# that names an OPTIONAL/required transcript or certification slot. Matched
+# case-insensitively against the field label/key, in the style of
+# `_ANSWER_MATCHERS`: the first tuple with any substring hit wins. Order is
+# load-bearing -- the IB-transcript patterns MUST precede the generic transcript
+# patterns so a "secondary school transcript" resolves the more specific
+# `transcript_ib` rather than the university transcript. REQUIRED and optional
+# attachment fields are treated identically (owner rule 2026-07-10: attach
+# whenever we can). A generic "other attachments"-style label with NO named
+# pattern is DELIBERATELY out of scope: a later vendor loop decides that policy
+# through its escalation channel; this matcher only fires on an explicitly named
+# document, never on a bare "attachments" catch-all. The "certificate"/"diploma"
+# substrings are DELIBERATELY broad (owner rule: attach whenever a slot exists),
+# so they can also hit an unrelated certificate slot (a background-check or
+# right-to-work certificate). That is an ACCEPTED false-positive surface: it is
+# bounded by the dry-run (nothing is ever submitted) and by fail-soft (a
+# mis-attach uploads a real document, never crashes); a later vendor loop may
+# narrow it if a real posting warrants.
+_EXTRA_DOCUMENT_MATCHERS: list[tuple[tuple[str, ...], str]] = [
+    (("ib transcript", "secondary school transcript",
+      "high school transcript", "diploma transcript"), "transcript_ib"),
+    (("transcript", "academic record", "academic transcript",
+      "university transcript"), "transcript_university"),
+    (("certification", "certificate", "grade letter",
+      "degree certificate", "diploma"), "lse_certification"),
+]
+
 
 def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
                    assets: FillAssets | None = None,
@@ -462,6 +489,30 @@ def _is_cover_letter_field(fld) -> bool:
                 or _COVER_LETTER_RE.search(fld.label or ""))
 
 
+def _match_extra_document(fld) -> str | None:
+    """The `extra_documents` key an upload field's label/key names, or None.
+
+    Case-insensitive substring match over BOTH the label and the key (like
+    `_is_cover_letter_field`); the first `_EXTRA_DOCUMENT_MATCHERS` tuple with
+    any hit wins. Consulted only for fields already classified as uploads and
+    only AFTER the photo/cover-letter branches, so it never steals a
+    CV/photo/cover-letter field.
+
+    Word separators (whitespace, underscore, hyphen) in the label/key are folded
+    to a single space before matching, so the multi-word patterns (which embed
+    literal spaces) also fire on the snake_case/hyphenated KEY form: an
+    `ib_transcript` key with no label still hits the "ib transcript" pattern and
+    resolves `transcript_ib`, preserving the IB-beats-generic ordering lock even
+    when a field is exposed by key alone (the same separator tolerance the
+    cover-letter matcher applies)."""
+    haystack = re.sub(
+        r"[\s_-]+", " ", f"{fld.label or ''} {fld.key or ''}".lower())
+    for patterns, key in _EXTRA_DOCUMENT_MATCHERS:
+        if any(pattern in haystack for pattern in patterns):
+            return key
+    return None
+
+
 # The cover-letter file field is skipped with this reason ONLY when
 # `FillAssets.cover_letter` is absent: the field is optional and there is
 # nothing to upload, so it is honestly skipped rather than silently
@@ -492,7 +543,17 @@ def _resolve_upload(fld, resolved: ResolvedValues, assets: FillAssets | None,
         asset_name, path, reason = ("cover-letter", assets.cover_letter,
                                     "cover-letter document asset")
     else:
-        asset_name, path, reason = _select_cv(assets, has_photo_field)
+        extra_key = _match_extra_document(fld)
+        if extra_key is not None and extra_key in assets.extra_documents:
+            asset_name, path, reason = (
+                extra_key, assets.extra_documents[extra_key],
+                f"matched extra-document slot ({extra_key}); owner rule attaches "
+                "it whenever the slot exists")
+        else:
+            # No named-document match, or the matched key is absent from the
+            # assets: the field keeps its EXISTING behavior (a CV upload, or an
+            # asset-missing skip when the CV is absent). Fail-soft, never a crash.
+            asset_name, path, reason = _select_cv(assets, has_photo_field)
     if path is None:
         resolved.skipped.append((fld.key, f"asset missing: {asset_name}"))
         return
