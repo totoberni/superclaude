@@ -7,6 +7,21 @@ documents/
 docs/
 career-archive/
 
+# ...but the engine's OWN docs are code, not PII: the bare `docs/` above matches at
+# every depth, so it swallows engine-build/docs/ too. The vendor-ToS record is the
+# evidence the essay automation stands on (which platform forbids AI-written
+# answers, which requires a disclosure): it ships with the engine or the policy it
+# encodes is unauditable.
+#
+# Three lines, not two, and the middle one is load-bearing: un-ignoring the
+# DIRECTORY alone would un-ignore everything inside it, so the next file dropped in
+# engine-build/docs/ (a scratch note, a CV excerpt) would be committable by
+# default. Re-excluding the contents keeps the guard FAIL-CLOSED: each engine doc
+# is named explicitly or it stays ignored.
+!engine-build/docs/
+engine-build/docs/*
+!engine-build/docs/vendor-tos.md
+
 # Secrets + runtime data
 .env
 *.env

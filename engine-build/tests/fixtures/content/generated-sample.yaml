@@ -1,0 +1,23 @@
+# FAKE generated-answers sample: the frozen schema, with invented answers. The
+# real files live on toto at ~/automations/ssot/generated/, chmod 600, uncommitted.
+schema_version: "1"
+vendor: greenhouse
+slug: acme
+job_id: "12345"
+posting_lang: en
+generated_at: "2026-07-13T00:00:00Z"
+model: sonnet
+answers:
+  - key: question_1
+    label: Why do you want to work here?
+    value: >-
+      Your work on distributed analytical systems is the closest match to what I
+      have been building, and I want to work on it at a larger scale.
+  - key: null
+    label: What interests you about this role?
+    value: >-
+      The role centres on backend systems in Python, which is where my two years
+      of engineering experience sit.
+tos_forbidden:
+  - label: AI Policy for Application
+    reason: employer requires human-authored response

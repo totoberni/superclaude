@@ -1,0 +1,33 @@
+# FAKE SSOT for the content-channel tests. Every value here is invented; no real
+# identity, no real contact details, no real answers. Never point a live run at it.
+identity:
+  full_name: Ada Lovelace
+  email: ada@example.invalid
+work_authorization: eu
+education:
+  degree: bsc_computer_science
+experience:
+  - company: Example Analytical Engines
+    title: Software Engineer
+    years: 2
+canned_answers:
+  how_did_you_hear_default: LinkedIn
+  in_office_attendance: Yes, five days a week in the office
+  previously_applied_default: "No"
+  relocation_dropdown: "Yes"
+  willing_to_relocate: "Yes"
+  ai_use_disclosure: >-
+    I drafted this application myself and used an AI assistant to refine the
+    wording. Every fact stated here is my own.
+  why_this_company_template: >-
+    Your work on distributed analytical systems is the closest match to what I
+    have been building, and I want to work on it at a larger scale.
+  why_this_role_template: >-
+    The role centres on backend systems in Python, which is where my two years
+    of engineering experience sit.
+  cover_letter_text: >-
+    Dear hiring team, I am applying for this role because my background in
+    backend engineering matches the work described in the posting.
+  resume_text: >-
+    Software engineer with two years of experience building backend services in
+    Python and TypeScript.
