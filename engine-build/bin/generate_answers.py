@@ -348,12 +348,14 @@ def generate_answers(questions_doc: dict, ssot: SSOT, *, company: str,
     run = runner if runner is not None else _RUNNER
     posting_lang = str(questions_doc.get("posting_lang") or "en")
     disclosure = _seeded_disclosure(ssot)
+    attestation = _seeded_attestation(ssot)
     answers: list[dict] = []
     forbidden: list[dict] = []
 
     for question in questions:
         label = str(question.get("label") or "")
-        verdict, payload = _route_by_tos(question, label, tos_mode, disclosure)
+        verdict, payload = _route_by_tos(question, label, tos_mode, disclosure,
+                                         attestation)
         if verdict == "forbid":
             forbidden.append({"label": label, "reason": payload})
             continue
@@ -430,6 +432,21 @@ def _seeded_disclosure(ssot: SSOT) -> str | None:
     return str(value).strip() or None
 
 
+def _seeded_attestation(ssot: SSOT) -> str | None:
+    """The owner's answer to an AI-policy ATTESTATION SELECT, or None if unseeded.
+
+    Distinct from `_seeded_disclosure` because the two answer different shapes of
+    the same subject: the disclosure is PROSE that qualifies an essay, this is an
+    EXACT OPTION LABEL the owner picked ("Yes" to a form's confirm-you-have-read-our
+    -AI-guidelines select). Neither can stand in for the other: prose cannot satisfy
+    a Yes/No control, and an option label is not a disclosure.
+    """
+    value = ssot.get("canned_answers.ai_policy_attestation")
+    if value is MISSING:
+        return None
+    return str(value).strip() or None
+
+
 def _suffix_text(disclosure: str) -> str:
     """The disclosure as it RIDES with an essay: one blank line, then the statement.
     The single definition of the composed shape, so the length `_room_for_disclosure`
@@ -478,7 +495,8 @@ def _reserve(question: dict, reserved: int) -> dict:
 
 
 def _route_by_tos(question: dict, label: str, tos_mode: str,
-                  disclosure: str | None) -> tuple[str | None, str]:
+                  disclosure: str | None,
+                  attestation: str | None = None) -> tuple[str | None, str]:
     """What the ToS policy says about ONE question, BEFORE any model call:
 
     ("forbid", reason)  the question is not answered, and is recorded by name;
@@ -506,6 +524,28 @@ def _route_by_tos(question: dict, label: str, tos_mode: str,
     name so the acceptance gate subtracts it rather than the engine hiding it.
     """
     forbids_ai = tos_mode == "forbid-essays"
+    if is_ai_policy_question(label) and (question.get("options") or []):
+        # ATTESTATION SELECT, not prose. An AI-policy question that offers OPTIONS
+        # is not asking the applicant to write anything: it is asking them to pick
+        # one. Live evidence (anthropic 5164820008, 2026-07-13): "AI Policy for
+        # Application" is a ['Yes','No'] select whose description reads "review our
+        # AI partnership guidelines ... and confirm your understanding by selecting
+        # Yes". Routing it down the essay path mislabelled an owner-answerable
+        # attestation as AI-GENERATED CONTENT and left a required field permanently
+        # blank, which no ToS mode intends: SELECTING AN OPTION GENERATES NOTHING,
+        # so no ToS verdict about generated content can reach it. It is answered
+        # from an exact-option SSOT scalar the OWNER seeds, in every mode, or not at
+        # all. Unseeded FAILS CLOSED (recorded by name, never guessed): an
+        # attestation the owner did not make is the one thing the engine must never
+        # invent on their behalf.
+        options = [str(o) for o in (question.get("options") or [])]
+        seeded = str(attestation).strip() if attestation is not None else ""
+        exact = next((o for o in options
+                      if o.casefold() == seeded.casefold()), None) if seeded else None
+        if exact is not None:
+            return "answer", exact
+        return "forbid", ("attestation answer not seeded "
+                          "(canned_answers.ai_policy_attestation)")
     if is_ai_policy_question(label):
         if forbids_ai:
             return "forbid", "employer forbids AI-generated content"

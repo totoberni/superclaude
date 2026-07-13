@@ -293,15 +293,26 @@ _CONTENT_MATCHERS: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
     (("how did you hear", "how you heard", "where did you hear",
       "how did you find"),
      ("canned_answers.how_did_you_hear_default",)),
-    (("in-person", "in person", "in office", "in the office", "on-site",
-      "onsite"),
-     ("canned_answers.in_office_attendance",)),
+    # Dropdown-first, like relocation below: the ATTENDANCE POLICY string is a
+    # location-conditional paragraph (correct for a free-text box, unmappable onto
+    # a Yes/No control), so an exact-option scalar leads and the paragraph is the
+    # free-text fallback. Live evidence (anthropic 5164820008, 2026-07-13): the
+    # paragraph alone produced NO_OPTION_MATCH on a ['Yes','No'] select and the
+    # required field stayed unfilled. Owner ruling 2026-07-13 seeded the scalar.
+    (("in-person", "in person", "in-office", "in office", "in the office",
+      "on-site", "onsite"),
+     ("canned_answers.in_office_dropdown",
+      "canned_answers.in_office_attendance")),
     # Deliberately NOT keyed on the bare "applied to": that substring also carries
     # "Which team have you applied to?", a SHORT-TEXT question whose answer is a
     # team name, and the canned route would fill it with the previously-applied
     # "No". The keywords below all name the have-you-applied-BEFORE question.
+    # Dropdown-first for the same reason as above: previously_applied_default is a
+    # PROCESS NOTE ("answered from the application ledger"), not an answer, so it
+    # can never satisfy a Yes/No control (live: NO_OPTION_MATCH, field unfilled).
     (("interviewed", "previously applied", "applied before"),
-     ("canned_answers.previously_applied_default",)),
+     ("canned_answers.previously_interviewed_dropdown",
+      "canned_answers.previously_applied_default")),
     (("relocat",),
      ("canned_answers.relocation_dropdown",
       "canned_answers.willing_to_relocate")),
@@ -436,7 +447,7 @@ def _candidates(fld: Field, label: str, ssot: SSOT,
     (see `_first_fitting`)."""
     found: list[tuple[str, str]] = []
     if not is_free_text(fld.type, fld.norm_type, fld.max_length, fld.options):
-        canned, source = _canned_candidate(label, ssot)
+        canned, source = _canned_candidate(label, ssot, fld.options)
         if canned is not None:
             found.append((canned, source))
     if generated is not None:
@@ -476,13 +487,36 @@ def _first_fitting(fld: Field, candidates: list[tuple[str, str]],
     return None, "", reason
 
 
-def _canned_candidate(label: str, ssot: SSOT) -> tuple[str | None, str]:
+def _canned_candidate(label: str, ssot: SSOT,
+                      options: list[str] | None = None) -> tuple[str | None, str]:
     """The first canned route whose keywords hit the label and whose SSOT path
-    resolves to a usable scalar, as (value, "canned:<path>")."""
+    resolves to a usable scalar, as (value, "canned:<path>").
+
+    ROUTE ORDER IS SHAPE-AWARE. A matcher row may carry both an exact-option
+    scalar (`*_dropdown`: "Yes") and the owner's nuanced prose ("Location-
+    conditional. Home city: up to 5 days/week ..."), because the same subject is
+    asked BOTH ways across vendors. Which one leads depends on the CONTROL:
+
+    * an OPTION-bearing control (a Yes/No select) can only take the scalar; the
+      prose fits no option and would leave the required field blank (the live
+      2026-07-13 anthropic bug). Scalar first.
+    * an option-less TEXT box takes ANY string (`_fit_to_options` has no options to
+      reject it), so the scalar would win by mere position and answer "What
+      in-office attendance are you open to?" with the single word "Yes", throwing
+      the owner's real position away. Prose first: the dropdown scalars sink to the
+      end of the ladder, where they still serve as a last resort rather than as a
+      silent downgrade of a nuanced answer.
+
+    The rule is keyed on the PATH SUFFIX, so a new row inherits it for free: a path
+    named `*_dropdown` is by construction an answer to a dropdown.
+    """
     for keywords, paths in _CONTENT_MATCHERS:
         if not any(keyword in label for keyword in keywords):
             continue
-        for path in paths:
+        ordered = list(paths)
+        if not options:
+            ordered.sort(key=lambda p: p.endswith("_dropdown"))
+        for path in ordered:
             value = ssot.get(path)
             if value is MISSING:
                 continue

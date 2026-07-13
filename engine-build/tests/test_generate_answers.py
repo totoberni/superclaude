@@ -478,3 +478,57 @@ def test_generator_refuses_missing_ssot(tool, tmp_path, capsys) -> None:
     assert code == 2
     assert "not valid JSON" in capsys.readouterr().err
     assert not (tmp_path / "out.yaml").exists()
+
+
+# -- AI-policy ATTESTATION SELECT (W5.1b live remediation, 2026-07-13) ---------
+#
+# THE LIVE BUG THESE PIN. "AI Policy for Application" on the anthropic posting is
+# NOT an essay: it is a ['Yes','No'] select whose description reads "review our AI
+# partnership guidelines ... and confirm your understanding by selecting Yes". The
+# generator routed every AI-policy question down the essay path, so under
+# forbid-essays it was recorded "employer forbids AI-generated content" and the
+# required control was left permanently blank. SELECTING AN OPTION GENERATES
+# NOTHING, so no ToS verdict about generated content can reach it: an attestation
+# is answered from an exact-option scalar the OWNER seeds, in every mode, or it
+# fails closed and is recorded by name. The engine never attests on the owner's
+# behalf.
+
+def _attestation_select(**over) -> dict:
+    q = {"key": "question_9", "label": "AI Policy for Application",
+         "type": "multi_value_single_select", "norm_type": "", "required": True,
+         "options": ["Yes", "No"], "max_length": None}
+    q.update(over)
+    return q
+
+
+def _never_called(prompt: str, model: str) -> str:
+    raise AssertionError("the model was called for an attestation select")
+
+
+def test_generator_ai_policy_attestation_select_answered_from_seeded_option(
+        tool, ssot: SSOT) -> None:
+    seeded = SSOT({"canned_answers": dict(
+        (ssot.get("canned_answers") or {}),
+        ai_policy_attestation="Yes")})
+    for mode in ("allow", "disclose", "forbid-essays"):
+        doc = tool.generate_answers(
+            dict(questions_doc(), questions=[_attestation_select()]), seeded,
+            company="Acme", tos_mode=mode, runner=_never_called)
+        assert doc["tos_forbidden"] == [], mode
+        assert [(a["key"], a["value"]) for a in doc["answers"]] == [
+            ("question_9", "Yes")], mode
+
+
+def test_generator_ai_policy_attestation_unseeded_fails_closed(
+        tool, ssot: SSOT) -> None:
+    # ANTI-GAMING. With no seeded scalar the engine must NOT pick an option for the
+    # owner (an attestation they never made), and must NOT hide the question: it is
+    # recorded by name so the acceptance gate subtracts it and the gap escalates.
+    for mode in ("allow", "disclose", "forbid-essays"):
+        doc = tool.generate_answers(
+            dict(questions_doc(), questions=[_attestation_select()]), ssot,
+            company="Acme", tos_mode=mode, runner=_never_called)
+        assert doc["answers"] == [], mode
+        assert [f["label"] for f in doc["tos_forbidden"]] == [
+            "AI Policy for Application"], mode
+        assert "not seeded" in doc["tos_forbidden"][0]["reason"], mode

@@ -553,3 +553,85 @@ def test_content_module_import_purity() -> None:
 
     # And GeneratedAnswer stays a plain data carrier the vendor loops can build.
     assert GeneratedAnswer(key="k", label=None, value="v").value == "v"
+
+
+# -- dropdown-first canned routes (W5.1b live remediation, 2026-07-13) ---------
+#
+# THE LIVE BUG THESE PIN. The shared fake SSOT above carries CONVENIENT values
+# ("Yes, five days a week in the office"), which map onto a Yes/No control by
+# accident. The REAL SSOT does not: `in_office_attendance` is a location-conditional
+# POLICY PARAGRAPH and `previously_applied_default` is a PROCESS NOTE ("answered from
+# the application ledger"). Neither is an answer a ['Yes','No'] select can take, so on
+# the live anthropic posting both required dropdowns hit NO_OPTION_MATCH and stayed
+# blank while every offline test was green. The fix mirrors the relocation row: an
+# exact-option scalar LEADS, the prose stays as the free-text fallback. These tests
+# therefore build their SSOT from the REAL SHAPES, not the convenient fixture.
+
+_REAL_SHAPE_SSOT = SSOT({
+    "canned_answers": {
+        # the real values' SHAPES (content fake, shape true)
+        "in_office_attendance": ("Location-conditional. Home city: up to 5 days/week. "
+                                 "Elsewhere in the region: at most 1 day/week. "
+                                 "Outside it: at most 3-4 days per month."),
+        "previously_applied_default": "Answered from the application ledger",
+        # the exact-option scalars the owner seeds
+        "in_office_dropdown": "Yes",
+        "previously_interviewed_dropdown": "No",
+    },
+})
+
+
+def test_overlay_in_office_dropdown_takes_the_exact_option_not_the_policy_prose() -> None:
+    fld = make_field("q_office",
+                     "Are you open to working in-person in one of our offices 25% of the time?",
+                     type_="multi_value_single_select", options=["Yes", "No"],
+                     required=True)
+    resolved, report = overlay_one(fld, _REAL_SHAPE_SSOT)
+    # The policy paragraph fits no option; the seeded scalar does. Without the
+    # dropdown-first row this field stays skipped with NO_OPTION_MATCH (the live bug).
+    assert resolved.values == {"q_office": "Yes"}
+    assert report.applied == [
+        ("q_office", "canned:canned_answers.in_office_dropdown")]
+    assert report.unresolved == []
+
+
+def test_overlay_in_office_short_text_still_takes_the_policy_prose() -> None:
+    # The prose fallback must survive the dropdown-first row: on a SHORT free-text
+    # box (no options to fit) the nuanced policy is the right answer, and the terse
+    # "Yes" would throw the owner's real position away. Essay-shaped fields are NOT
+    # tested here on purpose: the sealed long-text guard reserves those for the
+    # generated answer, canned prose never fires on them.
+    fld = make_field("q_office_text",
+                     "What in-office attendance are you open to?",
+                     max_length=250)
+    resolved, report = overlay_one(fld, _REAL_SHAPE_SSOT)
+    assert resolved.values["q_office_text"].startswith("Location-conditional")
+    assert report.applied == [
+        ("q_office_text", "canned:canned_answers.in_office_attendance")]
+
+
+def test_overlay_interviewed_dropdown_takes_the_exact_option_not_the_process_note() -> None:
+    fld = make_field("q_before", "Have you ever interviewed at Acme before?",
+                     type_="multi_value_single_select", options=["Yes", "No"],
+                     required=True)
+    resolved, report = overlay_one(fld, _REAL_SHAPE_SSOT)
+    assert resolved.values == {"q_before": "No"}
+    assert report.applied == [
+        ("q_before", "canned:canned_answers.previously_interviewed_dropdown")]
+    assert report.unresolved == []
+
+
+def test_overlay_dropdown_first_still_fails_closed_when_the_scalar_is_unseeded() -> None:
+    # ANTI-GAMING. With no seeded scalar the prose STILL cannot satisfy the control,
+    # and the overlay must keep refusing rather than force the paragraph in.
+    unseeded = SSOT({"canned_answers": {
+        "in_office_attendance": "Location-conditional. Home city: up to 5 days/week.",
+    }})
+    fld = make_field("q_office",
+                     "Are you open to working in-person 25% of the time?",
+                     type_="multi_value_single_select", options=["Yes", "No"],
+                     required=True)
+    resolved, report = overlay_one(fld, unseeded)
+    assert resolved.values == {}
+    assert report.applied == []
+    assert report.unresolved == [("q_office", NO_OPTION_MATCH)]
