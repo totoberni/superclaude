@@ -57,6 +57,27 @@ try:
     ).verified()
     values = PROV.resolve_values(fieldmap, ssot, profile, assets=assets)
 
+    # Content overlay (W5.1b): canned-answer routing + option-match + generated
+    # essays, applied ONCE here (harness-central) so no vendor plugin wires it.
+    # The overlay only ADDS resolved values before the fill; completeness stays
+    # the fill-side census (kernel completeness + live-DOM sweep), so an overlay
+    # bug cannot inflate the report. A malformed generated file raises and fails
+    # the run loudly (error+trace path) rather than being skipped silently.
+    result["stage"] = "overlay"
+    from engine import content
+    gen_path = Path(os.path.expanduser(
+        f"~/automations/ssot/generated/{VENDOR}-{SLUG}-{JOB_ID}.yaml"))
+    generated = content.load_generated_answers(gen_path) if gen_path.is_file() else None
+    overlay = content.apply_content_overlay(
+        values, fieldmap, ssot, generated=generated,
+        posting_lang=(generated.posting_lang if generated else "en"))
+    result["overlay"] = {
+        "generated_file": str(gen_path) if generated else None,
+        "applied": overlay.applied,
+        "tos_forbidden": overlay.tos_forbidden,
+        "unresolved": overlay.unresolved,
+    }
+
     audit = {"requests": 0, "posts": 0, "completed_submits": [], "aborted_submits": []}
     result["stage"] = "browser"
     with capture_toolkit._default_browser_page() as page:
