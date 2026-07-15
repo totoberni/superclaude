@@ -42,7 +42,11 @@ Use **Ork (handoff)** when ANY of:
 
 **Override**: explicit one-line reason in plan.md or chat justifying the deviation.
 
-A single-artifact convergence loop that meets the Meta+swarm criteria above can also run unattended via the autonomous converge driver: `/wf-auto` configures it, the owner launches it, and the no-pre-approval guards (R-5) are enforced mechanically rather than by a supervising agent. Authority: meta + orch only, same spawn-adjacent boundary as `/converge`.
+### Driver vs In-Session Convergence (owner ruling 2026-07-13)
+
+Sequential convergence waves run IN-SESSION: the supervising agent (meta/orch) drives produce, review, and seal rounds itself via `/swarm-dispatch` + the `/converge` protocol, dispatching `w-*` workers through the Agent tool. Rationale (owner): CC-native subagents are directly monitorable by the owner; a detached driver process is not. This holds for any workload whose concurrent worker slots fit the 5-per-batch Agent-tool cap, INCLUDING several waves run as phase-locked parallel batches (N producers, then N reviewers, then N seals, N <= 5).
+
+The autonomous converge driver (`/wf-auto` + `scripts/swarm/converge_auto.py`) becomes meaningful ONLY at wave scale: multiple concurrent n-by-5 swarms whose combined producer/reviewer/seal slots exceed what one supervising session can hold, or genuinely unattended runs the owner explicitly requests. When the driver IS warranted, R-5 is enforced mechanically (see `40-swarm-quality-gates.md`); in-session rounds enforce R-5 by fresh reviewer dispatch per round. Authority unchanged: meta + orch only, same spawn-adjacent boundary as `/converge`. Launch authority when warranted: the 2026-07-10 standing grant (meta launches and supervises).
 
 ## Model × Effort × Thinking Matrix (SOT)
 
