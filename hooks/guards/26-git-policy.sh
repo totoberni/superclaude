@@ -1,9 +1,20 @@
 # Guard: 26-git-policy: mechanical enforcement of the /git true|false policy.
 #
 # Owner ruling (2026-07-15): `/git false` disables commit of ANY kind and push of
-# ANY kind; agents ask the owner to run `/git true`. Agents are good at finding
-# circumventions, so the block must be robust. This guard replaces the old
+# ANY kind; agents ask the owner to run `/git true`. This guard replaces the old
 # per-op /commit and /push toggles for the commit/push case.
+#
+# HONEST SCOPE: this is a BEST-EFFORT shell-string defense-in-depth control. It
+# raises the bar on the common and the simple-deliberate commit/push and
+# flag-write vectors (see the block/residual lists below). It CANNOT be complete
+# against a same-uid, Bash-capable agent: a shell string is not the program the
+# shell will run, so command substitution `$(...)`, an interpreter driving git
+# (python/perl/node), `eval`, and arbitrary variable indirection can always
+# produce the verb or the target path at runtime, past any static string check.
+# The real backstop for a determined adversary is the owner's manual review of
+# history plus not granting push credentials, NOT this guard. Do not read the
+# lists below as a completeness claim; they are the vectors this speed-bump does
+# and does not catch.
 #
 # Fires only on GUARD_TOOL==Bash. Default mode block. The policy state lives in a
 # single file (SOT written only by the /git skill):
@@ -23,23 +34,24 @@
 # inner string carries the verb; and to env-prefixed forms VAR=val git commit):
 #   commit-creating / push git verbs: commit, commit-tree, cherry-pick, revert,
 #   am, rebase, merge, push, fast-import.
-# Also blocks an INLINE alias-to-mutation-verb definition, i.e. any
-# `-c alias.<name>=<mutation-verb>` on the command line: defining a commit/push
-# alias while git is disabled is itself the circumvention (the aliased token then
-# runs the verb under a benign name), so the definition is blocked regardless of
-# how the aliased token is later spelled.
+# Also blocks two static obfuscations of the verb: an INLINE alias-to-mutation-verb
+# definition (`-c alias.<name>=<mutation-verb>`; defining a commit/push alias while
+# git is disabled is itself the circumvention), and a QUOTED or BACKSLASH-ESCAPED
+# verb/word-git (`git "commit"`, `git com"m"it`, `\git commit`, `g\it commit`),
+# which a second quote/backslash-deleted normalization rejoins before matching.
 # Plus best-effort gh push-like escalations: `gh release create`, `gh pr merge`,
 # and `gh api` with a POST method to a git-data/refs endpoint (uncertain gh api
 # POSTs warn rather than block).
 #
-# Residuals (honest, out of robust reach for a shell-string heuristic): a
-# PRE-EXISTING gitconfig alias (defined in ~/.gitconfig, not inline via -c) or a
-# wrapper binary named other than git/gh, `command`/`sudo`/`xargs` prefixing git,
-# an exotic unknown value-taking git global option before the verb, an agent
-# editing .git objects/refs by hand, or an INTERPRETER driving git (e.g.
-# `python3 -c "import subprocess; subprocess.run(['git','commit'])"`, or the same
-# via perl/node/ruby) -- an interpreter builds the argv internally, so no
-# shell-string heuristic can see the verb. These are noted in the report.
+# Residuals NOT caught (honest, inherent to a shell-string heuristic): the verb or
+# the word git produced at RUNTIME by command substitution (`git $(echo commit)`),
+# a shell variable (`v=commit; git $v`), or `eval`; an INTERPRETER driving git
+# (`python3 -c "import subprocess; subprocess.run(['git','commit'])"`, or perl/node/
+# ruby); a wrapper binary named other than git/gh, or `command`/`sudo`/`xargs`
+# prefixing git; a PRE-EXISTING ~/.gitconfig alias (not inline via -c); an exotic
+# unknown value-taking git global option before the verb; or an agent editing .git
+# objects/refs by hand. A determined agent can commit via these; the owner's review
+# is the backstop (see HONEST SCOPE above).
 #
 # Flag-write self-unblock check (owner ruling 2026-07-15): a blocked agent could
 # defeat the policy above by simply writing `enabled` to the policy file itself
@@ -56,13 +68,27 @@
 # itself writes via shell redirection, not a Write-class tool).
 #
 # The path comparison is done on REALPATH-NORMALIZED targets (mirroring
-# guards/20-write-acl.sh's _wacl_norm_path), not raw-string matching, so all
-# spellings that resolve to the same real file are caught equally: the resolved
-# absolute path, its `~/` shorthand, `$HOME`/`${HOME}` forms, a `//` (or `.`/`..`)
-# in the path, and a `cd <dir> && <write> <relative>` sequence where the relative
-# target resolves against the cd'd directory. HOME/`~` expansion is done by safe
-# string substitution against the guard's own $HOME (attacker-supplied strings are
-# NEVER eval'd).
+# guards/20-write-acl.sh's _wacl_norm_path), not raw-string matching, so the
+# STATICALLY spellable variants that resolve to the same real file are caught: the
+# resolved absolute path, its `~/` shorthand, `$HOME`/`${HOME}` forms, a `//` (or
+# `.`/`..`) in the path, a `cd <dir> && <write> <relative>` sequence (relative
+# target resolved against the cd'd dir), and a trivial inline `VAR=<literal>;
+# <write> $VAR` indirection (the assignment is tracked and the value substituted).
+# HOME/`~` expansion and the VAR substitution are done by safe string substitution
+# against the guard's own $HOME / the tracked literal (attacker strings are NEVER
+# eval'd).
+#
+# This is NOT complete, and must not be read as such: a Bash-string heuristic
+# CANNOT robustly stop a Bash-capable, same-uid agent from writing an arbitrary
+# file. Residuals NOT caught: a path or basename produced by command substitution
+# (`echo enabled > $(echo $HOME)/.claude/config/git-policy`), by `eval`, or by a
+# variable whose value itself comes from a subshell/prior call/environment; and any
+# non-Bash interpreter writing the file. The Write/Edit/MultiEdit route IS robustly
+# covered by guards/20-write-acl.sh (those tools name the path as structured data);
+# the Bash route is inherently porous. True enforcement of "non-meta cannot flip
+# the flag" would be filesystem-level (flag dir not writable by the agent uid); this
+# check is a speed-bump plus the meta-only default-deny, not a control. Owner review
+# is the backstop.
 
 GUARD_MODE_GIT_POLICY=block
 
@@ -94,7 +120,7 @@ _guard_git_policy_state() {
 # verb to segment start inside `cd X && git commit`, `bash -c "git commit"`, and
 # `VAR=v git commit`.
 _guard_git_policy_hits_git() {
-  local cmd="$1" seps qnorm git_re unq alias_re
+  local cmd="$1" seps qnorm git_re unq alias_re qdel
   local envprefix='([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'
   local globals='([[:space:]]+((-C|-c|--git-dir|--work-tree|--namespace|--super-prefix)([[:space:]]+|=)[^[:space:]]+|--[A-Za-z][A-Za-z0-9-]*|-[pP]))*'
   local verb='(commit-tree|commit|cherry-pick|revert|rebase|merge|push|am|fast-import)'
@@ -121,7 +147,23 @@ _guard_git_policy_hits_git() {
   # extends the single-char replacement set to SET1 length).
   seps=$';&|(){}\042\047\140\n\t'
   qnorm=$(printf '%s' "$cmd" | tr "$seps" '\n')
-  printf '%s\n' "$qnorm" | grep -Eq "$git_re"
+  if printf '%s\n' "$qnorm" | grep -Eq "$git_re"; then
+    return 0
+  fi
+
+  # Second normalized form for quote / backslash verb obfuscation. The first form
+  # NEWLINE-SPLITS on quotes, which surfaces a wrapped verb in `bash -c "git commit"`
+  # but the SAME split defeats the block when the quote sits AROUND or BEFORE the
+  # verb: `git "commit"`, `git com"m"it`, `git ""commit`, `\git commit`, `g\it commit`
+  # all split git and the verb onto separate lines. So build a SECOND form that
+  # DELETES quote chars and backslashes (rather than splitting on them), rejoining
+  # `git "commit"` -> `git commit` and `\git` -> `git`; non-quote separators still
+  # newline-split so unrelated segments never merge. Feeding both forms to the same
+  # anchored git_re is statically complete for quote/escape obfuscation. (A verb
+  # produced by a runtime value -- `git $(echo commit)`, `v=commit; git $v` -- is the
+  # documented command-substitution residual; a shell-string heuristic cannot see it.)
+  qdel=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr $';&|(){}\n\t' '\n')
+  printf '%s\n' "$qdel" | grep -Eq "$git_re"
 }
 
 # _guard_git_policy_gh <cmd>: echo "block" | "warn" | "" for gh push-like
@@ -191,26 +233,43 @@ _guard_git_policy_norm_target() {
 # tool naming the path (tee, cp, mv, install, ln, truncate), `dd of=<path>`, or
 # `sed -i` / `sed --in-place` targeting the path.
 #
-# Method: quotes/backticks are stripped and shell separators (; & | ( ) { } newline
-# tab) are newline-split, so each command SEGMENT is checked independently -- a
-# write signal in one chained command never pairs with an unrelated path mention in
-# another. A `cd <dir>` segment updates a running cwd (it affects later segments in
-# the same shell), so a `cd <flagdir> && echo x > <basename>` sequence resolves the
-# relative target against the cd'd directory. Within a write-bearing segment, EVERY
-# whitespace token is REALPATH-NORMALIZED (see _guard_git_policy_norm_target) and
-# compared to the normalized flag path; presence of a normalized flag-path token
-# alongside a write signal is a hit. This is deliberately over-inclusive (e.g.
-# `cp <flag> /tmp/backup`, which only READS the flag, also matches) because for this
-# one security-critical file a false block is the safe failure mode. Comparing
-# normalized targets (not raw strings) is what closes the path-spelling bypasses:
-# $HOME/${HOME}, ~/, //, ./.., and cd+relative all resolve to the one real file.
+# Method: an O(1) fast-path first returns unless the flag BASENAME appears literally
+# (see below; this is what keeps large commands cheap). Then `${HOME}`/`$HOME` and
+# tracked inline `VAR=<literal>` assignments are expanded on the whole string, quotes
+# /backticks/backslashes are stripped, and shell separators (; & | ( ) { } newline
+# tab) are newline-split, so each command SEGMENT is checked independently -- a write
+# signal in one chained command never pairs with an unrelated path mention in another.
+# A `cd <dir>` segment updates a running cwd (it affects later segments in the same
+# shell), so a `cd <flagdir> && echo x > <basename>` sequence resolves the relative
+# target against the cd'd directory. Within a write-bearing segment, EVERY whitespace
+# token is REALPATH-NORMALIZED (see _guard_git_policy_norm_target) and compared to the
+# normalized flag path; a normalized flag-path token alongside a write signal is a
+# hit. Deliberately over-inclusive (e.g. `cp <flag> /tmp/backup`, which only READS the
+# flag, also matches) because for this security-critical file a false block is the
+# safe failure mode. Comparing normalized targets (not raw strings) is what closes the
+# STATICALLY spellable bypasses -- $HOME/${HOME}, ~/, //, ./.., cd+relative, and a
+# simple `VAR=<literal>; > $VAR` indirection all resolve to the one real file. A path
+# built by command substitution `$(...)`, `eval`, or a runtime-valued variable is the
+# documented residual (see the header) and is NOT caught.
 _guard_git_policy_hits_flagwrite() {
-  local cmd="$1" flagpath seps norm line cwd="" c1 c2 crest
-  local has_write clean tok ntok
-  local -a toks
+  local cmd="$1" flagpath flagbase seps norm line cwd="" c1 c2 crest
+  local has_write clean tok ntok an av i acnt
+  local -a toks gp_names=() gp_vals=()
 
   flagpath=$(_guard_git_policy_norm_target "$(_guard_git_policy_path)")
   [ -n "$flagpath" ] || return 1
+
+  # O(1) short-circuit (perf): a flag write MUST name the flag basename literally
+  # somewhere in the command (the last path component cannot itself be spelled via
+  # $HOME/cd/// and is only variable-held via an assignment that ALSO carries the
+  # literal). If the basename never appears, this cannot be a flag write, so skip
+  # the whole per-segment normalization below. One fixed-string grep over the whole
+  # command is flat-cost; without this, an ordinary large multi-segment command
+  # (e.g. an 800-line heredoc write) paid several greps PER segment and blew past
+  # the dispatcher's wired 10s hook timeout.
+  flagbase=${flagpath##*/}
+  [ -n "$flagbase" ] || return 1
+  printf '%s' "$cmd" | grep -qF -- "$flagbase" || return 1
 
   # Expand `${HOME}` / `$HOME` on the whole string FIRST, by safe substitution
   # against the guard's own $HOME. This must precede the separator split below:
@@ -220,8 +279,46 @@ _guard_git_policy_hits_flagwrite() {
   cmd="${cmd//\$\{HOME\}/$HOME}"
   cmd="${cmd//\$HOME/$HOME}"
 
+  # Inline `VAR=value` assignment tracking + whole-string expansion (closes the
+  # trivial variable-indirection flag write: `f=<flagpath>; echo x > $f`, or
+  # `f=<basename>; ... /$f`). This runs BEFORE the brace-containing split for the
+  # same reason as the HOME expansion: `${f}` would otherwise be torn at its braces.
+  # Pass 1 collects assignments by splitting on statement separators that do NOT
+  # include braces (so `${f}` survives to be recorded/looked up); the leading token
+  # of each statement, if a bare `NAME=value`, is recorded (value already
+  # $HOME-expanded above). Pass 2 substitutes every tracked `$VAR` / `${VAR}` on the
+  # whole string. A value produced by command substitution `$(...)`, `eval`, or a
+  # subshell is NOT tracked -- that is the documented residual.
+  local asrc aline atok
+  asrc=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr $';&|\n\t' '\n')
+  while IFS= read -r aline; do
+    read -r atok _ <<<"$aline"
+    case "$atok" in
+      [A-Za-z_]*=*)
+        an="${atok%%=*}"; av="${atok#*=}"
+        case "$an" in
+          *[^A-Za-z0-9_]*) : ;;
+          *) gp_names+=("$an"); gp_vals+=("$av") ;;
+        esac
+        ;;
+    esac
+  done <<EOF
+$asrc
+EOF
+  acnt=${#gp_names[@]}
+  i=0
+  while [ "$i" -lt "$acnt" ]; do
+    an="${gp_names[$i]}"; av="${gp_vals[$i]}"
+    cmd="${cmd//\$\{$an\}/$av}"
+    cmd="${cmd//\$$an/$av}"
+    i=$((i + 1))
+  done
+
+  # Backslashes are DELETED alongside quotes/backticks so an escaped write target
+  # (`\$f`, `git-poli\cy`) normalizes like its bare form -- the flag-write analogue
+  # of the verb-obfuscation strip in _guard_git_policy_hits_git.
   seps=$';&|(){}\n\t'
-  norm=$(printf '%s' "$cmd" | tr -d '\042\047\140' | tr "$seps" '\n')
+  norm=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr "$seps" '\n')
 
   while IFS= read -r line; do
     [ -n "$line" ] || continue

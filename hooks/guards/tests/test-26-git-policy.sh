@@ -60,6 +60,20 @@
 #   (ae) meta    echo enabled > $HOME/.claude/config/git-policy       -> pass
 #   (af) worker  echo enabled > $HOME/.claude/config/other-file       -> pass (other file)
 #   (ag) worker  cd /tmp && echo enabled > git-policy                 -> pass (cd elsewhere)
+#
+# B-a regression -- a verb (or the word git) held apart from `git` by QUOTING or
+# BACKSLASH-ESCAPING must still block; benign/non-mutation forms must not:
+#   (ah) git "commit"      (ai) git 'commit'     (aj) git com"m"it   -> block
+#   (ak) \git commit       (al) g\it commit                          -> block
+#   (am) git commit-graph write (non-mutation verb)                  -> pass
+#
+# B-b regression -- variable-indirection flag write must block; the command-
+# substitution form is the documented residual and passes (HOME override as above):
+#   (an) worker  f=<flagpath>; echo enabled > $f                     -> block
+#   (ao) worker  f=<basename>; echo enabled > <flagdir>/$f           -> block
+#   (ap) worker  f=<flagpath>; echo x > ${f}   (brace form)          -> block
+#   (aq) worker  echo enabled > $(echo $HOME)/.../git-policy         -> pass (residual)
+#   (ar) worker  f=<other-file>; echo x > $f                         -> pass (other file)
 
 set -uo pipefail
 
@@ -172,6 +186,25 @@ run_case '(ad) worker tee $HOME -> block'               'printf enabled | tee $H
 run_case '(ae) meta $HOME spelling -> pass'             'echo enabled > $HOME/.claude/config/git-policy'       "meta"          0 ""            "GUARD-BLOCK" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
 run_case '(af) worker other file -> pass'               'echo enabled > $HOME/.claude/config/other-file'       "w-implementer" 0 ""            "GUARD-BLOCK" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
 run_case '(ag) worker cd elsewhere + relative -> pass'  'cd /tmp && echo enabled > git-policy'                 "w-implementer" 0 ""            "GUARD-BLOCK" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+
+# B-a regression: a mutation verb (or the word git) held apart from `git` by
+# QUOTING or BACKSLASH-ESCAPING must still block; benign / non-mutation forms must
+# not. Single-quoted cmds keep the quote/backslash glyphs literal for the guard.
+run_case '(ah) git "commit" (quoted verb) -> block'     'git "commit" -m x'                  "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case "(ai) git 'commit' (squoted verb) -> block"    "git 'commit' -m x"                  "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(aj) git com"m"it (split verb) -> block'      'git com"m"it -m x'                  "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(ak) backslash-git commit -> block'           '\git commit -m x'                   "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(al) g\it commit (escaped git) -> block'      'g\it commit -m x'                   "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(am) git commit-graph write (non-mut) -> pass' 'git commit-graph write'            "" 0 ""            "GUARD-BLOCK" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+
+# B-b regression: variable-indirection flag write must block; the command-
+# substitution form is the DOCUMENTED residual and correctly passes. HOME override
+# as in (y)-(ag). Single-quoted cmds keep `$HOME`/`$f`/`${f}` literal for the guard.
+run_case '(an) worker f=<path>; > $f -> block'          'f=$HOME/.claude/config/git-policy; echo enabled > $f'   "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+run_case '(ao) worker f=<base>; > dir/$f -> block'      'f=git-policy; echo enabled > $HOME/.claude/config/$f'   "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+run_case '(ap) worker ${f} brace indirection -> block'  'f=$HOME/.claude/config/git-policy; echo x > ${f}'       "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+run_case '(aq) worker cmd-sub path (residual) -> pass'  'echo enabled > $(echo $HOME)/.claude/config/git-policy' "w-implementer" 0 ""            "GUARD-BLOCK" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+run_case '(ar) worker f=<other>; > $f (benign) -> pass' 'f=$HOME/.claude/config/other; echo x > $f'              "w-implementer" 0 ""            "GUARD-BLOCK" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
 
 if [ "$fails" -eq 0 ]; then
   echo "test-26-git-policy: ALL PASS"

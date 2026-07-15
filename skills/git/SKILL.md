@@ -29,14 +29,29 @@ The SOT is the guard, not this skill. `~/.claude/hooks/guards/26-git-policy.sh`
 reads `~/.claude/config/git-policy` on every Bash tool call. When the file says
 `disabled`, the guard mechanically BLOCKS any commit or push (git commit,
 commit-tree, cherry-pick, revert, am, rebase, merge, push, fast-import, and gh
-release create / pr merge / refs-writing api), robust to `git -C <dir>`,
-chained `cd <dir> && git commit`, `bash -c "..."` wrappers, env-prefixed forms,
-and an inline `-c alias.<name>=<verb>` definition invoked by its alias (the
-block matches on the aliased verb, not just the known-verb list). Read-only
-git (status, log, diff, add) is unaffected. Residual, not covered: an
-interpreter (python/perl/node/...) invoking git directly, or a wrapper binary
-named other than `git`/`gh` -- a shell-string heuristic cannot see inside
-another process's argv.
+release create / pr merge / refs-writing api). Read-only git (status, log, diff,
+add) is unaffected.
+
+This guard is BEST-EFFORT, shell-string, defense-in-depth. It is honest about
+what that means:
+
+- It DOES catch the common and the simple-deliberate vectors: `git -C <dir>`, a
+  chained `cd <dir> && git commit`, `bash -c "..."` / `sh -c "..."` wrappers,
+  env-prefixed forms, an inline `-c alias.<name>=<verb>` definition, and a verb
+  hidden by quoting or backslashes (`git "commit"`, `\git commit`). On the
+  companion flag-write check, it catches the statically spellable path variants
+  (`$HOME` / `${HOME}` / `~/`, `//`, `cd`+relative, and a simple
+  `f=<path>; ... > $f` variable indirection).
+- It CANNOT be complete against a same-uid, Bash-capable agent. A shell string is
+  not the program the shell runs. Command substitution (`git $(echo commit)`,
+  `echo enabled > $(echo $HOME)/.claude/config/git-policy`), an interpreter driving
+  git (python/perl/node), `eval`, and a value pulled from a subshell or the
+  environment all produce the verb or the target path at runtime, past any static
+  check. Filesystem permissions (a flag dir the agent uid cannot write) would be
+  the only true control; this guard is a speed-bump plus a meta-only default-deny.
+
+The real backstop is the owner: manual review of history before it lands, and not
+granting push credentials. Do not read the catch-list as a completeness guarantee.
 
 When blocked, an agent must ask the owner to run `/git true`; the owner manages
 git manually (rules/00 Git Discipline; the owner reviews changes before they enter
