@@ -4,17 +4,18 @@
 # ANY kind; agents ask the owner to run `/git true`. This guard replaces the old
 # per-op /commit and /push toggles for the commit/push case.
 #
-# HONEST SCOPE: this is a BEST-EFFORT shell-string defense-in-depth control. It
-# raises the bar on the common and the simple-deliberate commit/push and
-# flag-write vectors (see the block/residual lists below). It CANNOT be complete
-# against a same-uid, Bash-capable agent: a shell string is not the program the
-# shell will run, so command substitution `$(...)`, an interpreter driving git
-# (python/perl/node), `eval`, and arbitrary variable indirection can always
-# produce the verb or the target path at runtime, past any static string check.
-# The real backstop for a determined adversary is the owner's manual review of
-# history plus not granting push credentials, NOT this guard. Do not read the
-# lists below as a completeness claim; they are the vectors this speed-bump does
-# and does not catch.
+# BEST-EFFORT, NOT A BOUNDARY: this is a best-effort shell-string heuristic, NOT a
+# shell parser and NOT a security boundary. Its purpose is to stop an agent's
+# HABITUAL commit/push and self-unblock attempts, not to defeat a determined
+# adversary deliberately crafting an evasion. A same-uid agent can still position
+# the verb or the write target via constructs this heuristic does not model
+# (command substitution, interpreter-driven git, eval, IFS / whitespace-valued
+# variables, and in general arbitrary shell grammar). The real controls are the
+# owner's manual review of commits and not granting agents push credentials;
+# filesystem-level ownership would be the only complete mechanism. The lists below
+# enumerate the SPECIFIC vectors that are tested-and-blocked (each with a bite-test
+# and a seal-battery case) and the known residual CLASSES. They are NOT a
+# completeness claim: a spelling not listed is a residual, not a promise.
 #
 # Fires only on GUARD_TOOL==Bash. Default mode block. The policy state lives in a
 # single file (SOT written only by the /git skill):
@@ -28,20 +29,26 @@
 # workflows are never broken. The one non-fail-open case is by design: once the
 # file explicitly says `disabled`, a matched commit/push verb DOES block.
 #
-# What a `disabled` policy blocks (all robust to global options between `git` and
-# the verb: -C <dir>, -c <k=v>, --git-dir=..., --work-tree=...; to the verb at any
-# command position after ; && || | newline; to wrappers eval/sh -c/bash -c whose
-# inner string carries the verb; and to env-prefixed forms VAR=val git commit):
-#   commit-creating / push git verbs: commit, commit-tree, cherry-pick, revert,
-#   am, rebase, merge, push, fast-import.
-# Also blocks two static obfuscations of the verb: an INLINE alias-to-mutation-verb
-# definition (`-c alias.<name>=<mutation-verb>`; defining a commit/push alias while
-# git is disabled is itself the circumvention), and a QUOTED or BACKSLASH-ESCAPED
-# verb/word-git (`git "commit"`, `git com"m"it`, `\git commit`, `g\it commit`),
-# which a second quote/backslash-deleted normalization rejoins before matching.
-# Plus best-effort gh push-like escalations: `gh release create`, `gh pr merge`,
-# and `gh api` with a POST method to a git-data/refs endpoint (uncertain gh api
-# POSTs warn rather than block).
+# Tested-and-blocked commit/push vectors when the policy is `disabled` (each has a
+# bite-test in tests/test-26-git-policy.sh and a seal-battery case):
+#   - the mutation verbs: commit, commit-tree, cherry-pick, revert, am, rebase,
+#     merge, push, fast-import
+#   - global options between `git` and the verb: -C <dir>, -c <k=v>, --git-dir=,
+#     --work-tree=, --namespace, --super-prefix
+#   - the verb at a NON-leading position after a ; && || | or newline separator
+#   - wrappers whose inner string carries a LITERAL verb: bash -c / sh -c / eval "..."
+#   - env-prefix forms: VAR=val git commit
+#   - a QUOTED or BACKSLASH-ESCAPED verb or word-git: git "commit", git com"m"it,
+#     git ""commit, \git commit, g\it commit
+#   - a TAB (or multi-space) between git and the verb: git<TAB>commit
+#   - a BACKSLASH-NEWLINE line continuation: git \<LF>commit
+#   - a LEADING REDIRECTION before git: >f git commit, 2>f git push, &>f git commit,
+#     FOO=1 >f git commit
+#   - an inline alias-to-mutation-verb definition: -c alias.<name>=<verb>
+#   - gh push-like escalations: gh release create, gh pr merge, and gh api with a
+#     POST to a git-data/refs endpoint (uncertain gh api POSTs warn, not block)
+# This is an enumeration of what is tested, NOT a claim of coverage over "any"
+# spelling; anything outside it is a residual (below), not a guarantee.
 #
 # Residuals NOT caught (honest, inherent to a shell-string heuristic): the verb or
 # the word git produced at RUNTIME by command substitution (`git $(echo commit)`),
@@ -70,27 +77,29 @@
 # itself writes via shell redirection, not a Write-class tool).
 #
 # The path comparison is done on REALPATH-NORMALIZED targets (mirroring
-# guards/20-write-acl.sh's _wacl_norm_path), not raw-string matching, so the
-# STATICALLY spellable variants that resolve to the same real file are caught: the
-# resolved absolute path, its `~/` shorthand, `$HOME`/`${HOME}` forms, a `//` (or
-# `.`/`..`) in the path, a `cd <dir> && <write> <relative>` sequence (relative
-# target resolved against the cd'd dir), and a trivial inline `VAR=<literal>;
-# <write> $VAR` indirection (the assignment is tracked and the value substituted).
-# HOME/`~` expansion and the VAR substitution are done by safe string substitution
-# against the guard's own $HOME / the tracked literal (attacker strings are NEVER
-# eval'd).
+# guards/20-write-acl.sh's _wacl_norm_path), not raw-string matching. Tested-and-
+# blocked flag-write spellings (each with a bite-test + seal-battery case): the
+# resolved absolute path; its `~/` shorthand; `$HOME`/`${HOME}` forms; a `//` (or
+# `.`/`..`) in the path; a `cd <dir> && <write> <relative>` sequence (relative
+# target resolved against the cd'd dir); a trivial inline `VAR=<literal>; <write>
+# $VAR` indirection and a basename assembled from split literal-valued vars
+# (`b=git; ... ${b}-policy`); a TAB before the target; and a backslash-newline
+# continuation before the target. HOME/`~` expansion and the VAR substitution are
+# done by safe string substitution against the guard's own $HOME / the tracked
+# literal (attacker strings are NEVER eval'd). The write signals covered are shell
+# redirection (>, >>), tee/cp/mv/install/ln/truncate, dd of=, and sed -i.
 #
-# This is NOT complete, and must not be read as such: a Bash-string heuristic
-# CANNOT robustly stop a Bash-capable, same-uid agent from writing an arbitrary
-# file. Residuals NOT caught: a path or basename produced by command substitution
-# (`echo enabled > $(echo $HOME)/.claude/config/git-policy`), by `eval`, or by a
-# variable whose value itself comes from a subshell/prior call/environment; and any
-# non-Bash interpreter writing the file. The Write/Edit/MultiEdit route IS robustly
-# covered by guards/20-write-acl.sh (those tools name the path as structured data);
-# the Bash route is inherently porous. True enforcement of "non-meta cannot flip
-# the flag" would be filesystem-level (flag dir not writable by the agent uid); this
-# check is a speed-bump plus the meta-only default-deny, not a control. Owner review
-# is the backstop.
+# This enumerates what is tested; it is NOT complete and must not be read as such.
+# A Bash-string heuristic cannot stop a Bash-capable, same-uid agent from writing an
+# arbitrary file. Residual CLASSES NOT caught: a path or basename produced by command
+# substitution (`echo enabled > $(echo $HOME)/.claude/config/git-policy`), by `eval`,
+# or by a variable whose value itself comes from a subshell/prior call/environment;
+# and any non-Bash interpreter writing the file. The Write/Edit/MultiEdit route is
+# covered separately by guards/20-write-acl.sh (those tools name the path as
+# structured data); the Bash route is inherently porous. True enforcement of
+# "non-meta cannot flip the flag" would be filesystem-level (flag dir not writable by
+# the agent uid); this check is a speed-bump plus the meta-only default-deny, not a
+# boundary. Owner review is the backstop.
 
 GUARD_MODE_GIT_POLICY=block
 
@@ -110,8 +119,10 @@ _guard_git_policy_state() {
 }
 
 # _guard_git_policy_hits_git <cmd>: return 0 when the command creates a commit or
-# performs a push, robust to the four tolerated global-option forms, compound
-# commands, shell wrappers, and env prefixes; return 1 otherwise.
+# performs a push, handling the tested global-option forms, compound commands,
+# shell wrappers, env prefixes, leading redirections, and quote/backslash/tab/
+# backslash-newline verb obfuscations (see the header's tested-and-blocked list);
+# return 1 otherwise. Not a shell parser; residual classes are in the header.
 #
 # Method: normalize by translating shell command boundaries (separators, quotes,
 # grouping, backtick, whitespace controls) to newlines, then match, per line, a
@@ -122,11 +133,26 @@ _guard_git_policy_state() {
 # verb to segment start inside `cd X && git commit`, `bash -c "git commit"`, and
 # `VAR=v git commit`.
 _guard_git_policy_hits_git() {
-  local cmd="$1" seps qnorm git_re unq alias_re qdel
-  local envprefix='([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'
-  local globals='([[:space:]]+((-C|-c|--git-dir|--work-tree|--namespace|--super-prefix)([[:space:]]+|=)[^[:space:]]+|--[A-Za-z][A-Za-z0-9-]*|-[pP]))*'
-  local verb='(commit-tree|commit|cherry-pick|revert|rebase|merge|push|am|fast-import)'
-  git_re='^[[:space:]]*'"$envprefix"'git'"$globals"'[[:space:]]+'"$verb"'([[:space:]]|$)'
+  local cmd="$1" seps qnorm git_re assign redir prefix globals verb unq alias_re qdel
+  local nl=$'\n'
+  # Collapse backslash-newline line continuations FIRST, exactly as the shell does:
+  # it elides a `\<LF>` and runs `git \<LF>commit` as `git commit`. Without this the
+  # backslash-delete in the qdel form below leaves the LF, which the separator split
+  # then breaks on, landing git and its verb on separate lines.
+  cmd="${cmd//\\$nl/}"
+
+  # Segment-start prefix tolerated before the literal `git`: zero or more atoms, each
+  # either an env assignment (VAR=val) OR a redirection clause, in any order. bash
+  # permits a redirection before the command word (`>/tmp/z git commit`, `2>f git
+  # push`, `&>f ...`, `FOO=1 >f git commit`), which would otherwise defeat the `^...git`
+  # anchor. The redir atom is: optional leading fd, optional `&`, one or more `<`/`>`,
+  # optional `&`, optional fd, optional spaces, an optional target word, then space.
+  assign='[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+'
+  redir='[0-9]*&?[<>]+&?[0-9]*[[:space:]]*[^[:space:]]*[[:space:]]+'
+  prefix='('"$assign"'|'"$redir"')*'
+  globals='([[:space:]]+((-C|-c|--git-dir|--work-tree|--namespace|--super-prefix)([[:space:]]+|=)[^[:space:]]+|--[A-Za-z][A-Za-z0-9-]*|-[pP]))*'
+  verb='(commit-tree|commit|cherry-pick|revert|rebase|merge|push|am|fast-import)'
+  git_re='^[[:space:]]*'"$prefix"'git'"$globals"'[[:space:]]+'"$verb"'([[:space:]]|$)'
 
   # Inline alias-to-mutation-verb definition: `git -c alias.<name>=<mutation-verb>`
   # defines a commit/push alias on the command line, then invokes it under a benign
@@ -135,9 +161,10 @@ _guard_git_policy_hits_git() {
   # the verb match never sees the aliased token. Defeat it at the source: while git
   # is disabled, defining an alias WHOSE VALUE is a mutation verb IS the
   # circumvention, so block on the definition itself, however the aliased token is
-  # (or is not) later spelled. Conservative by design per the owner "must be robust"
-  # ruling: any inline `-c alias.*=<mutation-verb>` is blocked. Quotes/backticks are
-  # stripped first so a quoted value (`-c alias.ci="commit"`) is still caught.
+  # (or is not) later spelled. Conservative by design (defining a commit/push alias
+  # while git is disabled is the circumvention): any inline `-c alias.*=<mutation-verb>`
+  # is blocked. Quotes/backticks are stripped first so a quoted value
+  # (`-c alias.ci="commit"`) is still caught.
   unq=$(printf '%s' "$cmd" | tr -d '\042\047\140')
   alias_re='(^|[[:space:]])-c[[:space:]]+alias\.[A-Za-z0-9._-]+='"$verb"'([^A-Za-z0-9-]|$)'
   if printf '%s' "$unq" | grep -Eq "$alias_re"; then
@@ -164,10 +191,11 @@ _guard_git_policy_hits_git() {
   # all split git and the verb onto separate lines. So build a SECOND form that
   # DELETES quote chars and backslashes (rather than splitting on them), rejoining
   # `git "commit"` -> `git commit` and `\git` -> `git`; non-quote separators still
-  # newline-split so unrelated segments never merge. Feeding both forms to the same
-  # anchored git_re is statically complete for quote/escape obfuscation. (A verb
-  # produced by a runtime value -- `git $(echo commit)`, `v=commit; git $v` -- is the
-  # documented command-substitution residual; a shell-string heuristic cannot see it.)
+  # newline-split so unrelated segments never merge. Both forms feed the same anchored
+  # git_re, which covers the quote/backslash/tab/backslash-newline verb obfuscations
+  # tested in the suite. (A verb produced by a RUNTIME value -- `git $(echo commit)`,
+  # `v=commit; git $v`, `git${IFS}commit` -- is a documented residual the header
+  # lists; a shell-string heuristic cannot see a value the shell computes at runtime.)
   qdel=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr $';&|(){}\n' '\n')
   printf '%s\n' "$qdel" | grep -Eq "$git_re"
 }
@@ -259,8 +287,15 @@ _guard_git_policy_norm_target() {
 # documented residual (see the header) and is NOT caught.
 _guard_git_policy_hits_flagwrite() {
   local cmd="$1" flagpath flagbase seps norm line cwd="" c1 c2 crest
-  local has_write clean tok ntok an av i acnt
+  local has_write clean tok ntok an av i acnt nl=$'\n'
   local -a toks gp_names=() gp_vals=()
+
+  # Collapse backslash-newline line continuations FIRST (same reason as in
+  # _guard_git_policy_hits_git): the shell runs `printf enabled > \<LF><flag>` as one
+  # command; without collapsing, the backslash-delete below leaves the LF, which the
+  # separator split breaks on, landing the `>` write signal and the flag token on
+  # separate lines so the write is never associated with the flag path.
+  cmd="${cmd//\\$nl/}"
 
   flagpath=$(_guard_git_policy_norm_target "$(_guard_git_policy_path)")
   [ -n "$flagpath" ] || return 1

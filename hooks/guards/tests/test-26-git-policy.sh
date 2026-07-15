@@ -87,6 +87,16 @@
 #   (ay) worker  x=git; y=policy; > $HOME/.../${x}-${y}              -> block
 #   (az) worker  b=git; > $HOME/.../${b}-other  (non-flag basename)  -> pass
 #   (ba) git${IFS}commit (whitespace-var separator, disclosed residual) -> pass
+#
+# B-f regression -- a backslash-newline line continuation is elided by the shell:
+#   (bb) git \<LF>commit   (bc) git \<LF>push                         -> block
+#   (bd) git \<LF>status (benign)                                     -> pass
+#   (be) worker  printf enabled > \<LF>$HOME/.../git-policy           -> block
+#
+# B-g regression -- a leading redirection before git must not defeat the anchor:
+#   (bf) >f git commit  (bg) 2>f git push  (bh) &>f git commit        -> block
+#   (bi) FOO=1 >f git commit                                          -> block
+#   (bj) >f git status (read-only)   (bk) >f ls (no git)              -> pass
 
 set -uo pipefail
 
@@ -239,6 +249,25 @@ run_case '(az) worker b=git; ${b}-other (benign) -> pass' 'b=git; echo enabled >
 # Disclosed residual (NOT closed by design): a whitespace-valued variable as the
 # separator; its value is not a literal in the string. Must PASS (documented).
 run_case '(ba) git${IFS}commit (residual) -> pass'      'git${IFS}commit -m x'               "" 0 ""            "GUARD-BLOCK" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+
+# B-f regression: a backslash-newline line continuation is elided by the shell
+# (git \<LF>commit runs git commit), so it must still block; a benign continuation
+# does not. Injected via ANSI-C $'...' (\\ -> backslash, \n -> newline; $HOME stays
+# literal so the flag-write form resolves against the guard's HOME).
+run_case '(bb) git \<LF>commit -> block'                $'git \\\ncommit -m x'               "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(bc) git \<LF>push -> block'                  $'git \\\npush origin main'          "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(bd) git \<LF>status (benign) -> pass'        $'git \\\nstatus'                    "" 0 ""            "GUARD-BLOCK" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(be) worker > \<LF>flag -> block'             $'printf enabled > \\\n$HOME/.claude/config/git-policy' "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+
+# B-g regression: bash permits a redirection before the command word, so a leading
+# redirect must not defeat the segment-start anchor; a leading redirect with NO git
+# (or a read-only verb) stays benign.
+run_case '(bf) >f git commit -> block'                  '>/tmp/zz git commit -m x'           "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(bg) 2>f git push -> block'                   '2>/tmp/zz git push'                 "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(bh) &>f git commit -> block'                 '&>/tmp/zz git commit'               "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(bi) FOO=1 >f git commit -> block'            'FOO=1 >/tmp/zz git commit'          "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(bj) >f git status (benign) -> pass'          '>/tmp/zz git status'                "" 0 ""            "GUARD-BLOCK" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(bk) >f ls (no git, benign) -> pass'          '>/tmp/zz ls -la'                    "" 0 ""            "GUARD-BLOCK" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
 
 if [ "$fails" -eq 0 ]; then
   echo "test-26-git-policy: ALL PASS"

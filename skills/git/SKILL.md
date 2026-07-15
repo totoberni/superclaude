@@ -32,26 +32,35 @@ commit-tree, cherry-pick, revert, am, rebase, merge, push, fast-import, and gh
 release create / pr merge / refs-writing api). Read-only git (status, log, diff,
 add) is unaffected.
 
-This guard is BEST-EFFORT, shell-string, defense-in-depth. It is honest about
-what that means:
+This guard is a best-effort shell-string heuristic, NOT a shell parser and NOT a
+security boundary. Its purpose is to stop an agent's HABITUAL commit/push and
+self-unblock attempts, not to defeat a determined adversary deliberately crafting
+an evasion. A same-uid agent can still position the verb or the write target via
+constructs this heuristic does not model (command substitution, interpreter-driven
+git, `eval`, IFS / whitespace-valued variables, and in general arbitrary shell
+grammar). The real controls are the owner's manual review of commits and not
+granting agents push credentials; filesystem-level ownership would be the only
+complete mechanism.
 
-- It DOES catch the common and the simple-deliberate vectors: `git -C <dir>`, a
-  chained `cd <dir> && git commit`, `bash -c "..."` / `sh -c "..."` wrappers,
-  env-prefixed forms, an inline `-c alias.<name>=<verb>` definition, and a verb
-  hidden by quoting or backslashes (`git "commit"`, `\git commit`). On the
-  companion flag-write check, it catches the statically spellable path variants
-  (`$HOME` / `${HOME}` / `~/`, `//`, `cd`+relative, and a simple
-  `f=<path>; ... > $f` variable indirection).
-- It CANNOT be complete against a same-uid, Bash-capable agent. A shell string is
-  not the program the shell runs. Command substitution (`git $(echo commit)`,
-  `echo enabled > $(echo $HOME)/.claude/config/git-policy`), an interpreter driving
-  git (python/perl/node), `eval`, and a value pulled from a subshell or the
-  environment all produce the verb or the target path at runtime, past any static
-  check. Filesystem permissions (a flag dir the agent uid cannot write) would be
-  the only true control; this guard is a speed-bump plus a meta-only default-deny.
+- Tested-and-blocked commit/push vectors: `git -C <dir>` / `-c <k=v>` / `--git-dir`
+  / `--work-tree` globals; a chained `cd <dir> && git commit`; the verb after a
+  `; && || |` or newline; `bash -c "..."` / `sh -c "..."` / `eval "..."` wrappers
+  carrying a literal verb; env-prefix `VAR=val git commit`; an inline
+  `-c alias.<name>=<verb>` definition; and a verb obfuscated by quoting, backslash,
+  a TAB, a backslash-newline continuation, or a leading redirection (`>f git
+  commit`). The companion flag-write check blocks these spellings of the flag path:
+  the absolute path, `~/`, `$HOME`/`${HOME}`, `//`, `cd`+relative, a
+  `f=<path>; > $f` (and split-var `${b}-policy`) indirection, and a TAB or
+  backslash-newline before the target.
+- Residual CLASSES it does NOT catch (by design): the verb or the path produced at
+  RUNTIME by command substitution (`git $(echo commit)`), `eval`, an
+  IFS/whitespace-valued variable (`git${IFS}commit`), or a value pulled from a
+  subshell / prior call / environment; an interpreter driving git (python/perl/node);
+  a wrapper binary named other than git/gh; and a pre-existing `~/.gitconfig` alias.
+  Anything not in the tested list above is a residual, not a promise.
 
-The real backstop is the owner: manual review of history before it lands, and not
-granting push credentials. Do not read the catch-list as a completeness guarantee.
+The Write/Edit/MultiEdit route to the flag is covered separately by the
+`20-write-acl` guard (those tools name the path as structured data).
 
 When blocked, an agent must ask the owner to run `/git true`; the owner manages
 git manually (rules/00 Git Discipline; the owner reviews changes before they enter
