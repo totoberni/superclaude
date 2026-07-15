@@ -102,18 +102,4 @@ A shorthand wrapper exists at `~/.claude/bin/mem`: `mem search "<q>" [-k N]` | `
 
 ## Reviewer Attribution on Dirty Trees
 
-When project policy is `/commit false` (e.g., `~/projects/cash/example-webapp-polish`), the working tree may carry pre-existing uncommitted changes from previous sessions. `w-reviewer` reads `git diff HEAD` and CANNOT distinguish wave's contribution from prior state — produces false-positive REJECTs flagging prior work as "scope drift".
-
-**Mitigation (mandatory when dispatching `w-reviewer` on `/commit false` repos)**:
-
-1. Stash baseline at session start:
-```bash
-git -C <repo> status --short > /tmp/<session_id>-baseline.txt
-git -C <repo> diff > /tmp/<session_id>-baseline.diff
-```
-
-2. Inject baseline path into every `w-reviewer` dispatch prompt with explicit "files in this list are PRIOR state, not your concern" guidance.
-
-3. Optionally enumerate the explicit file scope list this wave touches.
-
-The `~/.claude/hooks/modules/15-baseline-stash.sh` hook (per Phase 4 ROI item) automates step 1 when implemented.
+Dirty-tree false-positive REJECT mitigation for `/commit false` repos: step 1 (baseline stash) is enforced by `~/.claude/hooks/modules/15-baseline-stash.sh` (auto-stash on first Edit/Write/MultiEdit). Full mitigation (baseline path injected into every `w-reviewer` dispatch, optional explicit scope-list note): `40-swarm-quality-gates.md` R-2.

@@ -50,7 +50,7 @@ When `/promote` finds an autocommission pattern that has recurred >=3 times (tra
 | `o-example-5.md`, `o-example-6.md`, `o-example-7.md` | IQC orch instances retired after their phases completed |
 | (legacy entries) | Earlier `orch-*.md`, `scaf2.md`, `o-<project>-1b.md` retained for reference |
 
-## Skills (72 total)
+## Skills (73 total)
 
 ### By Category
 

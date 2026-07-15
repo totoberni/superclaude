@@ -15,7 +15,7 @@
 
 ## Git Discipline
 - Conventional commits: feat:, fix:, test:, docs:, chore:, refactor:
-- Never git push — the user decides when to push
+- Never git push. Sandbox-denied via `settings.json` `permissions.deny` (`Bash(git push*)`); the user decides when to push.
 - Never create/switch/merge branches without explicit instruction
 - One logical commit per unit of work
 - WSL permission diffs (`755 → 644`): never commit — see `21-domain-gotchas.md §WSL File Permissions`

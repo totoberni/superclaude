@@ -74,22 +74,7 @@ Thinking depth propagates via the effort chain, not prompt keywords: set `effort
 
 ### Worker Fleet (12 permanent w-*)
 
-| Worker | Model | Use Case |
-|--------|-------|----------|
-| `w-explorer` | haiku | Read-only file exploration, grep, recon. Reports `file:line` references — never edits |
-| `w-committer` | haiku | Atomic git ops only (stage + write conventional commit + commit). Read-only on code |
-| `w-implementer` | sonnet | Writes new code from a clear spec. Distinct from refactorer/debugger |
-| `w-doc` | sonnet | Authors prose: LaTeX sections, Markdown docs, READMEs, plans/specs |
-| `w-tester` | sonnet | Runs project test suites; classifies failures; proposes routing (read-only on code) |
-| `w-debugger` | sonnet | Diagnoses + fixes runtime errors; checks gotchas first; minimal fix; records pattern |
-| `w-merger` | sonnet | Resolves git merge conflicts using both sides + commit history |
-| `w-refactorer` | sonnet | Targeted refactoring: extract function, rename, inline, simplify; minimal blast radius |
-| `w-reviewer` | sonnet | Read-only code review (3 modes: general/infra/security). `--scathingly-deep` -> opus |
-| `w-design-reviewer` | sonnet | Multi-phase frontend design review (interaction, responsive, polish, a11y, robustness) |
-| `w-planner` | opus | Creates / updates project plans (superclaude `plans/` or in-project `.orchestrator/`) |
-| `w-hostile-reviewer` | opus | Adversarial methodology/technical review (effort:max); runs the hostile-review gauntlet; verdict-first seal; read-only |
-
-Aggregate distribution if fully adopted: ~5% haiku / ~70% sonnet / ~25% opus.
+Canonical roster (model, purpose, invocation): `~/.claude/docs/agent-manifest.md` § Worker Fleet.
 
 ### Ephemeral Workers (via `/autocommission`)
 
@@ -128,66 +113,9 @@ You are **o-<project>-<seq>**, a named orchestrator instance.
 
 ---
 
-## Slash Commands (72 skills, grouped by purpose)
+## Slash Commands
 
-### Delegation (5)
-
-| Skill | Purpose |
-|-------|---------|
-| `/handoff` | Permanent-ork lifecycle: commission, decommission, check-in, session handoff |
-| `/autocommission` | Spawn ephemeral `w-*` worker for one-off task; auto-cleanup on done |
-| `/swarm-dispatch` | Launch parallel `w-*` worker batch using W-1/W-4/W-7/W-11 patterns |
-| `/topology-producer-reviewer` | Producer-Reviewer dyad: pair worker output with reviewer audit (FG or BG) |
-| `/promote` | Scan the `shared-global` tier for >=3-occurrence autocommission patterns; draft permanent `w-*.md` |
-| `/swarm-status` | Live snapshot of in-flight workers, BG reviewer queue, ephemeral agents |
-
-### Orchestration (7)
-
-`/delegate`, `/handoff`, `/nudge`, `/plan`, `/pleh`, `/portfolio`, `/session-reaper`, `/status`
-
-### Memory (8)
-
-| Skill | Purpose |
-|-------|---------|
-| `/lt-mem` | Mutator: consolidate, promote, archive, compact, sanitize |
-| `/mem-health` | Score memory matrix /100 (6 criteria + v3 trigger checks) |
-| `/memory-prune` | Advisory scan for stale or broken entries |
-| `/mem-index` | Browse the memory DB: list entries by tier/type, show DB stats |
-| `/memory-search` | Search across all agent memory files |
-| `/remember` | Meta context save/load (cheaper than compaction) |
-| `/good-idea` | Promote a session win to project gotchas |
-| `/mistake` | Record a fix for a recurring issue |
-
-Shared scanner: `~/.claude/scripts/scan-mem-matrix.sh`.
-
-### Health (4)
-
-| Skill | Purpose |
-|-------|---------|
-| `/super-health` | Aggregate /100 (hooks + skills + mem + settings + sessions + comms + regression + subsystems + automations). Always runs the deepest check set (no depth flag); `--complete` adds the 5-agent post-hoc audit |
-| `/hook-health` | Score hook subsystem /100 (syntax, perf, naming, coverage) |
-| `/skill-health` | Score skill subsystem /100 (frontmatter, refs, descriptions) |
-| `/health` | Generic infra health check; `/health [component]` for targeted |
-
-### Workflow (12)
-
-`/brainstorm`, `/commit`, `/fix-issue`, `/notebook`, `/pr`, `/push`, `/rb`, `/review`, `/tdd`, `/verify`, `/wrap-up`
-
-### Meta (8)
-
-`/code-quality`*, `/debugging`*, `/design-review`, `/infra-security`*, `/orchestrator-patterns`*, `/sanity-check`, `/sync-upstream`, `/test-infra`*, `/test-scaffold`
-
-### Domain (6)
-
-`/experiment`, `/gas-patterns`*, `/hpc`, `/research`, `/threat-model`, `/wsl-gotchas`*
-
-### Testing (1)
-
-`/test-cleanup-protocol`
-
-\* = agent-only (not in `/` menu)
-
-**Health quickstart**: `/super-health` for the /100 aggregate score (always the deepest check set).
+Canonical skill roster + category breakdown: `~/.claude/docs/agent-manifest.md` § Skills (72 total). Health quickstart: `/super-health` for the /100 aggregate score (always the deepest check set).
 
 ---
 

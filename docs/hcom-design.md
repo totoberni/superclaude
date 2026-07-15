@@ -1,6 +1,6 @@
 # HCOM-Style Comms Bus Design
 
-## Status: Phase A+B+C+D-partial+D-full DONE; broker canonical for DIR/RPT/ESC
+## Shipped
 
 **As of 2026-05-09 (Phase D-full DONE):**
 - Phase A: complete — SQLite WAL DB at `~/.claude/comms/.broker.db`; `Broker` Python class operational
@@ -8,6 +8,7 @@
 - Phase C: complete — `/handoff --continue` and `/super-health` Comms component query broker (Phase D-full removed the dual-read fallback)
 - Phase D-full: COMPLETE — meta.md and orch.md migrated to broker-only reads for DIR/RPT/ESC (Phase D-full); flat-file `comms/<orch>/{directives,reports,escalations}.md` remain as Phase B dual-write snapshots for direct human inspection only
 - Backfill: `~/.claude/scripts/hcom-backfill.sh` populates broker with historical comms (idempotent via backfill_audit table). Parity verified 98.9% exact (175/177 orch-kind pairs); 2 archived-only DIR gaps (`o-example-mlmodel-1`, `o-example`) due to single-`#` heading regex miss — fixed in same wave.
+- Implementation: broker library (`~/.claude/scripts/hcom-broker.py`), hooks (`hcom-pre-tool-use.sh`, `hcom-session-end.sh`), and all skill migrations (`/handoff`, `/nudge`, `/comms-query`, `/super-health`) are shipped; see git history for the itemized build checklist.
 
 This document defines the target architecture for replacing the flat-file comms bus
 (`~/.claude/comms/<orch-name>/`) with a SQLite-backed message broker inspired by
@@ -125,63 +126,6 @@ A periodic janitor (cron or hook-driven) deletes `file_locks` rows where
 HCOM. `agent_status` rows where `last_active_at` is more than 5 minutes stale
 get marked `DEAD` and their locks released.
 
-## Broker Library API
-
-A small Python module at `~/.claude/scripts/hcom_broker.py`. Same surface
-exposed as a thin CLI shim (`hcom send …`, `hcom recv …`) for shell-based
-hooks and skills.
-
-```python
-from hcom_broker import broker
-
-# --- Send -------------------------------------------------------------------
-broker.send(
-    to="@orch-example",
-    kind="DIR",
-    seq=12,
-    body="Switch to refactor branch and rerun tests.",
-    from_agent="meta",
-)
-
-# --- Receive (blocking with timeout) ----------------------------------------
-# Returns list[Message]; marks them read_at=now() in the same txn.
-msgs = broker.recv(
-    self="orch-example",
-    kinds=["DIR", "NUDGE"],
-    timeout=30,        # 0 = non-blocking, None = block forever
-    mark_read=True,
-)
-
-# --- File lock context manager ----------------------------------------------
-# Raises CollisionError if another agent holds the lock and TTL hasn't expired.
-with broker.lock("/path/to/file.tsx", agent="orch-example", ttl_sec=30):
-    # do edit
-    ...
-
-# --- Subscribe (long-lived watcher) -----------------------------------------
-# Polls for events and dispatches to callback. Used by status daemons and
-# by the file-collision detector hook.
-broker.subscribe(
-    events=["collision", "created", "stopped", "blocked"],
-    callback=on_event,
-)
-
-# --- Inspect ----------------------------------------------------------------
-broker.list_agents()                       # returns agent_status rows
-broker.list_unread(kind="ESC")             # all unanswered escalations
-broker.history(self="orch-example", n=20)   # last N messages for an agent
-```
-
-Implementation notes:
-
-- All writes use `BEGIN IMMEDIATE` to grab the writer lock early, avoiding
-  the SQLite "deferred-then-fail" failure mode under contention.
-- `recv()` blocking is implemented as a tight poll loop (50ms interval) with
-  a timeout, not LISTEN/NOTIFY (SQLite has no notify). Acceptable given our
-  scale.
-- Each agent identifies itself via `$CLAUDE_AGENT_NAME` env var, set by
-  the launcher. Workers inherit and override via Agent-tool wrapper.
-
 ## Hook Integration
 
 Three hooks tie the broker into Claude Code's lifecycle:
@@ -205,18 +149,6 @@ Three hooks tie the broker into Claude Code's lifecycle:
 
 The file-collision hook is the one piece that meaningfully changes agent
 behavior — the others are passive infrastructure.
-
-## Migration Path (status as of 2026-05-09)
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| A | Stand up SQLite + broker library; existing flat-file comms continue | ✅ Done |
-| B | Dual-write (writes to both flat-file and SQLite) | ✅ Done (`/handoff`, `/nudge`) |
-| C | Dual-read (reads from SQLite preferred, falls back to flat-file) | ✅ Done (then superseded by D-full which removed fallback) |
-| D-partial | NEW consumers SQLite-only by default | ✅ Done (`/comms-query` skill) |
-| D-full | meta.md/orch.md startup + remaining consumers migrated to broker-only; flat-file = snapshots only | ✅ DONE 2026-05-09 |
-
-**At each phase**: bake/break with single low-stakes consumer first; expand only after validation. The deferred D-full migration awaits 1-2 validation cycles confirming SQLite parity with flat-file.
 
 ## Risks
 
@@ -243,23 +175,6 @@ behavior — the others are passive infrastructure.
 - **Schema evolution**: ad-hoc ALTERs at phase boundaries are fine through
   Phase D, but post-D we should adopt a tiny migration-numbering convention
   (`migrations/001_init.sql`, etc.) before adding any new column.
-
-## Implementation Tasks (status)
-
-- [x] Write `~/.claude/scripts/hcom-broker.py` (the library)
-- [x] Write `~/.claude/hooks/hcom-pre-tool-use.sh` (mid-turn injection)
-- [x] Write `~/.claude/hooks/hcom-session-end.sh` (lock release)
-- [x] Migrate `/handoff` skill to dual-write SQLite alongside flat-file
-- [x] Migrate `/nudge` skill to use SQLite NUDGE messages
-- [x] Add `~/.claude/scripts/hcom-status` for inspection (pure Python, no sqlite3 CLI dep)
-- [x] Write `~/.claude/scripts/hcom-init.sh` (DB init)
-- [x] Write `~/.claude/scripts/hcom-backfill.sh` (historical ingest)
-- [x] Phase C dual-read in `/handoff --continue`
-- [x] Phase C dual-read in `/super-health` (NEW Comms component, 10% weight)
-- [x] NEW `/comms-query` skill (Phase D-partial, SQLite-only by design)
-- [x] Phase D-full: migrate meta.md startup to broker-first (DONE 2026-05-09)
-- [x] Phase D-full: migrate orch.md startup to broker-first (DONE 2026-05-09)
-- [x] Phase D-full: remove flat-file fallback in `/handoff --continue` and `/super-health` Comms (DONE 2026-05-09)
 
 ## Cross-References
 
