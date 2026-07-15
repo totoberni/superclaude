@@ -1,0 +1,178 @@
+# concept-registry.yaml : the SSOT-of-SSOTs for superclaude-protocol-redesign.
+#
+# Consumed by scripts/ssot-lint.py. NOT generic YAML: a small hand-rolled subset chosen so the
+# linter stays stdlib-only (no pyyaml dependency on the pre-commit path). Grammar:
+#   - id: <bare-id>                  # starts a new record (top-level list item)
+#       <key>: <bare-value>          # unquoted: no leading/trailing spaces to strip beyond trim
+#       <key>: 'regex or shell cmd'  # single-quoted: use for any value with '#', ':', '|', '\' etc.
+#       # comment                    # full-line comments (any indent) are ignored
+# Fields per row (PHASE2-CONTRACT.md §8 / DECISION-DOC.md §3):
+#   id               bare slug, unique.
+#   canonical_home   'relative/path.ext' or 'relative/path.ext:Anchor Heading Text'. Path is
+#                    relative to --root (default ~/.claude). Anchor, if given, must match a
+#                    markdown heading line in that file (substring, case-insensitive).
+#   defining_marker  optional regex (Python re). Must match ONLY inside canonical_home across the
+#                    corpus; a match elsewhere is a re-DEFINITION drift. Heading-based markers are
+#                    written with a literal '^#{1,6}\s+' prefix so a prose CITATION of the heading
+#                    (e.g. "see rules/13 § Foo") does not false-positive as a re-definition -- only
+#                    an actual heading line in another file counts as re-defined.
+#   forbidden_pattern optional regex. Must return ZERO hits outside canonical_home. This is the
+#                    negative-regex mechanism added at r1/M2 for concepts that are CONTRADICTIONS
+#                    (a wrong/retired assertion), not just restatements -- a single defining_marker
+#                    cannot tell a re-introduced wrong claim from a legitimate same-topic pointer.
+#   ground_truth     optional shell command (run via `sh -c`); exit 0 means the fact holds. Used
+#                    when the checkable invariant is a fact about the filesystem/corpus, not a
+#                    designated "home" (concern-map.md's ANCHOR disposition).
+#   pointer_only     optional bool (true/false, default false). When true, only canonical_home
+#                    resolution is checked; no defining_marker/forbidden_pattern/ground_truth. Used
+#                    for concepts with no clean machine-checkable marker (see per-row comment).
+
+# --- Required 5 (PHASE2-CONTRACT.md §8, DECISION-DOC.md §3) ---------------------------------
+
+- id: subagent-thinking-inheritance
+  canonical_home: rules/13-worker-first-mandate.md:Critical Implementation Note
+  defining_marker: 'Thinking configuration \*\*IS inherited\*\*'
+  forbidden_pattern: '(?i)subagent thinking (?:is\s+)?not\s+inherited|not\s+propagate to spawned|does not propagate to spawned|embed the keyword in the spawn prompt'
+  # concept-2 (concern-map.md row 2): SEVERE, a CONTRADICTION not a mere restatement. The
+  # retired doctrine ("thinking is NOT inherited, embed the keyword") must return zero hits
+  # outside rules/13, which is exactly the r1/M2 negative-regex fix.
+
+- id: agent-cwd-path
+  canonical_home: CLAUDE.md:Multi-Orch & Workspace
+  defining_marker: 'All agents run from `~/projects/cash/`'
+  forbidden_pattern: 'projects/workspace'
+  ground_truth: 'test -d /home/totob/projects/cash'
+  # concept-3 (concern-map.md row 3): ANCHOR disposition. ~/projects/cash is ground truth;
+  # ~/projects/workspace does not exist. ground_truth checks the fact directly rather than
+  # trusting the designated "home" (which would be the wrong anchor if it too said workspace).
+
+- id: verdict-token-grammar
+  canonical_home: skills/_shared/verdict-schema.md
+  defining_marker: '^#\s+_shared/verdict-schema\.md: two-token verdict protocol \(SOT\)'
+  # NOTE: the grammar strings themselves (`VERDICT: REWORK|CLEAN blocking=...`, `SEAL: ...`) are
+  # deliberately quoted VERBATIM in ~24 agent/skill files so the verdict-first token survives
+  # truncation (dispatch-contract.md §Extensions #2) -- that is sanctioned quoting, not drift
+  # (concern-map.md row 1: "No content drift, shapes agree"). The marker below is the file's own
+  # title declaration, which only a genuine second SOT would duplicate.
+
+- id: write-scopes
+  canonical_home: rules/12-agent-hierarchy.md:Write Scope
+  defining_marker: '^##\s+Write Scope$'
+  # concern-map.md cross-surface row "Write scopes": orch.md/scaf.md/meta.md restate per-agent
+  # SUBSETS in their own prose (agree, no drift) rather than reproducing this heading, so a
+  # heading-anchored marker is the correct scope for this check (see file header note on M2).
+
+- id: dispatch-contract
+  canonical_home: skills/_shared/dispatch-contract.md:Four parts
+  defining_marker: '^##\s+Four parts$'
+  # concern-map.md row 4: STRUCTURAL DRIFT is that rules/12:84 points to orch.md's own 5-item
+  # checklist instead of here. That is a wrong-POINTER-TARGET defect (the target file does
+  # resolve, just not to the right place) which the generic pointer resolver cannot distinguish
+  # from a correct pointer without semantic understanding -- left for the one-time FIX pass, not
+  # a fragile regex here.
+
+# --- Additional core-12 / cross-surface concepts with clean markers --------------------------
+
+- id: driver-vs-in-session-doctrine
+  canonical_home: rules/13-worker-first-mandate.md:Driver vs In-Session Convergence
+  defining_marker: '^###\s+Driver vs In-Session Convergence'
+  # concern-map.md row 5: no content drift today; 3 skill copies already collapse to a 1-line
+  # pointer. Marker guards against a FUTURE full restatement creeping back in.
+
+- id: quality-gates-r1-r7
+  canonical_home: rules/40-swarm-quality-gates.md
+  defining_marker: '^#\s+Swarm Quality Gates$'
+  # concern-map.md row 6: orch.md restates R-3 with only 5 of 7 steps (a partial-content drift a
+  # single heading marker cannot see into). The marker here only catches a literal second
+  # "# Swarm Quality Gates" file-level redefinition; the partial-restatement defect is a one-time
+  # FIX (MIGRATE R-3 to the dispatch-contract Report Contract / rules/40 pointer), not
+  # mechanically distinguishable from legitimate partial citation without per-item markers.
+
+- id: parallel-worker-cap
+  canonical_home: rules/12-agent-hierarchy.md
+  defining_marker: '\*\*Parallel limit\*\* \(universal\): 5 subagents simultaneously per message'
+  # concern-map.md row 7: no drift; confirmed unique corpus-wide at registry-authoring time.
+
+- id: no-em-dash-rule
+  canonical_home: rules/06-writing-style.md
+  forbidden_pattern: 'syntactically irreplaceable'
+  # concern-map.md row 9: DRIFT (contradiction). rules/06 is an unconditional ban; w-doc.md:50
+  # grants an exception "where syntactically irreplaceable" that contradicts it. No defining_marker
+  # (the rule is a prohibition, not a definable snippet); forbidden_pattern is the whole check,
+  # mirroring the r1/M2 negative-regex mechanism used for concept-2.
+
+- id: worker-first-decision-boundary
+  canonical_home: rules/13-worker-first-mandate.md:Decision Boundary
+  defining_marker: '^##\s+Decision Boundary: Meta\+Swarm vs Ork Handoff'
+  # concern-map.md row 10: meta.md:87-96 restates ONLY the ork-trigger list, silently dropping the
+  # positive swarm-eligibility criteria, under a heading that implies completeness. The marker
+  # catches a literal second top-level redefinition; the silent-half-drop is a one-time FIX
+  # (meta.md prose), not a pattern a marker can see (it is an omission, not an assertion).
+
+- id: memory-access-protocol
+  canonical_home: rules/12-agent-hierarchy.md:Memory Access
+  defining_marker: '^##\s+Memory Access \(Canonical for All Spawn-Capable Agents\)'
+  # concern-map.md row 11: CLAUDE.md restates this near-verbatim (POINTER disposition); agent defs
+  # already use clean 3-line pointers (the model to emulate). Marker guards the canonical heading.
+
+- id: trigger-token-escaping
+  canonical_home: rules/13-worker-first-mandate.md:Trigger Escaping (Author-Time)
+  defining_marker: '^##\s+Trigger Escaping \(Author-Time\)'
+  # concern-map.md row 12: no drift. IMPORTANT precedent for the heading-line-anchor convention:
+  # 5 other files cite this heading in prose ("see rules/13 § Trigger Escaping (Author-Time)")
+  # which is a legitimate POINTER, not a redefinition. Anchoring the marker to '^##\s+' (an actual
+  # heading line) is what keeps those 5 pointers from false-positiving; a bare substring match on
+  # "Trigger Escaping (Author-Time)" would have flagged all 5.
+
+- id: worker-fleet-roster
+  canonical_home: docs/agent-manifest.md:Worker Fleet
+  ground_truth: 'test -f /home/totob/.claude/agents/w-hostile-reviewer.md && grep -q "w-hostile-reviewer" /home/totob/.claude/docs/agent-manifest.md'
+  # cross-surface row "Worker fleet roster" (concern-map.md): 4-way drift, all rosters say 11,
+  # actual = 12 (w-hostile-reviewer missing everywhere). ANCHOR disposition: ground truth is "the
+  # real worker file exists AND the manifest mentions it", not "the manifest's own stated count",
+  # since the count itself is the thing that is wrong.
+
+- id: skill-count
+  canonical_home: docs/agent-manifest.md:Skills
+  ground_truth: 'test "$(find /home/totob/.claude/skills -maxdepth 2 -name SKILL.md | wc -l)" = "$(grep -oE "Skills \([0-9]+ total\)" /home/totob/.claude/docs/agent-manifest.md | grep -oE "[0-9]+")"'
+  # cross-surface row "Skill count" (concern-map.md): docs say 54, actual = 72. ground_truth
+  # compares the live SKILL.md count on disk against the doc's own "(N total)" claim, so the check
+  # self-updates when the doc is corrected and re-fails the moment the two diverge again.
+
+# --- Pointer-only: real concepts, no clean machine-checkable marker (do not invent fragile regexes) --
+
+- id: autocommission-authority
+  canonical_home: rules/13-worker-first-mandate.md:Autocommission Protocol Summary
+  pointer_only: true
+  # concern-map.md row 8: dual-home (rules/13 + skills/autocommission/SKILL.md), both legitimately
+  # own part of the doctrine. No single heading or phrase distinguishes "redefined" from "the
+  # other legitimate home restating its own half" without semantic scope-splitting; disposition is
+  # "Minor" drift, POINTER via B§4, not worth a fragile regex.
+
+- id: hcom-broker-status
+  canonical_home: docs/hcom-design.md
+  pointer_only: true
+  # concern-map.md cross-surface row "HCOM broker status": usage-guide.md:266-270 says "Phase A /
+  # being replaced", actively wrong vs the current state in meta.md/orch.md/hcom-design.md. The
+  # drift is a STATUS DESCRIPTION (prose narrating a rollout phase), not a fixed defining phrase or
+  # a forbidden literal -- "Phase A" and "being replaced" are ordinary words that appear in
+  # legitimate historical/rollout contexts elsewhere in the corpus, so either as a defining_marker
+  # or a forbidden_pattern this would be a fragile, false-positive-prone regex. One-time FIX only.
+
+- id: compact-snapshots-path
+  canonical_home: docs/memory-matrix.md
+  pointer_only: true
+  # concern-map.md cross-surface row "_compact-snapshots recovery path": docs/memory-matrix.md:69
+  # says `_system/_compact-snapshots/`, orch.md:44 says a different path, and BOTH directories
+  # exist on disk, so a ground_truth existence check cannot discriminate the right one from the
+  # wrong one (the bug is masked, not absent). Needs a one-time FIX + directory consolidation
+  # before any mechanical check on this concept would mean anything.
+
+- id: report-contract-block
+  canonical_home: skills/_shared/dispatch-contract.md
+  pointer_only: true
+  # concern-map.md cross-surface row "Report Contract / On Output Limits blocks": 12x + 9x
+  # deliberate verbatim duplication into worker agent defs (so the contract survives without a
+  # subagent needing to open another file mid-task) -- a leanness/MIGRATE item (save ~74 lines),
+  # not a drift/contradiction. A defining_marker would false-positive on every one of those 12
+  # sanctioned copies; out of scope for this drift check.
