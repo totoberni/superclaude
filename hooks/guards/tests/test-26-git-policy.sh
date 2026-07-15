@@ -97,6 +97,10 @@
 #   (bf) >f git commit  (bg) 2>f git push  (bh) &>f git commit        -> block
 #   (bi) FOO=1 >f git commit                                          -> block
 #   (bj) >f git status (read-only)   (bk) >f ls (no git)              -> pass
+#
+# B-h regression -- anti-DoS segment cap on the flag-write per-segment loop:
+#   (bl) basename-present command padded beyond the cap                -> block
+#   (bm) benign large command (no basename) beyond the cap             -> pass
 
 set -uo pipefail
 
@@ -268,6 +272,17 @@ run_case '(bh) &>f git commit -> block'                 '&>/tmp/zz git commit'  
 run_case '(bi) FOO=1 >f git commit -> block'            'FOO=1 >/tmp/zz git commit'          "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
 run_case '(bj) >f git status (benign) -> pass'          '>/tmp/zz git status'                "" 0 ""            "GUARD-BLOCK" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
 run_case '(bk) >f ls (no git, benign) -> pass'          '>/tmp/zz ls -la'                    "" 0 ""            "GUARD-BLOCK" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+
+# B-h regression (anti-DoS segment cap): a basename-present command padded beyond the
+# ~200-segment cap is treated as a flag write and BLOCKED for a non-meta agent
+# (bounded, no hang); a benign large command WITHOUT the basename still passes fast
+# (no false-block). The commands are built here to exceed the cap.
+CAP_BLOCK="printf enabled > $HFLAG"
+for _p in $(seq 1 250); do CAP_BLOCK="$CAP_BLOCK; echo pad$_p"; done
+run_case '(bl) basename-present >cap segs -> block'     "$CAP_BLOCK"                         "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+CAP_PASS="echo start"
+for _p in $(seq 1 250); do CAP_PASS="$CAP_PASS; echo pad$_p > /tmp/pad$_p"; done
+run_case '(bm) benign >cap segs, no basename -> pass'   "$CAP_PASS"                          "w-implementer" 0 ""            "GUARD-BLOCK" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
 
 if [ "$fails" -eq 0 ]; then
   echo "test-26-git-policy: ALL PASS"

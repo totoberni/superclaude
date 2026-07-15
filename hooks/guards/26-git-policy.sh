@@ -94,7 +94,15 @@
 # arbitrary file. Residual CLASSES NOT caught: a path or basename produced by command
 # substitution (`echo enabled > $(echo $HOME)/.claude/config/git-policy`), by `eval`,
 # or by a variable whose value itself comes from a subshell/prior call/environment;
-# and any non-Bash interpreter writing the file. The Write/Edit/MultiEdit route is
+# and any non-Bash interpreter writing the file. Two anti-DoS caps bound the cost so a
+# padded command cannot hang the guard past the wired 10s hook timeout, at the price
+# of two conservative dispositions: (1) the inline-VAR substitution processes at most
+# a fixed cap of assignments, so a basename assembled from MORE than that many split
+# assignments is not detected (passes); (2) once the flag basename IS present in the
+# expanded command, a command with more segments than the cap is treated as a flag
+# write and BLOCKED for a non-meta agent without scanning every segment -- so a
+# very-large command that merely MENTIONS the basename without writing it is
+# conservatively over-blocked for a non-meta agent. The Write/Edit/MultiEdit route is
 # covered separately by guards/20-write-acl.sh (those tools name the path as
 # structured data); the Bash route is inherently porous. True enforcement of
 # "non-meta cannot flip the flag" would be filesystem-level (flag dir not writable by
@@ -287,7 +295,7 @@ _guard_git_policy_norm_target() {
 # documented residual (see the header) and is NOT caught.
 _guard_git_policy_hits_flagwrite() {
   local cmd="$1" flagpath flagbase seps norm line cwd="" c1 c2 crest
-  local has_write clean tok ntok an av i acnt nl=$'\n'
+  local has_write clean tok ntok an av i acnt nl=$'\n' seg_cap=200 nseg
   local -a toks gp_names=() gp_vals=()
 
   # Collapse backslash-newline line continuations FIRST (same reason as in
@@ -338,6 +346,12 @@ _guard_git_policy_hits_flagwrite() {
 $asrc
 EOF
   acnt=${#gp_names[@]}
+  # Cap the substitution loop: each iteration re-scans the whole command string, so a
+  # command padded with thousands of assignments would be O(n^2) and hang the guard
+  # past the wired 10s hook timeout. A legitimate command has very few assignments;
+  # process at most seg_cap. A basename assembled from more than seg_cap assignments
+  # is a documented residual (see the header).
+  [ "$acnt" -gt "$seg_cap" ] && acnt="$seg_cap"
   i=0
   while [ "$i" -lt "$acnt" ]; do
     an="${gp_names[$i]}"; av="${gp_vals[$i]}"
@@ -365,6 +379,21 @@ EOF
   # `git-poli\cy`) normalizes like its bare form.
   seps=$';&|(){}\n'
   norm=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr "$seps" '\n')
+
+  # Segment cap (anti-DoS): we only reach here when the flag basename is present in
+  # the EXPANDED command (fast-path above), so this is already an unusual command. The
+  # per-segment loop below runs several grep forks PER segment, so a basename-present
+  # command padded to thousands of segments would exceed the wired 10s hook timeout. A
+  # legitimate flag write has well under ~20 segments; if a basename-present command
+  # has more than seg_cap, do NOT scan them all (that is the hang) -- treat it as a
+  # flag write and BLOCK (for a non-meta agent; meta is exempt at the caller) rather
+  # than hanging OR letting a buried write slip. Documented residual: a >seg_cap-segment
+  # command that merely MENTIONS the basename without writing it is conservatively
+  # blocked for a non-meta agent.
+  nseg=$(printf '%s' "$norm" | grep -c '')
+  if [ "$nseg" -gt "$seg_cap" ]; then
+    return 0
+  fi
 
   while IFS= read -r line; do
     [ -n "$line" ] || continue
