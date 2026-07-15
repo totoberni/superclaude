@@ -26,6 +26,10 @@
 #   (g) commit, compliant message, REPO_SECRET (AKIA staged)  -> block
 #   (h) commit, compliant message, REPO_NONE (not a repo)     -> pass
 #   (i) mode=warn, git add .                                  -> pass + WARN
+#
+# (j-m) SEAL-A-verdict.md M2: keyword-shaped but NOT secret-shaped constant
+# assignments must pass (a short integer, header name, URL path, or TTL value
+# is not a secret). (n) a real high-entropy AWS secret value must still block.
 
 set -uo pipefail
 
@@ -58,6 +62,8 @@ REPO_GOOD="$TMPD/repo-good"
 REPO_MODE="$TMPD/repo-mode"
 REPO_SECRET="$TMPD/repo-secret"
 REPO_NONE="$TMPD/repo-none"
+REPO_FP="$TMPD/repo-fp"
+REPO_REALSECRET="$TMPD/repo-realsecret"
 
 setup_git() {
   git init -q "$1"
@@ -85,6 +91,23 @@ git -C "$REPO_MODE" add f.txt
 setup_git "$REPO_SECRET"
 printf 'AKIA1234567890ABCDEF\n' > "$REPO_SECRET/secret.txt"
 git -C "$REPO_SECRET" add secret.txt
+
+# M2 false-positive fixture: keyword-shaped names with NON-secret-shaped
+# values (short integer, header name, URL path, TTL).
+setup_git "$REPO_FP"
+cat > "$REPO_FP/config.py" <<'FPEOF'
+MAX_TOKEN_COUNT = 100
+RESET_PASSWORD_URL = "/x"
+API_KEY_HEADER = "X-Api-Key"
+SESSION_TOKEN_TTL=3600
+FPEOF
+git -C "$REPO_FP" add config.py
+
+# M2 real-secret fixture: a genuine high-entropy AWS secret value must still
+# block (only the non-secret-shaped VALUE case is relaxed).
+setup_git "$REPO_REALSECRET"
+printf 'AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"\n' > "$REPO_REALSECRET/config.py"
+git -C "$REPO_REALSECRET" add config.py
 
 # ── stdin + run helpers ───────────────────────────────────────────────────────
 mk_stdin() {
@@ -147,6 +170,16 @@ run_case "(h) commit, compliant message, not a repo -> pass (fail-open)" \
   "$REPO_NONE" "$CMD_COMPLIANT" 0 "" "GUARD-BLOCK"
 run_case "(i) mode=warn, git add . -> pass + WARN" \
   "$REPO_GOOD" "$CMD_D" 0 "WARN" "" SUPERCLAUDE_GUARD_COMMIT_GATE=warn
+run_case "(j) commit, MAX_TOKEN_COUNT = 100 staged -> pass (not secret-shaped)" \
+  "$REPO_FP" "$CMD_COMPLIANT" 0 "" "GUARD-BLOCK"
+run_case "(k) commit, API_KEY_HEADER = \"X-Api-Key\" staged -> pass (not secret-shaped)" \
+  "$REPO_FP" "$CMD_COMPLIANT" 0 "" "GUARD-BLOCK"
+run_case "(l) commit, RESET_PASSWORD_URL = \"/x\" staged -> pass (not secret-shaped)" \
+  "$REPO_FP" "$CMD_COMPLIANT" 0 "" "GUARD-BLOCK"
+run_case "(m) commit, SESSION_TOKEN_TTL=3600 staged -> pass (not secret-shaped)" \
+  "$REPO_FP" "$CMD_COMPLIANT" 0 "" "GUARD-BLOCK"
+run_case "(n) commit, real high-entropy AWS_SECRET_ACCESS_KEY staged -> block" \
+  "$REPO_REALSECRET" "$CMD_COMPLIANT" 2 "secret-shaped" ""
 
 if [ "$fails" -eq 0 ]; then
   echo "test-30-commit-gate: ALL PASS"

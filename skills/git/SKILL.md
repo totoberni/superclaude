@@ -29,9 +29,14 @@ The SOT is the guard, not this skill. `~/.claude/hooks/guards/26-git-policy.sh`
 reads `~/.claude/config/git-policy` on every Bash tool call. When the file says
 `disabled`, the guard mechanically BLOCKS any commit or push (git commit,
 commit-tree, cherry-pick, revert, am, rebase, merge, push, fast-import, and gh
-release create / pr merge / refs-writing api), robust to `git -C <dir>`, inline
-`-c` config, chained `cd <dir> && git commit`, `bash -c "..."` wrappers, and
-env-prefixed forms. Read-only git (status, log, diff, add) is unaffected.
+release create / pr merge / refs-writing api), robust to `git -C <dir>`,
+chained `cd <dir> && git commit`, `bash -c "..."` wrappers, env-prefixed forms,
+and an inline `-c alias.<name>=<verb>` definition invoked by its alias (the
+block matches on the aliased verb, not just the known-verb list). Read-only
+git (status, log, diff, add) is unaffected. Residual, not covered: an
+interpreter (python/perl/node/...) invoking git directly, or a wrapper binary
+named other than `git`/`gh` -- a shell-string heuristic cannot see inside
+another process's argv.
 
 When blocked, an agent must ask the owner to run `/git true`; the owner manages
 git manually (rules/00 Git Discipline; the owner reviews changes before they enter

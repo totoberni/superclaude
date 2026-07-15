@@ -24,6 +24,12 @@
 #   (f) non-SendMessage tool (Bash) with seal text           -> pass (not policed)
 #   (g) mode=warn, seal-request to a reviewer                -> pass + WARN
 #   (h) SUPERCLAUDE_GUARDS=off, seal-request to a reviewer   -> silence
+#   (i) bare "SEAL" mention (deferral/negation) to a reviewer -> pass (SEAL-A m2)
+#
+# seal-manifest.py check contract (#21 surface, guardpost_seal_binding_void):
+#   (j) sidecar reports VOID (exit 1)   -> WARN
+#   (k) sidecar reports ERROR (exit 2)  -> silence (fail-open, SEAL-A m3)
+#   (l) sidecar reports OK (exit 0)     -> silence
 
 set -uo pipefail
 
@@ -159,6 +165,56 @@ run_send "(g) mode=warn, seal-request to reviewer -> pass + WARN" \
   "RVW-round1" "$SEAL_MSG" 0 "WARN" "GUARD-BLOCK" SUPERCLAUDE_GUARD_SEAL_BINDING=warn
 run_send "(h) SUPERCLAUDE_GUARDS=off, seal-request to reviewer -> silence" \
   "RVW-round1" "$SEAL_MSG" 0 "" "GUARD-" SUPERCLAUDE_GUARDS=off
+# (i) SEAL-A m2: a bare/deferral mention of SEAL, with no colon and no
+# imperative phrasing, must NOT match is_seal_request even to a registered
+# reviewer.
+run_send "(i) bare SEAL mention (deferral) to reviewer -> pass (SEAL-A m2)" \
+  "RVW-round1" "no SEAL yet, keep reviewing; hold the SEAL until round 3" 0 "" "GUARD-BLOCK"
+
+# ── #21 surface: guardpost_seal_binding_void exit-code contract (SEAL-A m3) ──
+# seal-manifest.py check: 0=OK, 1=VOID (warn), 2=ERROR (fail-open, no warn). A
+# fake checker under FAKE_CHECKER_RC control isolates this from git/manifest
+# state entirely.
+FAKE_CHECKER="$TMPD/fake-checker.py"
+cat > "$FAKE_CHECKER" <<'PYEOF'
+#!/usr/bin/env python3
+import os, sys
+sys.exit(int(os.environ.get("FAKE_CHECKER_RC", "0")))
+PYEOF
+SIDECAR="$TMPD/seal-manifest.json"
+printf '{}' > "$SIDECAR"
+
+VOID_HARNESS="$TMPD/void-harness.sh"
+cat > "$VOID_HARNESS" <<HARNESSEOF
+#!/usr/bin/env bash
+set -uo pipefail
+INPUT=\$(cat)
+GUARD_PHASE="post"
+. "$HOOKS_DIR/lib.sh" 2>/dev/null || true
+. "$GUARDS_DIR/lib-guard.sh" || { echo "harness: lib-guard.sh missing" >&2; exit 0; }
+. "$GUARDS_DIR/64-seal-binding.sh" || { echo "harness: 64-seal-binding.sh missing" >&2; exit 0; }
+if [ "\${SUPERCLAUDE_GUARDS:-}" = "off" ]; then exit 0; fi
+guard_init "\$INPUT"
+run_guard guardpost_seal_binding_void
+exit 0
+HARNESSEOF
+
+run_void_case() {  # label rc want_must want_mustnot
+  local label="$1" fake_rc="$2" must="$3" mustnot="$4"
+  local err="$TMPD/stderr.txt"
+  jq -nc --arg sid "$SESSION" '{tool_name:"Bash", tool_input:{command:"git commit -m x"}, session_id:$sid}' \
+    | ( env SUPERCLAUDE_SEAL_MANIFEST="$FAKE_CHECKER" SUPERCLAUDE_SEAL_SIDECARS="$SIDECAR" \
+            FAKE_CHECKER_RC="$fake_rc" bash "$VOID_HARNESS" >/dev/null 2>"$err" )
+  local rc=$? ok=1
+  [ "$rc" -eq 0 ] || { ok=0; echo "    rc=$rc want=0 (PostToolUse never blocks)"; }
+  if [ -n "$must" ] && ! grep -q "$must" "$err"; then ok=0; echo "    stderr missing '$must': $(cat "$err")"; fi
+  if [ -n "$mustnot" ] && grep -q "$mustnot" "$err"; then ok=0; echo "    stderr matched forbidden '$mustnot': $(cat "$err")"; fi
+  check "$label" "$((ok == 1 ? 0 : 1))"
+}
+
+run_void_case "(j) sidecar VOID (exit 1) -> WARN" 1 "SEAL is VOID" ""
+run_void_case "(k) sidecar ERROR (exit 2) -> silence (SEAL-A m3, fail-open)" 2 "" "GUARD-"
+run_void_case "(l) sidecar OK (exit 0) -> silence" 0 "" "GUARD-"
 
 if [ "$fails" -eq 0 ]; then
   echo "test-64-seal-binding: ALL PASS"

@@ -42,17 +42,26 @@ if guard_kill_switch; then exit 0; fi
 
 guard_init "$INPUT"
 
+# dispatch_guard <fn>: run one guard in an isolated subshell so a RUNTIME abort
+# inside it (a set -u unbound-variable reference, a stray exit N) cannot skip
+# the guards ordered after it. PostToolUse never blocks (guard_block degrades
+# to a warn in GUARD_PHASE=post; see lib-guard.sh), so this exists purely to
+# contain an abort, not to gate an exit code (SEAL-A-verdict.md M1).
+dispatch_guard() {
+  ( run_guard "$1" )
+  return 0
+}
+
 # Explicit ordered PostToolUse guard invocations. Wave 2 appends its guardpost_*
 # calls below (verdict_shape, seal_binding, wrong_tool, worker_verify). None
-# exist yet; run_guard no-ops undefined names.
-run_guard guardpost_canary
+# exist yet; dispatch_guard no-ops undefined names.
 # Wave 1 PostToolUse arm.
-run_guard guardpost_heuristics
+dispatch_guard guardpost_heuristics
 # Wave 2 PostToolUse arms.
-run_guard guardpost_verdict_shape
-run_guard guardpost_seal_binding
-run_guard guardpost_seal_binding_void
-run_guard guardpost_wrong_tool
-run_guard guardpost_worker_verify
+dispatch_guard guardpost_verdict_shape
+dispatch_guard guardpost_seal_binding
+dispatch_guard guardpost_seal_binding_void
+dispatch_guard guardpost_wrong_tool
+dispatch_guard guardpost_worker_verify
 
 exit 0

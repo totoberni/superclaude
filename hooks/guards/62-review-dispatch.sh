@@ -5,14 +5,20 @@
 # (PHASE2-CONTRACT sec 8; matches converge/SKILL.md's round-reviewer roster).
 #
 # Checks:
-#   #17 LEDGER-EXISTS (BLOCK): a reviewer dispatch prompt must carry a
-#       `Ledger: <path>` line (mirrors the existing `Checkpoint: <path>` line
-#       in dispatch-contract.md section 6) AND that path must already exist on
-#       disk. This mechanises the rejected "Conductor pre-flight" prose
-#       (converge/SKILL.md's round-ledger step) that previously relied on the
-#       conductor remembering to create rounds.md before round 1
-#       (verdict-schema.md No pre-approval: every VERDICT derives from a
-#       ledgered round, never an unrecorded one).
+#   #17 LEDGER-EXISTS (BLOCK, scoped to a converge context — SEAL-A M3 fix): a
+#       reviewer dispatch prompt must carry a `Ledger: <path>` line (mirrors the
+#       existing `Checkpoint: <path>` line in dispatch-contract.md section 6)
+#       AND that path must already exist on disk. This mechanises the rejected
+#       "Conductor pre-flight" prose (converge/SKILL.md's round-ledger step)
+#       that previously relied on the conductor remembering to create
+#       rounds.md before round 1 (verdict-schema.md No pre-approval: every
+#       VERDICT derives from a ledgered round, never an unrecorded one).
+#       The ledger requirement only makes sense INSIDE a /converge round; an
+#       ad-hoc w-hostile-reviewer run or a SEAL panel is a legitimate reviewer
+#       dispatch with no ledger and must not be blocked (SEAL-A verdict M3:
+#       the original unscoped block would have bricked the very SEAL panel
+#       that found the bug). Scoped via _guard_review_dispatch_in_converge
+#       below — see that function for the detection mechanism.
 #   #20 ISOLATION-LINT (WARN): scans the prompt for phrases that indicate
 #       producer context leaked into a reviewer dispatch (dispatch-contract.md
 #       section 7 "Reviewer isolation": artifact + diff + rubric ONLY, never
@@ -30,12 +36,33 @@
 
 GUARD_MODE_REVIEW_DISPATCH=block
 
+# ── Converge-context detection (SEAL-A M3 fix) ───────────────────────────────
+# #17 is only meaningful inside a /converge round. Detect that context via the
+# SAME per-session marker 70-wrong-tool.sh drops when the `converge` governance
+# skill is invoked (_wrong_tool_marker_drop, bucket key "converge") — checked
+# through _wrong_tool_marker_present, not a re-implementation, so the marker
+# path convention (state dir + session id resolution, both env-overridable for
+# tests) has one source of truth. guard-dispatch.sh's guards/[0-9]*.sh glob
+# sources every guard file (function definitions only) before any run_guard
+# call runs, so by the time guard_review_dispatch executes, 70-wrong-tool.sh's
+# functions are already defined regardless of the two files' numeric order.
+# Fail OPEN (no converge context assumed) if the marker functions are not
+# defined at all — e.g. an isolated harness sourcing only this guard — matching
+# the guard subsystem's fail-open contract (lib-guard.sh header).
+_guard_review_dispatch_in_converge() {
+  declare -F _wrong_tool_marker_present >/dev/null 2>&1 || return 1
+  _wrong_tool_marker_present converge
+}
+
 # ── #17: Ledger: <path> line present, and the path exists ───────────────────
 # Accepts the line bare (`Ledger: <path>`) or bullet-prefixed (`- Ledger:
 # <path>` / `* Ledger: <path>`), optionally indented, mirroring how
-# dispatch-contract's Checkpoint: line is written in practice.
+# dispatch-contract's Checkpoint: line is written in practice. Scoped to a
+# converge context (see _guard_review_dispatch_in_converge): outside one, an
+# ad-hoc reviewer dispatch or a SEAL panel passes without a ledger.
 _guard_review_dispatch_ledger() {
   local prompt="$1" path
+  _guard_review_dispatch_in_converge || return 0
   path=$(printf '%s' "$prompt" \
     | grep -oP -- '(^|[-*])[[:space:]]*Ledger:[[:space:]]*\K\S+' | head -1)
   if [ -z "$path" ] || [ ! -f "$path" ]; then

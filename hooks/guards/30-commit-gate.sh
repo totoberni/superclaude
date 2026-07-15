@@ -79,8 +79,14 @@ _guard_commit_gate_staged() {
     return 0
   fi
 
+  # The keyword arm requires a SECRET-SHAPED VALUE (>=16 chars of a
+  # base64/hex-ish alphabet, quoted or bare), not just a keyword-shaped name.
+  # Without this, everyday constants like `MAX_TOKEN_COUNT = 100`,
+  # `API_KEY_HEADER = "X-Api-Key"`, or `SESSION_TOKEN_TTL=3600` false-blocked
+  # every commit that touched them (SEAL-A-verdict.md M2). AKIA and
+  # PRIVATE-KEY shapes are already secret-shaped and are left as-is.
   if git -C "$cwd" diff --cached 2>/dev/null | grep -E '^\+' | grep -v '^\+\+\+ ' \
-       | grep -qP -- 'AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|[A-Z_]*(SECRET|TOKEN|PASSWORD|API_?KEY)[A-Z_0-9]*\s*=\s*\S'; then
+       | grep -qP -- "AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|[A-Z_]*(SECRET|TOKEN|PASSWORD|API_?KEY)[A-Z_0-9]*\s*=\s*[\"']?[A-Za-z0-9+/=_-]{16,}"; then
     guard_block "staged diff adds a secret-shaped string (AWS-key shape, private-key header, or SECRET/TOKEN/PASSWORD/API_KEY assignment); rules/00 Security: no secrets in code"
   fi
 }

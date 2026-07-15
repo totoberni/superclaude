@@ -114,13 +114,18 @@ _guard_seal_binding_is_cont_tool() {
   return 1
 }
 
-# A seal / final-audit request. Uppercase SEAL is a strong token signal (matches the
-# verdict-schema SEAL: line and imperatives like "emit a SEAL"); the phrase arm
-# (case-insensitive) covers "seal this", "final audit", etc. A message merely
-# mentioning a lowercase "seal" in passing does NOT match.
+# A seal / final-audit request. Requires SEAL adjacent to an instruction, not a
+# bare mention (SEAL-A m2 fix): the prior `\bSEAL\b` arm matched ANY uppercase
+# mention of the word, so "no SEAL yet, keep reviewing" and "hold the SEAL
+# until round 3" both blocked despite being deferrals, not requests. Tightened
+# to two arms: (1) `SEAL:` immediately followed by a colon — the verdict-schema
+# SEAL: line format, an explicit instruction to emit one; (2) an imperative
+# seal-request phrase (case-insensitive) — "seal this", "emit a SEAL", "final
+# audit", "produce a SEAL", etc. A message merely mentioning uppercase SEAL in
+# passing, with no colon and no imperative phrasing, does NOT match.
 _guard_seal_binding_is_seal_request() {
   local text="${1:-}"
-  printf '%s' "$text" | grep -qE '\bSEAL\b' && return 0
+  printf '%s' "$text" | grep -qE '\bSEAL:' && return 0
   printf '%s' "$text" | grep -qiE \
     'seal this|emit an? seal|emit the seal|now seal|please seal|go ahead and seal|final audit|final seal|seal the (artifact|work|campaign|change|diff|pr|branch|release|result|thing)|produce an? seal|produce the seal|give( me)? an? seal|give( me)? the seal' \
     && return 0
@@ -198,11 +203,17 @@ guardpost_seal_binding_void() {
   [ -f "$checker" ] || return 0
 
   local globs="${SUPERCLAUDE_SEAL_SIDECARS:-$HOME/.claude/plans/*/seal-manifest.json:$HOME/.claude/plans/*/*/seal-manifest.json}"
-  local IFS=':' g sidecar
+  local IFS=':' g sidecar rc
   for g in $globs; do
     for sidecar in $g; do
       [ -f "$sidecar" ] || continue
-      if ! python3 "$checker" check --sidecar "$sidecar" >/dev/null 2>&1; then
+      # seal-manifest.py check contract: 0 = OK, 1 = VOID (warn), 2 = ERROR
+      # (sidecar/args unusable, fail-open, no warn). SEAL-A m3 fix: the prior
+      # `if ! ...` treated any non-zero exit as VOID, so an unreadable/argless
+      # sidecar (exit 2) emitted a spurious "sealed artifact changed" warn.
+      python3 "$checker" check --sidecar "$sidecar" >/dev/null 2>&1
+      rc=$?
+      if [ "$rc" -eq 1 ]; then
         guard_warn "a sealed artifact changed after its SEAL; the SEAL is VOID, a fresh seal is required ($sidecar; verdict-schema revision-binding, R-5)"
       fi
     done
