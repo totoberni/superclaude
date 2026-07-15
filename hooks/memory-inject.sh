@@ -38,9 +38,13 @@ fi
 # --- 1. Imperative pointer (always injected; the behavior trigger) -------------
 # Imperative phrasing is deliberate: a passive "memory is available" did not make
 # subagents query. "BEFORE you act, FIRST run ..." does.
+# 2026-07-15: teach the SHORT wrapper first. ~/.claude/bin/mem sets HF_HUB_OFFLINE
+# itself and auto-inserts --name, so it is the complete invocation with no env
+# prefix; the long form this hook used to teach cost ~40 wasted tokens per call
+# for every agent in every session, and agents copied it verbatim all campaign.
 POINTER="MEMORY (read this first): your persistent memory is a hybrid-search SQLite DB at ~/.claude/agent-memory/.memory.db — there are NO MD memory files to read. BEFORE you rely on any assumption about a project, library, tool, convention, or past decision, FIRST query it:
-  HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py search \"<your topic> gotchas\" -k 6
-then fetch a full entry with: memory_db.py get --name <slug>; to find memories related to one you already hold (near-dups, or the same topic worded differently), use: memory_db.py similar --name <slug>. Tiers: instance/<agent>, shared-projects, shared-global, class. To write/update memory, use the memory skills (/remember, /good-idea, /lt-mem, /mistake) — never hand-write .md memory files. (See rules/12 § Memory Access for detail.)"
+  ~/.claude/bin/mem search \"<your topic> gotchas\" -k 6
+then: mem get <slug> for a full entry; mem similar <slug> for near-dup/related rows; mem list [--tier T]. (mem sets the offline env itself; no HF_HUB_OFFLINE prefix needed.) Tiers: instance/<agent>, shared-projects, shared-global, class. To write/update memory, use the memory skills (/remember, /good-idea, /lt-mem, /mistake) — never hand-write .md memory files. (See rules/12 § Memory Access for detail.)"
 
 # --- 2. Agent-scoped recovery slice — top-level (SessionStart) only ------------
 # Subagents are task-scoped; a generic slice is noise for them, so we keep their
