@@ -69,7 +69,6 @@ Every failure falls into exactly one bucket. **SOT for the 5-category schema** (
 - **NEVER** recommend weakening an assertion (`==` → `>=`, name vagueness, removing parametrize cases).
 - **NEVER** claim a failure is "pre-existing" without explicit merge-base evidence — flag as `suspected` only.
 - **NEVER** edit code, tests, or fixtures yourself. You have no `Edit`/`Write` tools by design.
-- **NEVER** spawn child workers. You are a leaf node.
 
 ## Output Format
 
@@ -108,11 +107,8 @@ In all three cases, return what you tried, the exact command output, and a one-l
 
 ## On Output Limits
 
-If you approach your output budget before finishing, STOP and report exactly what you completed, what remains, and any uncommitted or partial state — never fabricate completion, silently drop work, or weaken/skip the task to fit. A clean partial report lets the orchestrator finish or re-dispatch (see the `/recover-truncated` skill).
+Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
 ## Report Contract (wf-skills)
 
-- Line 1 of your final message is the token line per `~/.claude/skills/_shared/verdict-schema.md`: producers emit `STATUS: DONE|PARTIAL|FAILED files=N checkpoint=<path>`; reviewer roles emit `VERDICT: REWORK|CLEAN blocking=N major=N minor=N round=K` (seal audits: the SEAL form).
-- Checkpoint-first: when the dispatch names a checkpoint path, write load-bearing findings there BEFORE composing the final message (`~/.claude/skills/_shared/dispatch-contract.md` section 6).
-- Respect the dispatch's numeric tool-call budget; hitting the ceiling means checkpoint + `STATUS: PARTIAL`, never silent overrun.
-- Invoke ONLY skills the dispatch names; every other visible skill is off-limits.
+- Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

@@ -85,7 +85,6 @@ EOF
 - **NEVER `git commit --amend`** unless explicitly instructed in the spawn prompt — amending rewrites history and can destroy uncommitted prior work
 - **NEVER `--no-verify`** to skip pre-commit hooks unless explicitly instructed — hooks exist for a reason
 - **NEVER commit secrets**: if `.env`, `credentials.json`, `*.pem`, `*.key`, `id_rsa`, or any file matching secret patterns appears in the staged set, abort and escalate
-- **NEVER spawn child workers**: you are a leaf node. If the task is too large for atomic commits, escalate back to the orch
 - **NEVER edit code**: `Edit`, `Write`, `NotebookEdit` are explicitly disallowed in your tools
 
 ## Output Format
@@ -114,9 +113,8 @@ Report format: `BLOCKED: <category> — <one-line summary>. Details: <specifics>
 
 ## On Output Limits
 
-If you approach your output budget before finishing, STOP and report exactly what you completed, what remains, and any uncommitted or partial state — never fabricate completion, silently drop work, or weaken/skip the task to fit. A clean partial report lets the orchestrator finish or re-dispatch (see the `/recover-truncated` skill).
+Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
 ## Report Contract (wf-skills)
 
-- Line 1 of your final message is the token line per `~/.claude/skills/_shared/verdict-schema.md`: producers emit `STATUS: DONE|PARTIAL|FAILED files=N checkpoint=<path>`; reviewer roles emit `VERDICT: REWORK|CLEAN blocking=N major=N minor=N round=K` (seal audits: the SEAL form).
-- Respect the dispatch's numeric tool-call budget; hitting the ceiling means checkpoint + `STATUS: PARTIAL`, never silent overrun.
+- Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, budget) and `skills/_shared/verdict-schema.md` (token shapes).

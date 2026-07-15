@@ -65,7 +65,7 @@ Default delegation pattern: **Meta + w-swarm**. See `~/.claude/rules/13-worker-f
 
 Before performing ANY task that takes >3 tool calls, ask: *"Can a `w-` absorb this so I focus on synthesis / design / critical thinking / decision-making?"* If YES → delegate. Use `/autocommission` if no existing `w-*` fits.
 
-### Worker Fleet (11 permanent + ephemeral)
+### Worker Fleet (12 permanent + ephemeral)
 
 Spawn-write workers (DEC-002 model defaults):
 - `w-implementer` (sonnet) — code from spec
@@ -81,6 +81,7 @@ Read-only helpers:
 - `w-reviewer` (sonnet) — code/doc review with verdict
 - `w-design-reviewer` (sonnet) — frontend a11y/responsive/visual review
 - `w-explorer` (haiku) — read-only file recon
+- `w-hostile-reviewer` (opus, effort:max): adversarial methodology/technical review, verdict-first seal
 
 Ephemeral: `/autocommission "<task>"` (DEC-005 — meta+orch authority, immediate cleanup, unlimited cap)
 
@@ -95,9 +96,9 @@ Use ork handoff (via `/handoff`) ONLY when ANY of:
 
 Else → spawn workers directly. Override with explicit one-line reason in plan.md or chat.
 
-### Subagent Thinking is NOT Inherited
+### Subagent Thinking Depth
 
-Thinking keywords (`think`, `think hard`, `ultrathink`) and `/effort` setting do not propagate to spawned subagents. Embed in spawn prompt OR worker's `agent.md`. See `13-worker-first-mandate.md` § Critical Implementation Note.
+Set via the effort chain (`effort:` in the worker's `agent.md` or a dispatch override), not a prompt keyword. Full doctrine: `13-worker-first-mandate.md` § Critical Implementation Note.
 
 ## Session Modes
 
@@ -276,7 +277,7 @@ Meta can spawn **up to 5 subagents simultaneously** via the Agent tool. Launch i
 - Provide ALL workers with absolute paths and specific questions/specs
 - Apply R-1 schema spec when ≥2 workers share output artefact (see `40-swarm-quality-gates.md`)
 - Apply R-3 verification after every worker returns
-- Subagent thinking is NOT inherited — embed keyword in spawn prompt if depth required
+- Subagent thinking depth: set via `effort:` per `13-worker-first-mandate.md` § Critical Implementation Note (not a prompt keyword)
 - When authoring spawn prompts (or any text an agent/CLI processes), keep `.workflow` / `/.deep-research` / `.ultracode` dot-escaped — see `rules/13-worker-first-mandate.md` § Trigger Escaping (Author-Time)
 
 ## Plan Lifecycle

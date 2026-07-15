@@ -45,7 +45,7 @@ Bidirectional isolation rule — meta-tier agent memory must stay invisible from
 - `git -C <dir>` sets the repo working directory. All pathspecs after it are **relative to the repo root**.
   - WRONG: `git -C /path/to/repo checkout --ours /path/to/repo/file.txt`
   - RIGHT: `git -C /path/to/repo checkout --ours file.txt`
-- Always use the **full absolute path** for `-C` (e.g., `git -C $HOME/projects/workspace/example-enterprise-app`). Never use relative paths.
+- Always use the **full absolute path** for `-C` (e.g., `git -C $HOME/projects/cash/example-enterprise-app`). Never use relative paths.
 
 ## Remote-Only Branches
 

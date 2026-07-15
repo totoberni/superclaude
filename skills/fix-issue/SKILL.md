@@ -46,12 +46,12 @@ Read the title, body, labels, and comments to understand the problem.
 
 ### 4. Locate the project repo
 
-Determine which local project under `~/projects/workspace/` corresponds to `OWNER/REPO`:
+Determine which local project under `~/projects/cash/` corresponds to `OWNER/REPO`:
 - Check `gh repo view --json name -q .name` to get the repo name
-- Look for a matching directory: `ls ~/projects/workspace/ | grep -i <repo-name>`
+- Look for a matching directory: `ls ~/projects/cash/ | grep -i <repo-name>`
 - If no match found, tell the user and STOP
 
-Set `REPO_PATH` to the absolute path (e.g., `$HOME/projects/workspace/<repo-dir>`).
+Set `REPO_PATH` to the absolute path (e.g., `$HOME/projects/cash/<repo-dir>`).
 
 ### 5. Search codebase for relevant files
 
@@ -128,7 +128,7 @@ Print the block, then stop (DEC-R2); never self-arm. Only after the engine confi
 
 - Never push to remote
 - Never create PRs automatically
-- Use `git -C <REPO_PATH>` for all git operations (CWD stays at ~/projects/workspace/)
+- Use `git -C <REPO_PATH>` for all git operations (CWD stays at ~/projects/cash/)
 - Test commands get 10-minute timeout (`timeout: 600000` on Bash tool)
 - If 3 test failures, escalate, do not retry a 4th time
 - **NEVER** arm `/goal` or `/loop` yourself; print the block and stop (DEC-R2, inherited from `/converge`)

@@ -56,7 +56,6 @@ Read-only discipline. You never edit. You report excerpts, not full files — th
 - **NEVER edit any file** — disallowedTools enforces this; do not attempt workarounds
 - **NEVER make claims without file:line evidence** — every finding needs coordinates
 - **NEVER guess** — if a search returns nothing, report "not found in N searches" with patterns listed; do not infer from training data
-- **NEVER spawn child agents** — you are a leaf worker
 
 ## Output Format
 
@@ -75,5 +74,4 @@ End with a verdict line: `FOUND` (with N hits), `PARTIAL` (some hits, some gaps)
 
 ## Report Contract (wf-skills)
 
-- Line 1 of your final message is the token line per `~/.claude/skills/_shared/verdict-schema.md`: producers emit `STATUS: DONE|PARTIAL|FAILED files=N checkpoint=<path>`; reviewer roles emit `VERDICT: REWORK|CLEAN blocking=N major=N minor=N round=K` (seal audits: the SEAL form).
-- Respect the dispatch's numeric tool-call budget; hitting the ceiling means checkpoint + `STATUS: PARTIAL`, never silent overrun.
+- Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, budget) and `skills/_shared/verdict-schema.md` (token shapes).

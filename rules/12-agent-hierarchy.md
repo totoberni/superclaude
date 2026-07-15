@@ -24,11 +24,11 @@ Named orchs (`orch-<name>.md`) are thin aliases referencing `orch.md`. Template 
 
 ## Global Workspace Rule
 
-**All agents run from `~/projects/workspace/` as CWD.** Never `cd` into a project directory.
+**Agent CWD**: all agents operate from `~/projects/cash/` (canonical statement: CLAUDE.md § Multi-Orch & Workspace). Never `cd` into a project directory.
 
 - Git: `git -C <repo-absolute-path> <command>`
 - Files: always absolute paths
-- Workers inherit `~/projects/workspace/` as CWD
+- Workers inherit `~/projects/cash/` as CWD
 
 **NEVER touch** (in ANY project): `<project>/.claude/`, `<project>/CLAUDE.md`
 
@@ -81,7 +81,7 @@ This rule retains only the write-scope tables above (which are hierarchy concern
 
 **Parallel limit** (universal): 5 subagents simultaneously per message via Agent tool. Both Meta and Orch.
 
-**Orch → Workers**: see `~/.claude/agents/orch.md` § Delegating to Workers for the dispatch contract checklist.
+**Orch → Workers**: see `~/.claude/skills/_shared/dispatch-contract.md` for the dispatch contract (the SOT); orch.md § Delegating to Workers is a working restatement.
 
 ## Memory Access (Canonical for All Spawn-Capable Agents)
 
@@ -102,7 +102,7 @@ A shorthand wrapper exists at `~/.claude/bin/mem`: `mem search "<q>" [-k N]` | `
 
 ## Reviewer Attribution on Dirty Trees
 
-When project policy is `/commit false` (e.g., `~/projects/workspace/example-webapp-polish`), the working tree may carry pre-existing uncommitted changes from previous sessions. `w-reviewer` reads `git diff HEAD` and CANNOT distinguish wave's contribution from prior state — produces false-positive REJECTs flagging prior work as "scope drift".
+When project policy is `/commit false` (e.g., `~/projects/cash/example-webapp-polish`), the working tree may carry pre-existing uncommitted changes from previous sessions. `w-reviewer` reads `git diff HEAD` and CANNOT distinguish wave's contribution from prior state — produces false-positive REJECTs flagging prior work as "scope drift".
 
 **Mitigation (mandatory when dispatching `w-reviewer` on `/commit false` repos)**:
 

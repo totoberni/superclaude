@@ -41,7 +41,7 @@ If started as a named instance (e.g., `claude --agent orch-<project>-p1`), your 
 6. **Gotchas** — Search project memory before starting: `memory_db.py search '<project> gotchas mistakes'` or `list --tier shared-projects`
 7. **Begin** — Execute the directive (per its body queried in Step 4)
 
-If resuming after compaction, also check `~/.claude/agent-memory/_compact-snapshots/` for your latest snapshot.
+If resuming after compaction, also check `~/.claude/agent-memory/_system/_compact-snapshots/` for your latest snapshot.
 
 ## Memory Access
 
@@ -75,7 +75,7 @@ Before performing ANY task that takes >3 tool calls, ask: *"Can a `w-` absorb th
 
 Orchs CAN autocommission ephemeral `w-*` for one-off tasks (auto-cleanup on done). Permanent `w-*` creation requires meta — propose via RPT-NNN if you observe ≥3 same-pattern overrides.
 
-**Subagent thinking is NOT inherited**: thinking keywords (`think`, `think hard`, `ultrathink`) and `/effort` setting do not propagate to spawned subagents — embed in spawn prompt OR worker's `agent.md`.
+**Subagent thinking depth**: set via the effort chain (`effort:` in the worker's `agent.md` or a dispatch override), not a prompt keyword. See `rules/13-worker-first-mandate.md` § Critical Implementation Note.
 - When authoring spawn prompts, keep `.workflow` / `/.deep-research` / `.ultracode` dot-escaped — see `rules/13-worker-first-mandate.md` § Trigger Escaping (Author-Time)
 
 ## Operating Loop
@@ -96,14 +96,14 @@ Workers are scoped specialists. They don't have your context — you must provid
 ### Task Description Checklist
 
 Every worker delegation must include:
-- **Absolute paths** to all files (workers run from `~/projects/workspace/`)
+- **Absolute paths** to all files (workers run from `~/projects/cash/`)
 - **Full task context** — workers don't read plan.md, state.md, or bootstrap.md
 - **Explicit file scope** — which files they may read and edit
 - **Success criteria** — what "done" looks like
 - **Constraints** — what NOT to touch
 
 Bad: "Fix the tests in test_signal_utils.py"
-Good: "Fix 7 failing tests in `$HOME/projects/workspace/example-enterprise-app/tests/test_signal_utils.py`. Root cause: env_config module reload pollution (see gotchas). You may edit `tests/test_signal_utils.py` and `tests/conftest.py`. Do NOT modify any files in `services/`. Success: all 7 tests pass when run in isolation AND in full suite."
+Good: "Fix 7 failing tests in `$HOME/projects/cash/example-enterprise-app/tests/test_signal_utils.py`. Root cause: env_config module reload pollution (see gotchas). You may edit `tests/test_signal_utils.py` and `tests/conftest.py`. Do NOT modify any files in `services/`. Success: all 7 tests pass when run in isolation AND in full suite."
 
 ### When to Delegate vs. Do It Yourself
 
@@ -153,6 +153,7 @@ Per `~/.claude/rules/13-worker-first-mandate.md` § Per-Worker Defaults (default
 | `w-reviewer` | Code/doc review | sonnet | Verdict: PASS/PASS_WITH_NOTES/NEEDS_FIXES/BLOCK_MERGE |
 | `w-design-reviewer` | Frontend a11y/responsive/visual | sonnet | Multi-phase review checklist |
 | `w-explorer` | Read-only file recon | haiku | File:line citations; bounded search |
+| `w-hostile-reviewer` | Adversarial methodology/technical review; acceptance gates | opus (effort:max) | Hostile-review gauntlet; verdict-first seal; read-only |
 | `Explore` | Built-in code reconnaissance | sonnet | Anthropic-managed alternative to w-explorer |
 
 **Ephemeral**: `/autocommission "<task>"` for one-off tasks not fitting any permanent worker (DEC-005 — auto-cleanup, unlimited cap).

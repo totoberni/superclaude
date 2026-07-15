@@ -58,15 +58,9 @@ Before any task that takes >3 tool calls, ask:
 
 If YES -> delegate (use `/autocommission` if no permanent `w-*` fits). If NO -> retain only when surgical edit <=50 lines or single-shot decision needing your full context.
 
-### Subagent Thinking Is NOT Inherited
+### Subagent Thinking Depth
 
-**Most error-prone gotcha**: thinking keywords (`think`, `think hard`, `think harder`, `megathink`, `ultrathink`) and `/effort` setting do **not** propagate to spawned subagents.
-
-To get thinking depth in a worker:
-- (a) **Embed the keyword in the spawn prompt text** the worker reads, OR
-- (b) **Set the default in the worker's `agent.md`** instruction text
-
-When dispatching parallel batches with mixed thinking depth, embed differently per worker.
+Thinking depth propagates via the effort chain, not prompt keywords: set `effort:` in the worker's `agent.md` or override model/effort at dispatch. Full doctrine: `rules/13-worker-first-mandate.md` § Critical Implementation Note.
 
 ---
 
@@ -78,7 +72,7 @@ When dispatching parallel batches with mixed thinking depth, embed differently p
 | `scaf` | `claude --agent scaf` | opus | Superclaude infrastructure (agents, hooks, rules, settings.json) |
 | `orch` / `o-<proj>-<seq>` | `claude --agent o-<name>` | opus | Persistent project execution (EXCEPTION path — see decision tree) |
 
-### Worker Fleet (11 permanent w-*)
+### Worker Fleet (12 permanent w-*)
 
 | Worker | Model | Use Case |
 |--------|-------|----------|
@@ -93,6 +87,7 @@ When dispatching parallel batches with mixed thinking depth, embed differently p
 | `w-reviewer` | sonnet | Read-only code review (3 modes: general/infra/security). `--scathingly-deep` -> opus |
 | `w-design-reviewer` | sonnet | Multi-phase frontend design review (interaction, responsive, polish, a11y, robustness) |
 | `w-planner` | opus | Creates / updates project plans (superclaude `plans/` or in-project `.orchestrator/`) |
+| `w-hostile-reviewer` | opus | Adversarial methodology/technical review (effort:max); runs the hostile-review gauntlet; verdict-first seal; read-only |
 
 Aggregate distribution if fully adopted: ~5% haiku / ~70% sonnet / ~25% opus.
 
@@ -133,7 +128,7 @@ You are **o-<project>-<seq>**, a named orchestrator instance.
 
 ---
 
-## Slash Commands (54 skills, grouped by purpose)
+## Slash Commands (72 skills, grouped by purpose)
 
 ### Delegation (5)
 
@@ -256,16 +251,16 @@ Standalone hooks:
 | `stop.sh` | Stop | Stop-event handling |
 | `subagent-stop.sh` | SubagentStop | Subagent completion handling |
 | `comms-schema-lint.sh` | PreToolUse (writes to comms) | Schema validation for comms messages |
-| `hcom-pre-tool-use.sh` | PreToolUse | HCOM (Phase A) — message broker integration |
-| `hcom-session-end.sh` | SessionEnd | HCOM (Phase A) — session-end broker cleanup |
+| `hcom-pre-tool-use.sh` | PreToolUse | HCOM broker integration (Phase D-full; broker canonical for DIR/RPT/ESC) |
+| `hcom-session-end.sh` | SessionEnd | HCOM broker session-end cleanup (Phase D-full) |
 
 Details: `~/.claude/rules/25-context-management.md`
 
 ---
 
-## HCOM (Phase A)
+## HCOM (Phase D-full)
 
-The flat-file comms bus (`~/.claude/comms/<orch-name>/`) is being replaced by a SQLite-backed message broker inspired by HCOM (Claude Hook Comms). Phase A hooks (`hcom-pre-tool-use.sh`, `hcom-session-end.sh`) are wired in; the broker (`scripts/hcom-broker.py`) handles durable concurrent writes, mid-turn message injection, and queryable cross-orch escalations.
+As of 2026-05-09 (Phase D-full), the SQLite-backed message broker (`~/.claude/comms/.broker.db`) is CANONICAL for DIR/RPT/ESC/NUDGE/EVENT: agents read broker content via SQL, not the flat files. The flat-file comms bus (`~/.claude/comms/<orch-name>/`) remains only as Phase B dual-write snapshots for human inspection. Hooks `hcom-pre-tool-use.sh` and `hcom-session-end.sh` are wired in; the broker handles durable concurrent writes, mid-turn message injection, and queryable cross-orch escalations.
 
 Full design: `~/.claude/docs/hcom-design.md`.
 
@@ -277,7 +272,7 @@ Full design: `~/.claude/docs/hcom-design.md`.
 
 **Settings**: `~/.claude/settings.json` — permissions, sandbox, hooks. Only scaf edits this file.
 
-**Sandbox**: enabled, filesystem write restricted to `~/projects/workspace/`, `~/.claude/`, `/tmp`.
+**Sandbox**: enabled, filesystem write restricted to `~/projects/cash/`, `~/.claude/`, `/tmp`.
 
 ---
 

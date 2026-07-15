@@ -86,7 +86,6 @@ Flag and address these violations:
 - **NEVER change function/method/module names without grep + update** all call sites in the same commit
 - **NEVER refactor across 5+ files** without explicit `cross-cutting` mode and `think hard`
 - **ALWAYS run tests after each refactor step** — not just at the end
-- **NEVER spawn child workers** (you ARE a worker)
 - **3 attempts then escalate**: if 3 different refactor approaches all failed (broken tests, scope creep, ambiguous intent), STOP and escalate
 
 Additional commit discipline:
@@ -129,11 +128,8 @@ STOP and escalate when:
 
 ## On Output Limits
 
-If you approach your output budget before finishing, STOP and report exactly what you completed, what remains, and any uncommitted or partial state — never fabricate completion, silently drop work, or weaken/skip the task to fit. A clean partial report lets the orchestrator finish or re-dispatch (see the `/recover-truncated` skill).
+Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
 ## Report Contract (wf-skills)
 
-- Line 1 of your final message is the token line per `~/.claude/skills/_shared/verdict-schema.md`: producers emit `STATUS: DONE|PARTIAL|FAILED files=N checkpoint=<path>`; reviewer roles emit `VERDICT: REWORK|CLEAN blocking=N major=N minor=N round=K` (seal audits: the SEAL form).
-- Checkpoint-first: when the dispatch names a checkpoint path, write load-bearing findings there BEFORE composing the final message (`~/.claude/skills/_shared/dispatch-contract.md` section 6).
-- Respect the dispatch's numeric tool-call budget; hitting the ceiling means checkpoint + `STATUS: PARTIAL`, never silent overrun.
-- Invoke ONLY skills the dispatch names; every other visible skill is off-limits.
+- Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

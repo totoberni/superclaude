@@ -225,7 +225,7 @@ Escape hatch when sync produces divergence. Drops `.ipynb`, rebuilds from `.py` 
 
 ### `nb reset-kernel <notebook>`
 
-Drops the persistent KernelManager for the notebook's project, deletes connection file, ends ZMQ session. Next `nb execute` cold-starts. **Now requires the notebook arg** (V1-L3: project resolution is per-notebook, since agents run from `~/projects/workspace/` per global rule).
+Drops the persistent KernelManager for the notebook's project, deletes connection file, ends ZMQ session. Next `nb execute` cold-starts. **Now requires the notebook arg** (V1-L3: project resolution is per-notebook, since agents run from `~/projects/cash/` per global rule).
 
 ### `nb lock-status <notebook>`
 

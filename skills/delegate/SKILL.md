@@ -30,7 +30,7 @@ Choose the right `w-*` worker for the task:
 | `Explore` | Code reconnaissance (read-only) |
 
 Provide in the task description:
-- **Absolute paths** to all files (workers run from `~/projects/workspace/`)
+- **Absolute paths** to all files (workers run from `~/projects/cash/`)
 - **Full task context** — workers don't read plan.md or state files
 - **Explicit file scope** — which files they may read and edit
 - **Success criteria** — what "done" looks like

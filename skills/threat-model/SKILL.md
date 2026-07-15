@@ -19,7 +19,7 @@ Perform a structured STRIDE threat analysis on a component or project.
 
 Parse `$ARGUMENTS` for the target:
 - Component name: `/threat-model auth-middleware`
-- Project path: `/threat-model $HOME/projects/workspace/example-enterprise-app`
+- Project path: `/threat-model $HOME/projects/cash/example-enterprise-app`
 - File scope: `/threat-model src/api/routes.ts`
 
 If `--<project>` flag present, activate <PROJECT> cross-referencing (see below).

@@ -12,7 +12,7 @@ Quick reference for all superclaude agents. Source of truth: the agent files the
 | `scaf.md` | Infrastructure | opus | `~/.claude/` infrastructure edits | `claude --agent scaf` |
 | `orch.md` | Tactical (base, EXCEPTION path) | opus | Persistent project execution template | `claude --agent orch` |
 
-### Worker Fleet (11 permanent w-*)
+### Worker Fleet (12 permanent w-*)
 
 Default models follow the SOT matrix in `~/.claude/rules/13-worker-first-mandate.md` § Per-Worker Defaults.
 
@@ -29,6 +29,7 @@ Default models follow the SOT matrix in `~/.claude/rules/13-worker-first-mandate
 | `w-reviewer.md` | sonnet | Read-only code review (3 modes); `--scathingly-deep` -> opus | via Agent tool |
 | `w-design-reviewer.md` | sonnet | Multi-phase frontend design review (interaction/responsive/polish/a11y) | via Agent tool |
 | `w-planner.md` | opus | Plan creation/updates (superclaude `plans/` or in-project `.orchestrator/`) | via Agent tool |
+| `w-hostile-reviewer.md` | opus | Adversarial methodology/technical review (effort:max); hostile-review gauntlet; verdict-first seal; read-only | via Agent tool |
 
 Aggregate distribution if fully adopted: ~5% haiku / ~70% sonnet / ~25% opus.
 
@@ -49,7 +50,7 @@ When `/promote` finds an autocommission pattern that has recurred >=3 times (tra
 | `o-example-5.md`, `o-example-6.md`, `o-example-7.md` | IQC orch instances retired after their phases completed |
 | (legacy entries) | Earlier `orch-*.md`, `scaf2.md`, `o-<project>-1b.md` retained for reference |
 
-## Skills (54 total)
+## Skills (72 total)
 
 ### By Category
 

@@ -73,7 +73,7 @@ memory: project
 ---
 ```
 
-Body: embed the task description as instructions. **Inline the thinking keyword** (e.g., `think hard`, `ultrathink`) in the body text — subagent thinking is NOT inherited from the parent (`13-worker-first-mandate.md` § Critical Implementation Note).
+Body: embed the task description as instructions. To give the worker thinking depth, set `effort:` in its frontmatter, not a prompt keyword (see `13-worker-first-mandate.md` § Critical Implementation Note).
 
 When authoring spawn prompts, keep `.workflow` / `/.deep-research` / `.ultracode` dot-escaped (see `rules/13-worker-first-mandate.md` § Trigger Escaping (Author-Time)).
 
@@ -155,7 +155,7 @@ If unsure, pick the next-higher tier — overspend on a one-off costs less than 
 - NEVER cap to fewer than 1 simultaneous ephemeral (DEC-005 Q3 = unlimited at this stage).
 - NEVER write ephemeral agents to `~/.claude/agents/` directly — always `_ephemeral/` subdir.
 - NEVER spawn ephemeral workers from inside a `w-*` agent — workers do not spawn children.
-- ALWAYS embed thinking keyword inline in the spawn prompt — subagent thinking is not inherited (SOT: `~/.claude/rules/13-worker-first-mandate.md` § Critical Implementation Note).
+- ALWAYS set thinking depth via `effort:` in the ephemeral agent frontmatter, not a prompt keyword (SOT: `~/.claude/rules/13-worker-first-mandate.md` § Critical Implementation Note).
 - ALWAYS log the pattern to the memory DB (`shared-global` tier) to enable R-4 promotion tracking.
 
 ## Cross-References

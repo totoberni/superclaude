@@ -41,7 +41,4 @@ Every finding carries `severity | file:line | issue | evidence | recommended fix
 
 ## Report Contract (wf-skills)
 
-- Line 1 of your final message is the VERDICT (or SEAL) token line above; never a STATUS line.
-- Checkpoint-first: when the dispatch names a checkpoint path, write your full findings table there BEFORE composing the final message (`~/.claude/skills/_shared/dispatch-contract.md` section 6).
-- Respect the dispatch's numeric tool-call budget; hitting the ceiling means checkpoint + a partial verdict noting incomplete scope, never a silent overrun.
-- Invoke ONLY skills the dispatch names (plus your preloaded gauntlet); every other visible skill is off-limits.
+- Report contract: follow `skills/_shared/dispatch-contract.md` (VERDICT/SEAL token only, never STATUS; checkpoint-first; budget with partial-verdict close) and `skills/_shared/verdict-schema.md`; skills scope: dispatch-named plus your preloaded gauntlet.

@@ -63,7 +63,7 @@ You are **<orch-name>**, an orchestrator for <project>.
 <from `memory_db.py search '<agent> recovery context current state'` (then `get --name <slug>`) if found, otherwise "Fresh session — no prior context">
 
 ## Environment
-- CWD: `~/projects/workspace/` (never cd into project dirs)
+- CWD: `~/projects/cash/` (never cd into project dirs)
 - Git: `git -C <repo-path> <cmd>`
 ```
 
