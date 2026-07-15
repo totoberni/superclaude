@@ -74,6 +74,19 @@
 #   (ap) worker  f=<flagpath>; echo x > ${f}   (brace form)          -> block
 #   (aq) worker  echo enabled > $(echo $HOME)/.../git-policy         -> pass (residual)
 #   (ar) worker  f=<other-file>; echo x > $f                         -> pass (other file)
+#
+# B-d regression -- a literal TAB is intra-command whitespace, not a separator:
+#   (as) git<TAB>commit   (at) git<TAB>push                          -> block
+#   (au) git<TAB>status (benign)                                     -> pass
+#   (av) worker  printf enabled >\t$HOME/.../git-policy              -> block
+#   (aw) worker  printf x | tee\t$HOME/.../git-policy                -> block
+#
+# B-e regression -- a flag basename assembled from split literal-valued vars (the
+# O(1) short-circuit runs AFTER $HOME + VAR expansion):
+#   (ax) worker  b=git; > $HOME/.../${b}-policy                      -> block
+#   (ay) worker  x=git; y=policy; > $HOME/.../${x}-${y}              -> block
+#   (az) worker  b=git; > $HOME/.../${b}-other  (non-flag basename)  -> pass
+#   (ba) git${IFS}commit (whitespace-var separator, disclosed residual) -> pass
 
 set -uo pipefail
 
@@ -205,6 +218,27 @@ run_case '(ao) worker f=<base>; > dir/$f -> block'      'f=git-policy; echo enab
 run_case '(ap) worker ${f} brace indirection -> block'  'f=$HOME/.claude/config/git-policy; echo x > ${f}'       "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
 run_case '(aq) worker cmd-sub path (residual) -> pass'  'echo enabled > $(echo $HOME)/.claude/config/git-policy' "w-implementer" 0 ""            "GUARD-BLOCK" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
 run_case '(ar) worker f=<other>; > $f (benign) -> pass' 'f=$HOME/.claude/config/other; echo x > $f'              "w-implementer" 0 ""            "GUARD-BLOCK" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+
+# B-d regression: a literal TAB is intra-command whitespace, not a separator, so a
+# tab between git and its verb (or before a flag-write target) must still block;
+# git<TAB>status stays benign. Tabs are injected via ANSI-C $'...' quoting (which
+# expands \t but does NOT expand $HOME, so the flag-write forms stay literal).
+run_case '(as) git<TAB>commit -> block'                 $'git\tcommit -m x'                  "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(at) git<TAB>push -> block'                   $'git\tpush origin main'             "" 2 "GUARD-BLOCK" "" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(au) git<TAB>status (benign) -> pass'         $'git\tstatus'                       "" 0 ""            "GUARD-BLOCK" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
+run_case '(av) worker >TAB flag -> block'               $'printf enabled >\t$HOME/.claude/config/git-policy'   "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+run_case '(aw) worker tee<TAB> flag -> block'           $'printf x | tee\t$HOME/.claude/config/git-policy'     "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+
+# B-e regression: a flag basename assembled from split literal-valued vars must
+# block (the basename short-circuit runs AFTER $HOME + VAR expansion); a split-var
+# building a NON-flag basename passes. Single-quoted cmds keep `$HOME`/`${b}` literal.
+run_case '(ax) worker b=git; ${b}-policy -> block'      'b=git; printf enabled > $HOME/.claude/config/${b}-policy'  "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+run_case '(ay) worker x=git;y=policy; ${x}-${y} -> block' 'x=git; y=policy; echo enabled > $HOME/.claude/config/${x}-${y}' "w-implementer" 2 "GUARD-BLOCK" "" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+run_case '(az) worker b=git; ${b}-other (benign) -> pass' 'b=git; echo enabled > $HOME/.claude/config/${b}-other'     "w-implementer" 0 ""            "GUARD-BLOCK" HOME="$HHOME" SUPERCLAUDE_GIT_POLICY_FILE="$HFLAG"
+
+# Disclosed residual (NOT closed by design): a whitespace-valued variable as the
+# separator; its value is not a literal in the string. Must PASS (documented).
+run_case '(ba) git${IFS}commit (residual) -> pass'      'git${IFS}commit -m x'               "" 0 ""            "GUARD-BLOCK" SUPERCLAUDE_GIT_POLICY_FILE="$DISABLED"
 
 if [ "$fails" -eq 0 ]; then
   echo "test-26-git-policy: ALL PASS"

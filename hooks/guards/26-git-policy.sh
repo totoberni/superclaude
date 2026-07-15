@@ -45,7 +45,9 @@
 #
 # Residuals NOT caught (honest, inherent to a shell-string heuristic): the verb or
 # the word git produced at RUNTIME by command substitution (`git $(echo commit)`),
-# a shell variable (`v=commit; git $v`), or `eval`; an INTERPRETER driving git
+# a shell variable (`v=commit; git $v`), a whitespace-valued variable standing in
+# for the separator (`git${IFS}commit`, whose value is not a literal in the string),
+# or `eval`; an INTERPRETER driving git
 # (`python3 -c "import subprocess; subprocess.run(['git','commit'])"`, or perl/node/
 # ruby); a wrapper binary named other than git/gh, or `command`/`sudo`/`xargs`
 # prefixing git; a PRE-EXISTING ~/.gitconfig alias (not inline via -c); an exotic
@@ -142,10 +144,14 @@ _guard_git_policy_hits_git() {
     return 0
   fi
 
-  # Boundary set: ; & | ( ) { } " ' backtick newline tab (octal-escaped so no
-  # literal quote/backtick glyph is typed). tr maps each to newline (GNU tr
-  # extends the single-char replacement set to SET1 length).
-  seps=$';&|(){}\042\047\140\n\t'
+  # Boundary set: ; & | ( ) { } " ' backtick newline (octal-escaped so no literal
+  # quote/backtick glyph is typed). tr maps each to newline (GNU tr extends the
+  # single-char replacement set to SET1 length). A literal TAB is deliberately NOT
+  # in this set: tab is intra-command WHITESPACE (the shell runs `git<TAB>commit` as
+  # `git commit`), so mapping it to a newline would split git from its verb and
+  # defeat the block. The verb regex's own `[[:space:]]+` matches the preserved tab,
+  # exactly as the gh-escalation path already relies on.
+  seps=$';&|(){}\042\047\140\n'
   qnorm=$(printf '%s' "$cmd" | tr "$seps" '\n')
   if printf '%s\n' "$qnorm" | grep -Eq "$git_re"; then
     return 0
@@ -162,7 +168,7 @@ _guard_git_policy_hits_git() {
   # anchored git_re is statically complete for quote/escape obfuscation. (A verb
   # produced by a runtime value -- `git $(echo commit)`, `v=commit; git $v` -- is the
   # documented command-substitution residual; a shell-string heuristic cannot see it.)
-  qdel=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr $';&|(){}\n\t' '\n')
+  qdel=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr $';&|(){}\n' '\n')
   printf '%s\n' "$qdel" | grep -Eq "$git_re"
 }
 
@@ -259,17 +265,8 @@ _guard_git_policy_hits_flagwrite() {
   flagpath=$(_guard_git_policy_norm_target "$(_guard_git_policy_path)")
   [ -n "$flagpath" ] || return 1
 
-  # O(1) short-circuit (perf): a flag write MUST name the flag basename literally
-  # somewhere in the command (the last path component cannot itself be spelled via
-  # $HOME/cd/// and is only variable-held via an assignment that ALSO carries the
-  # literal). If the basename never appears, this cannot be a flag write, so skip
-  # the whole per-segment normalization below. One fixed-string grep over the whole
-  # command is flat-cost; without this, an ordinary large multi-segment command
-  # (e.g. an 800-line heredoc write) paid several greps PER segment and blew past
-  # the dispatcher's wired 10s hook timeout.
   flagbase=${flagpath##*/}
   [ -n "$flagbase" ] || return 1
-  printf '%s' "$cmd" | grep -qF -- "$flagbase" || return 1
 
   # Expand `${HOME}` / `$HOME` on the whole string FIRST, by safe substitution
   # against the guard's own $HOME. This must precede the separator split below:
@@ -290,7 +287,7 @@ _guard_git_policy_hits_flagwrite() {
   # whole string. A value produced by command substitution `$(...)`, `eval`, or a
   # subshell is NOT tracked -- that is the documented residual.
   local asrc aline atok
-  asrc=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr $';&|\n\t' '\n')
+  asrc=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr $';&|\n' '\n')
   while IFS= read -r aline; do
     read -r atok _ <<<"$aline"
     case "$atok" in
@@ -314,10 +311,24 @@ EOF
     i=$((i + 1))
   done
 
-  # Backslashes are DELETED alongside quotes/backticks so an escaped write target
-  # (`\$f`, `git-poli\cy`) normalizes like its bare form -- the flag-write analogue
-  # of the verb-obfuscation strip in _guard_git_policy_hits_git.
-  seps=$';&|(){}\n\t'
+  # O(1) short-circuit (perf), applied AFTER the $HOME + VAR expansion above (NOT on
+  # the raw command): a flag write MUST name the flag basename contiguously somewhere
+  # in the EXPANDED command (the last path component is not itself spellable via
+  # $HOME/cd/// and, once a `VAR=<literal>` assignment is substituted, the pieces are
+  # joined). If the basename is still absent after expansion, this cannot be a flag
+  # write, so skip the whole per-segment normalization below. Running the grep on the
+  # RAW command instead would miss a basename assembled from split literal-valued vars
+  # (`b=git; ... ${b}-policy`); running it here catches that class while staying flat-
+  # cost (one grep on the expanded string; the assignment-collection loop above is
+  # cheap and the expensive per-segment loop is still skipped for the common case).
+  printf '%s' "$cmd" | grep -qF -- "$flagbase" || return 1
+
+  # A literal TAB is NOT in this separator set (nor in the asrc set above): tab is
+  # intra-segment WHITESPACE, so a `tee<TAB><flag>` or `>\t<flag>` must stay in one
+  # segment; the tokenizer below folds tab to a space instead. Backslashes are
+  # DELETED alongside quotes/backticks so an escaped write target (`\$f`,
+  # `git-poli\cy`) normalizes like its bare form.
+  seps=$';&|(){}\n'
   norm=$(printf '%s' "$cmd" | tr -d '\042\047\140\134' | tr "$seps" '\n')
 
   while IFS= read -r line; do
@@ -350,11 +361,13 @@ EOF
     fi
     [ "$has_write" -eq 1 ] || continue
 
-    # Tokenize: turn redirection glyphs into spaces so `>flag` / `> flag` both
-    # surface `flag` as its own token, then read into an array (read -ra never
-    # globs, so a `*`/`?` in the segment cannot expand against the filesystem).
-    clean=$(printf '%s' "$line" | tr '<>' '  ')
-    IFS=' ' read -ra toks <<<"$clean"
+    # Tokenize: turn redirection glyphs (and any intra-segment TAB) into spaces so
+    # `>flag` / `> flag` / `>\tflag` all surface `flag` as its own token, then read
+    # into an array on space+tab (read -ra never globs, so a `*`/`?` in the segment
+    # cannot expand against the filesystem). Splitting IFS on tab as well as space
+    # means a leading-tab target can never survive as a non-absolute token.
+    clean=$(printf '%s' "$line" | tr '<>\t' '   ')
+    IFS=$' \t' read -ra toks <<<"$clean"
     for tok in "${toks[@]}"; do
       ntok=$(_guard_git_policy_norm_target "$tok" "$cwd")
       [ -n "$ntok" ] || continue
