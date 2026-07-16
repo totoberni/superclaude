@@ -144,22 +144,94 @@ SCORE=$((SCORE + c4))
 echo "| 4 | No hardcoded paths | $c4/10 | $c4_clean/$c4_total clean (\$HOME refs in:${c4_dirty:- none}) |"
 
 # ─────────────────────────────────────────────────────────────
-# Criterion 5: Cleanup patterns — 10 pts — covered/total_temp_types*10 — all tiers
-#   Temp file extensions the cleanup hook must reference (per SKILL.md).
+# Criterion 5: Cleanup SOT (10 pts, all tiers)
+#   Invariant: per-session timer markers are deleted through ONE glob source of
+#   truth (hooks/lib.sh::rm_session_files, which globs "<sid>".*), and every
+#   consumer DELEGATES to it instead of enumerating extensions itself.
+#   The retired check asserted the OPPOSITE (session-cleanup.sh must NAME each
+#   extension). That scored the architecture backwards: it rewarded the very
+#   per-consumer hardcoded lists the glob SOT replaced, and would have scored a
+#   regression back to them as an improvement. Its own list had drifted too (it
+#   demanded "context-warned"; the real marker is ".context-compact-warned",
+#   written only by modules/05-context-check.sh), and the partial credit it did
+#   award came from READ sites, not delete sites.
+#   Sub-checks: 5a SOT is a glob (3); 5b consumers delegate (3);
+#               5c no enumerated per-extension deletion has reappeared (4).
+#   Consumers are DISCOVERED by grep, never hardcoded, so a new consumer is
+#   scored the moment it lands. Full-line comments are stripped before matching,
+#   so prose mentioning a helper is never miscounted as a call site.
 # ─────────────────────────────────────────────────────────────
-CLEANUP="$HOOKS_DIR/session-cleanup.sh"
-c5_total=0; c5_ok=0; c5_miss=""
-for ext in start agent pid override context-warned tdd calls; do
-  c5_total=$((c5_total + 1))
-  if [ -f "$CLEANUP" ] && grep -qE "\.$ext|[{,]${ext}([},])" "$CLEANUP" 2>/dev/null; then
-    c5_ok=$((c5_ok + 1))
+LIB="$HOOKS_DIR/lib.sh"
+# A per-session marker path: a session-id-ish variable immediately followed by a dot.
+_c5_sid='\$\{?[A-Za-z_]*([Ss][Ii][Dd]|SESSION_ID|session_id)\}?"?\.'
+# An `rm` of such a path. Correct: the dot is followed by the `*` glob. Enumerated
+# (the regression): the dot is followed by a literal ext, a brace list, or a loop var.
+_c5_rm="(^|[[:space:];&|(])rm[[:space:]][^;|&]*"
+_c5_glob_re="${_c5_rm}${_c5_sid}\\*"
+_c5_enum_re="${_c5_rm}${_c5_sid}[^*[:space:]\"]"
+# A real call site: the helper at a COMMAND position with an argument. Anchoring to
+# command position (not mere presence) excludes its definition, and excludes prose or
+# a string literal that happens to name it (this scorer's own detail strings do).
+_c5_call_re='(^[[:space:]]*|[;&|(][[:space:]]*)rm_session_files[[:space:]]+["$A-Za-z_]'
+# Scope: hooks, modules, and scripts (session-reaper.sh is a consumer and lives there).
+c5_files() {
+  local f
+  for f in "$HOOKS_DIR"/*.sh "$MODULES_DIR"/*.sh "$CLAUDE"/scripts/*.sh; do
+    [ -f "$f" ] && echo "$f"
+  done
+}
+# c5_code <file>: file content minus full-line comments.
+c5_code() { grep -vE '^[[:space:]]*#' "$1" 2>/dev/null; }
+
+# 5a: the SOT exists, glob-deletes, and does not enumerate.
+c5a=0; c5a_d="lib.sh missing"
+if [ -f "$LIB" ]; then
+  if ! c5_code "$LIB" | grep -qE '^[[:space:]]*rm_session_files\(\)'; then
+    c5a_d="SOT rm_session_files not defined"
+  elif ! c5_code "$LIB" | grep -qE "$_c5_glob_re"; then
+    c5a_d="SOT does not glob-delete <sid>.*"
+  elif c5_code "$LIB" | grep -qE "$_c5_enum_re"; then
+    c5a_d="SOT enumerates extensions"
   else
-    c5_miss="$c5_miss $ext"
+    c5a=3; c5a_d="glob SOT ok"
   fi
-done
-c5=$(pct_points "$c5_ok" "$c5_total" 10)
+fi
+
+# 5b: every DISCOVERED consumer delegates to the SOT rather than deleting markers itself.
+c5b_total=0; c5b_ok=0; c5b_bad=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  [ "$f" = "$LIB" ] && continue            # the SOT is the implementation, not a consumer
+  _code=$(c5_code "$f")
+  _calls=0; _deletes=0
+  echo "$_code" | grep -qE "$_c5_call_re" && _calls=1
+  echo "$_code" | grep -qE "${_c5_glob_re}|${_c5_enum_re}" && _deletes=1
+  [ "$_calls" -eq 0 ] && [ "$_deletes" -eq 0 ] && continue   # not in the cleanup path
+  c5b_total=$((c5b_total + 1))
+  if [ "$_calls" -eq 1 ] && [ "$_deletes" -eq 0 ]; then
+    c5b_ok=$((c5b_ok + 1))
+  else
+    c5b_bad="$c5b_bad $(basename "$f")"
+  fi
+done < <(c5_files)
+c5b=$(pct_points "$c5b_ok" "$c5b_total" 3)   # 0 consumers => 0 pts (an orphaned SOT is a defect)
+
+# 5c: ANTI-REGRESSION. A hardcoded per-extension deletion list anywhere in the
+# cleanup path fails outright. This is the check that would have caught the drift.
+c5c=0; c5c_hits=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  c5_code "$f" | grep -qE "$_c5_enum_re" && c5c_hits="$c5c_hits $(basename "$f")"
+done < <(c5_files)
+if [ -z "$c5c_hits" ]; then
+  c5c=4; c5c_d="no enumerated deletion"
+else
+  c5c_d="ENUMERATED deletion in:$c5c_hits"
+fi
+
+c5=$((c5a + c5b + c5c))
 SCORE=$((SCORE + c5))
-echo "| 5 | Cleanup patterns | $c5/10 | $c5_ok/$c5_total exts (missing:${c5_miss:- none}) |"
+echo "| 5 | Cleanup SOT | $c5/10 | $c5a_d; $c5b_ok/$c5b_total consumers delegate${c5b_bad:+ (bad:$c5b_bad)}; $c5c_d |"
 
 # ─────────────────────────────────────────────────────────────
 # Criterion 6: Module naming NN-*.sh — 5 pts — compliant/total*5 — all tiers

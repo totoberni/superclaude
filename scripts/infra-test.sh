@@ -1414,6 +1414,51 @@ test_converge_auto() {
 }
 
 # ═══════════════════════════════════════════════════
+# SC: Scripts Bite-Tests (delegates to scripts/tests/test-*.sh)
+# ═══════════════════════════════════════════════════
+# The self-contained bite-tests under scripts/tests/ had no aggregator, so they ran by hand
+# only and could rot silently. Discovered by GLOB, never a hardcoded list, so a future
+# scripts/tests/test-*.sh is picked up with no edit here (a hardcoded list is exactly the
+# drift this codebase has already been bitten by).
+# The EXIT CODE is the authority: the files do not share a summary-line format (three print
+# "N passed, M failed", test-instrument-tripwire prints "ALL PASS"), so any string parsing
+# would be the weaker gate. The summary line is echoed for context only when present.
+# READ-ONLY: each test is hermetic (mktemp fixtures, env overrides such as TIMER_DIR, and
+# --dry-run for the reaper), so this component adds no write side effects to the real
+# infrastructure. Absence of the dir or of any test file WARNs, never fails.
+test_scripts_bite() {
+  section "Scripts Bite-Tests (SC)"
+
+  local TESTS_DIR="$SCRIPT_DIR/tests"
+  if [ ! -d "$TESTS_DIR" ]; then
+    warn "SC0 scripts/tests" "directory absent: no scripts-level bite-tests to run (skipped)"
+    return
+  fi
+
+  local SC_N=0 sct sctname sctout sctrc sctsum
+  for sct in "$TESTS_DIR"/test-*.sh; do
+    [ -f "$sct" ] || continue
+    SC_N=$((SC_N + 1))
+    sctname=$(basename "$sct")
+    sctout=$(bash "$sct" 2>&1)
+    sctrc=$?
+    sctsum=$(echo "$sctout" | grep -oE '[0-9]+ passed, [0-9]+ failed' | tail -1)
+    if [ "$sctrc" -eq 0 ]; then
+      pass "SC$SC_N $sctname (${sctsum:-exit 0})"
+    else
+      fail "SC$SC_N $sctname" "exit $sctrc (${sctsum:-no summary line})"
+      echo "$sctout" | grep -E 'FAIL' | head -3 | while IFS= read -r line; do
+        printf "     %s\n" "$line"
+      done
+    fi
+  done
+
+  if [ "$SC_N" -eq 0 ]; then
+    warn "SC0 scripts/tests" "no test-*.sh found in $TESTS_DIR (skipped)"
+  fi
+}
+
+# ═══════════════════════════════════════════════════
 # Run selected tests
 # ═══════════════════════════════════════════════════
 
@@ -1434,9 +1479,10 @@ elif [ -n "$COMPONENT" ]; then
     skm|SK)             test_skm ;;
     wfscripts|wf|WF)    test_wfscripts ;;
     converge-auto|CA)   test_converge_auto ;;
+    scripts|bite|SC)    test_scripts_bite ;;
     *)
       echo "Unknown component: $COMPONENT"
-      echo "Valid: hooks, settings, agents, skills, rules, comms, matrix, skm, wfscripts, converge-auto"
+      echo "Valid: hooks, settings, agents, skills, rules, comms, matrix, skm, wfscripts, converge-auto, scripts"
       exit 2
       ;;
   esac
@@ -1452,6 +1498,7 @@ else
   test_skm
   test_wfscripts
   test_converge_auto
+  test_scripts_bite
 fi
 
 END_TIME=$(date +%s)

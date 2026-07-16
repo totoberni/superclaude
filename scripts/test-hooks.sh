@@ -1545,6 +1545,54 @@ fi
 rm -f "$SCRATCH/iso.stdout" "$SCRATCH/iso.stderr" 2>/dev/null
 
 # ═══════════════════════════════════════════════════════
+# PHASE 8 / Guard Subsystem Suite (hooks/guards/)
+# ═══════════════════════════════════════════════════════
+# hooks/guards/ (11 guards + guard-dispatch.sh + guard-post.sh) is the mechanical
+# enforcement half of the hook subsystem. Its tests live in guards/tests/ and were
+# previously run by hand only, so a guard regression could land silently.
+#
+# We delegate to guards/tests/run-all.sh and parse its summary rather than
+# re-implementing per-file logic: run-all.sh already owns the per-file detail (DRY).
+# Its result folds into this suite's tally, so a red guard suite fails test-hooks.sh.
+#
+# GUARD_RUNNER is overridable so this wiring can itself be bite-tested against a
+# throwaway copy of the guards; it defaults to the real runner.
+echo ""
+echo "── Guard Subsystem Tests ──"
+
+GUARD_RUNNER="${GUARD_RUNNER:-$HOOK_DIR/guards/tests/run-all.sh}"
+
+# G8.1: guard suite runner present and syntactically clean
+if [ ! -f "$GUARD_RUNNER" ]; then
+  fail "G8.1 guard suite runner" "not found: $GUARD_RUNNER"
+elif ! bash -n "$GUARD_RUNNER" 2>/dev/null; then
+  fail "G8.1 guard suite runner" "$(basename "$GUARD_RUNNER") fails bash -n"
+else
+  pass "G8.1 guard suite runner (present, bash -n clean)"
+fi
+
+# G8.2: guard suite green (every guard test file passes).
+# Fails closed: a missing runner, an unparseable summary, a non-zero exit, or a
+# passed/total mismatch all count as a failure. A gate that cannot fail is a decoration.
+if [ -f "$GUARD_RUNNER" ]; then
+  GUARD_OUTPUT=$(bash "$GUARD_RUNNER" 2>&1)
+  GUARD_RC=$?
+  GUARD_SUMMARY=$(echo "$GUARD_OUTPUT" | grep -E 'run-all SUMMARY:' | tail -1)
+  GUARD_PASSED=$(echo "$GUARD_SUMMARY" | sed -n 's#.*SUMMARY: \([0-9]\{1,\}\)/\([0-9]\{1,\}\).*#\1#p')
+  GUARD_TOTAL=$(echo "$GUARD_SUMMARY" | sed -n 's#.*SUMMARY: \([0-9]\{1,\}\)/\([0-9]\{1,\}\).*#\2#p')
+  if [ -z "$GUARD_SUMMARY" ] || [ -z "$GUARD_TOTAL" ]; then
+    fail "G8.2 guard suite" "no parseable run-all summary (rc=$GUARD_RC)"
+  elif [ "$GUARD_RC" -eq 0 ] && [ "$GUARD_PASSED" = "$GUARD_TOTAL" ]; then
+    pass "G8.2 guard suite ($GUARD_PASSED/$GUARD_TOTAL guard test files passed)"
+  else
+    GUARD_FAILED=$(echo "$GUARD_OUTPUT" | grep -E '^>>> .+: FAIL$' | sed 's/^>>> //;s/: FAIL$//' | tr '\n' ' ')
+    fail "G8.2 guard suite" "rc=$GUARD_RC, $GUARD_PASSED/$GUARD_TOTAL passed; failing: ${GUARD_FAILED:-unknown}"
+  fi
+else
+  fail "G8.2 guard suite" "runner not found: $GUARD_RUNNER"
+fi
+
+# ═══════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════
 echo ""

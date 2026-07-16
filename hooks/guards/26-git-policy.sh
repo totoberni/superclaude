@@ -79,6 +79,23 @@
 # Bash-tool counterpart, since the sanctioned writer -- skills/git/SKILL.md --
 # itself writes via shell redirection, not a Write-class tool).
 #
+# Identity here is an INPUT read from an UNPROTECTED FILE: walk_to_agent yields ""
+# whenever the hook runs detached from the claude process, so guards/lib-guard.sh
+# guard_init falls back to the per-session marker ~/.claude/session-timers/<sid>.agent,
+# and the `meta` compared above can be a string read from it. Nothing guards that file:
+# 20-write-acl.sh never mentions session-timers and inspects only Write/Edit/MultiEdit
+# (its :65-68 returns 0 for every other tool), so it cannot see a Bash `echo meta >
+# <sid>.agent` at all; a non-meta agent can therefore forge marker=meta and present as
+# meta to this check. That is a new SPELLING, not a new capability: the same Bash-capable,
+# same-uid agent can ALREADY write the flag via the residual CLASSES below. A meta-only
+# ACL rule on session-timers/*.agent was CONSIDERED and REJECTED as ineffective for that
+# same reason: it would block only the spelling nobody needs. Net direction is TIGHTER:
+# before the fallback an unresolved identity FAILED OPEN on 20-write-acl.sh's identity-
+# scoped rules (its :24-27), so its plan.md and comms meta-only rules never fired for
+# anyone; they now fire, and a forger setting marker=meta merely returns to that prior
+# fail-open state. The marker needs the same filesystem-level answer as the flag (see the
+# close below).
+#
 # The path comparison is done on REALPATH-NORMALIZED targets (mirroring
 # guards/20-write-acl.sh's _wacl_norm_path), not raw-string matching. Tested-and-
 # blocked flag-write spellings (each with a bite-test + seal-battery case): the

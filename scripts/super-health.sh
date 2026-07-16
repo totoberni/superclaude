@@ -1,6 +1,6 @@
 #!/bin/bash
 # super-health.sh — deterministic aggregator behind skills/super-health/SKILL.md.
-# Combines 8 component health scores into a single weighted /100 + letter grade.
+# Combines 10 component health scores into a single weighted /100 + letter grade.
 #
 # Usage:
 #   bash super-health.sh [--complete]
@@ -58,26 +58,48 @@ done
 #  WEIGHTS — single source of truth. Must sum to 1.00. (DRY: rebalance here only.)
 # ════════════════════════════════════════════════════════════════════════════
 declare -A WEIGHTS=(
-  [hook]=0.15
-  [skill]=0.12
-  [mem]=0.15
-  [settings]=0.12
-  [session]=0.05
-  [comms]=0.09
-  [regression]=0.11
-  [subsystems]=0.11
-  [automations]=0.10
+  [hook]=0.13
+  [guards]=0.12
+  [skill]=0.11
+  [mem]=0.13
+  [settings]=0.11
+  [session]=0.04
+  [comms]=0.08
+  [regression]=0.09
+  [subsystems]=0.10
+  [automations]=0.09
 )
-# automations (0.10) was carved in by trimming the two heaviest components (hook and
-# mem, 0.18 -> 0.15 each = -0.06) plus 0.01 each off skill/comms/regression/subsystems
-# (= -0.04), keeping the sum at exactly 1.00 (asserted below). 0.10 is comparable to
-# the other infra components (comms 0.09, regression 0.11, subsystems 0.11): the
-# automations-health run covers BOTH the 513-test engine pytest suite on this WSL box
-# AND toto's automation-runtime health, so it warrants an infra-tier share.
-# Row order for the report table.
-COMPONENT_ORDER=(hook skill mem settings session comms regression subsystems automations)
+# automations (0.10 at the time) was carved in by trimming the two heaviest components
+# (hook and mem, 0.18 -> 0.15 each = -0.06) plus 0.01 each off skill/comms/regression/
+# subsystems (= -0.04), keeping the sum at exactly 1.00 (asserted below). 0.10 is
+# comparable to the other infra components: the automations-health run covers BOTH the
+# 513-test engine pytest suite on this WSL box AND toto's automation-runtime health, so
+# it warrants an infra-tier share.
+#
+# guards (0.12) was carved in later by scaling ALL NINE pre-existing components
+# proportionally by 0.88 (0.88 + 0.12 = 1.00 exactly) and rounding each to 2dp:
+#   hook .15->.13  skill .12->.11  mem .15->.13  settings .12->.11  session .05->.04
+#   comms .09->.08  regression .11->.09  subsystems .11->.10  automations .10->.09
+# No component's INTERNAL criteria were relaxed; only the fractions moved. The rounding
+# is largest-remainder over the 0.88 budget with ONE deliberate exception: regression
+# FORGOES the cent strict largest-remainder would give it (0.10) and stays at 0.09, and
+# that cent goes to settings (0.11). Rationale: regression now ALSO absorbs the guard
+# bite-test PASS/FAIL signal (run-all.sh runs under test-hooks.sh -> infra-test.sh check
+# H1), so holding regression at 0.09 keeps total guard-derived influence in line rather
+# than letting one subsystem push the aggregate through two components at full strength.
+#
+# WHY guards warrants a share comparable to hook (0.12 vs 0.13): guards ARE the
+# mechanical enforcement layer (the write ACL, the git-policy toggle, content-scan,
+# verdict/seal shape, worker-verify). They are the only component whose silent
+# regression DISABLES ENFORCEMENT EVERYWHERE while every other component still reports
+# green: a guard that no longer fires breaks no test, emits no error, and simply stops
+# blocking. Structural coverage of that layer therefore earns a first-class share.
+# Row order for the report table (guards sits next to hook: they are the two halves of
+# the hook tier, detection and enforcement).
+COMPONENT_ORDER=(hook guards skill mem settings session comms regression subsystems automations)
 declare -A COMPONENT_LABEL=(
   [hook]="Hook health"
+  [guards]="Guards (mechanical enforcement)"
   [skill]="Skill health"
   [mem]="Memory health"
   [settings]="Settings + agents"
@@ -137,6 +159,127 @@ score_hook() {
   printf '%s\n' "$hk_out" | grep -v '^SCORE:'
   echo "Hook subagent-stop facet: $ssh_detail (hook-health=$hk_score)"
   echo "SCORE: $final_hook/100"
+}
+
+# ── Guards (mechanical enforcement) ─────────────────────────────────────────────
+# Scores the STRUCTURE and COVERAGE of hooks/guards/, NOT the guards' test results.
+#
+# ANTI-DOUBLE-COUNT CONTRACT (do NOT "helpfully" add a suite run here):
+# hooks/guards/tests/run-all.sh is ALREADY executed by scripts/test-hooks.sh, which
+# scripts/infra-test.sh runs as check H1, which feeds the `regression` component. Guard
+# test PASS/FAIL is therefore already in the /100. Separation of concerns:
+#   regression -> "do the guard tests pass?"
+#   guards     -> "is the guard subsystem structurally sound and fully covered?"
+# Re-running the suite here would double-count one signal and roughly double runtime.
+# Every check below is structural (existence, `bash -n`, a declaration grep, filename
+# correspondence): read-only, no network, idempotent, fast.
+#
+# Scoring model: the same denominator-honest AW/PO accumulators as score_subsystems.
+# The three per-guard sweeps (syntax 25, declared mode 15, coverage 25) accrue
+# PROPORTIONALLY (k of n guards earn k/n of the slice) rather than all-or-nothing, so a
+# single regression costs a proportional bite and the detail lines NAME the offenders.
+# Weights: dispatchers 15 + lib-guard 10 + syntax 25 + mode 15 + coverage 25 + run-all 5
+# + sanity 5 = 100. Syntax and coverage carry the most because a guard that does not
+# parse and a guard that is untested are the two ways enforcement dies silently.
+# The guard list is ALWAYS discovered by glob, NEVER hardcoded: a hardcoded inventory is
+# precisely the drift this component exists to detect.
+score_guards() {
+  local AW=0 PO=0 detail=""
+  local HK="$CLAUDE/hooks" GD="$CLAUDE/hooks/guards" TD="$CLAUDE/hooks/guards/tests"
+
+  # g_award <weight> <0|1 pass> <short-label>  -> binary accrual into AW/PO.
+  g_award() {
+    local w="$1" ok="$2" lbl="$3"
+    PO=$((PO + w))
+    if [ "$ok" -eq 1 ]; then AW=$((AW + w)); detail="$detail ${lbl}:ok"
+    else detail="$detail ${lbl}:FAIL"; fi
+  }
+  # g_award_frac <weight> <k ok> <n total> <short-label>  -> proportional accrual.
+  # n=0 (no guards discovered) is a BROKEN subsystem, not a vacuous pass: it earns 0.
+  g_award_frac() {
+    local w="$1" k="$2" n="$3" lbl="$4"
+    PO=$((PO + w))
+    if [ "$n" -le 0 ]; then detail="$detail ${lbl}:FAIL(none-found)"; return 0; fi
+    AW=$((AW + w * k / n))
+    if [ "$k" -eq "$n" ]; then detail="$detail ${lbl}:${k}/${n}"
+    else detail="$detail ${lbl}:${k}/${n}:FAIL"; fi
+  }
+  # g_bashclean <file>  -> rc 0 iff the file exists AND is `bash -n` clean.
+  g_bashclean() { [ -f "$1" ] && bash -n "$1" >/dev/null 2>&1; }
+
+  # (a) 15: both dispatchers exist and parse. If the dispatch layer is broken, NO guard
+  #     runs at all, so it is weighted just under the per-guard syntax sweep.
+  local disp_ok=1
+  g_bashclean "$HK/guard-dispatch.sh" || disp_ok=0
+  g_bashclean "$HK/guard-post.sh"     || disp_ok=0
+  g_award 15 "$disp_ok" dispatchers
+
+  # (b) 10: the shared foundation lib every guard sources.
+  local lib_ok=0; g_bashclean "$GD/lib-guard.sh" && lib_ok=1
+  g_award 10 "$lib_ok" lib-guard
+
+  # Discover guards by GLOB. A non-matching glob stays literal, so the -f test drops it.
+  local guards=() g
+  for g in "$GD"/[0-9]*-*.sh; do [ -f "$g" ] && guards+=("$g"); done
+  local n=${#guards[@]}
+
+  # (c) syntax, (d) declared default mode, (e) bite-test coverage: one pass over guards.
+  local syn_ok=0 mode_ok=0 cov_ok=0 bad_syn="" bad_mode="" bad_cov="" base stem
+  for g in "${guards[@]}"; do
+    base=$(basename "$g"); stem="${base%.sh}"
+    if g_bashclean "$g"; then syn_ok=$((syn_ok + 1)); else bad_syn="$bad_syn $stem"; fi
+    # A declaration is an ASSIGNMENT at line start (`GUARD_MODE_<NAME>=`). Anchoring
+    # keeps a mere mention in a comment, or lib-guard's `local defvar="GUARD_MODE_..."`,
+    # from counting as a declaration. A guard with no declared default silently falls
+    # back and leaves its intent unstated.
+    if grep -qE '^[[:space:]]*(export[[:space:]]+)?GUARD_MODE_[A-Z0-9_]+=' "$g" 2>/dev/null
+    then mode_ok=$((mode_ok + 1)); else bad_mode="$bad_mode $stem"; fi
+    # Coverage: guard <stem>.sh is covered by tests/test-<stem>.sh.
+    if [ -f "$TD/test-${stem}.sh" ]; then cov_ok=$((cov_ok + 1)); else bad_cov="$bad_cov $stem"; fi
+  done
+  g_award_frac 25 "$syn_ok"  "$n" guard-syntax
+  g_award_frac 15 "$mode_ok" "$n" guard-mode
+  g_award_frac 25 "$cov_ok"  "$n" coverage
+
+  # (f) 5: the suite runner itself. regression EXECUTES it; here we only parse it.
+  local run_ok=0; g_bashclean "$TD/run-all.sh" && run_ok=1
+  g_award 5 "$run_ok" run-all
+
+  # (g) 5: reconciliation in the OPPOSITE direction from (e). Sweep (e) iterates GUARDS
+  #     and asks "does its test exist", so an extra test file can never enter (e) and can
+  #     never be a false coverage miss. This check asks "does every test file have a
+  #     guard", which catches an orphan left behind by a renamed/deleted guard. One file
+  #     is exempt BY DESIGN: test-dispatch-abort-isolation.sh tests guard-dispatch.sh's
+  #     abort isolation, not any guard, so it legitimately has no matching guard. The
+  #     allowlist is a list of KNOWN EXCEPTIONS, not an inventory: it does not grow when
+  #     a guard is added, so it cannot drift the way a hardcoded guard list would.
+  local NONGUARD_TESTS=("test-dispatch-abort-isolation.sh")
+  local tests=() t tb x exempt orphans=""
+  for t in "$TD"/test-*.sh; do [ -f "$t" ] && tests+=("$t"); done
+  local n_tests=${#tests[@]} n_exempt=0
+  for t in "${tests[@]}"; do
+    tb=$(basename "$t"); exempt=0
+    for x in "${NONGUARD_TESTS[@]}"; do [ "$tb" = "$x" ] && exempt=1; done
+    if [ "$exempt" -eq 1 ]; then n_exempt=$((n_exempt + 1)); continue; fi
+    stem="${tb#test-}"; stem="${stem%.sh}"
+    [ -f "$GD/${stem}.sh" ] || orphans="$orphans $stem"
+  done
+  local sane=0
+  { [ "$n" -ge $((n_tests - n_exempt)) ] && [ -z "$orphans" ]; } && sane=1
+  g_award 5 "$sane" sanity
+
+  # Denominator-honest: score = awarded/possible, rounded to nearest int.
+  local score=0
+  [ "$PO" -gt 0 ] && score=$(( (AW * 100 + PO / 2) / PO ))
+  [ "$score" -lt 0 ] && score=0
+  [ "$score" -gt 100 ] && score=100
+
+  echo "Guards detail: ${n} guards, ${n_tests} test files (${n_exempt} non-guard exempt);${detail} [AW=$AW/PO=$PO]"
+  [ -n "$bad_syn" ]  && echo "Guards failing bash -n:$bad_syn"
+  [ -n "$bad_mode" ] && echo "Guards with NO declared default mode:$bad_mode"
+  [ -n "$bad_cov" ]  && echo "Guards with NO bite-test (uncovered):$bad_cov"
+  [ -n "$orphans" ]  && echo "Orphan tests (no matching guard):$orphans"
+  echo "SCORE: $score/100"
 }
 
 score_skill() {

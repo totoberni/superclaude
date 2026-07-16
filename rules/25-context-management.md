@@ -22,12 +22,7 @@ Applies to ALL agents (orchs, workers). Meta is exempt from time limits but NOT 
 | 2 | `hooks/session-timer.sh` Phase 2 GC | `PreToolUse` (every tool call) | Abnormal exits — PID dead → clean files; PID stopped (T) → kill + clean |
 | 3 | `scripts/session-reaper.sh` | Manual / cron | Batch cleanup — `--dry-run` to preview, `--all` to also kill stale active sessions |
 
-Timer files per session in `~/.claude/session-timers/`:
-- `<session_id>.start` — epoch timestamp
-- `<session_id>.agent` — agent name
-- `<session_id>.pid` — claude process PID (for liveness checks)
-- `<session_id>.override` — timer bypass (created manually by the user)
-- `<session_id>.context-compact-warned` — one-shot flag for memory footprint warning
+Per-session timer state lives in `~/.claude/session-timers/` and is owned by those three layers. The only agent-facing lever is the `.override` file (§ Session Time Limit below).
 
 ## Periodic Checkpointing (Orchs)
 
