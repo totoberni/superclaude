@@ -20,6 +20,19 @@
 #   (e) Agent prompt w/ a runtime-built live trigger  -> block (exit 2)
 #   (f) the dot-escaped trigger token                 -> pass  (exit 0)
 #   (g) SUPERCLAUDE_GUARD_CONTENT_SCAN=warn + em-dash -> exit 0 + WARN (mode degrade)
+#
+# Cases h-o cover the DASH class diff-awareness for whole-file Writes. A Write sends
+# the ENTIRE file as .content, so a Write that merely REPRODUCES a grandfathered dash
+# must not block (rules/06 is forward-looking); only a dash on a line the Write ADDS
+# may block. Edit/MultiEdit .new_string already IS a diff and is unaffected.
+#   (h) Write: grandfathered dash file rewritten UNCHANGED  -> pass  (exit 0)
+#   (i) Write: a brand-new dash line into that file         -> block (exit 2)
+#   (j) Write: a dash into a file that does NOT exist       -> block (exit 2)
+#   (k) Write: grandfathered dash KEPT + a new dash added   -> block (exit 2)
+#   (l) Edit : new_string with a dash                       -> block (exit 2)
+#   (m) Write: grandfathered EN-dash rewritten UNCHANGED    -> pass  (exit 0)
+#   (n) Write: a brand-new EN-dash line                     -> block (exit 2)
+#   (o) Write: grandfathered dash doc REORDERED             -> pass  (exit 0)
 
 set -uo pipefail
 
@@ -37,12 +50,25 @@ fails=0
 
 # Runtime-built fixtures (no literal dash / no live token in this source).
 EM=$(printf '\342\200\224')                          # U+2014 em-dash byte
+EN=$(printf '\342\200\223')                          # U+2013 en-dash byte
 LIVE_WF=$(v='.workflow'; printf '%s' "${v/./}")      # live trigger, built at runtime
 
 mk_write() { jq -nc --arg fp "$1" --arg c "$2" \
   '{tool_name:"Write", tool_input:{file_path:$fp, content:$c}}'; }
 mk_agent() { jq -nc --arg p "$1" \
   '{tool_name:"Agent", tool_input:{prompt:$p}}'; }
+mk_edit()  { jq -nc --arg fp "$1" --arg s "$2" \
+  '{tool_name:"Edit", tool_input:{file_path:$fp, new_string:$s}}'; }
+
+# Grandfathered fixtures: files that ALREADY contain a dash, on disk. The dash bytes
+# come from $EM/$EN (built at runtime above), so no literal dash is authored here.
+GRAND_EM_FILE="$TMPD/grandfathered-em.md"
+GRAND_EM=$(printf 'title\nold grandfathered %s line\ntail' "$EM")
+printf '%s\n' "$GRAND_EM" > "$GRAND_EM_FILE"
+
+GRAND_EN_FILE="$TMPD/grandfathered-en.md"
+GRAND_EN=$(printf 'title\nold grandfathered %s line\ntail' "$EN")
+printf '%s\n' "$GRAND_EN" > "$GRAND_EN_FILE"
 
 # run_case <label> <json> <want_rc> <must|""> <mustnot|""> [ENV=VAL ...]
 run_case() {
@@ -85,6 +111,31 @@ run_case "(f) dot-escaped trigger -> pass" \
 
 run_case "(g) warn mode + em-dash -> exit 0 + WARN" \
   "$(mk_write "/tmp/scan-g.txt" "benign ${EM} text")" 0 "WARN" "" SUPERCLAUDE_GUARD_CONTENT_SCAN=warn
+
+run_case "(h) Write: grandfathered dash rewritten UNCHANGED -> pass" \
+  "$(mk_write "$GRAND_EM_FILE" "$GRAND_EM")" 0 "" "GUARD-BLOCK"
+
+run_case "(i) Write: brand-new dash line -> block" \
+  "$(mk_write "$GRAND_EM_FILE" "$(printf 'title\nbrand new %s line\ntail' "$EM")")" 2 "em-dash" ""
+
+run_case "(j) Write: dash into a file that does not exist -> block" \
+  "$(mk_write "$TMPD/no-such-file.md" "a brand new ${EM} file")" 2 "em-dash" ""
+
+run_case "(k) Write: grandfathered dash KEPT + new dash added -> block" \
+  "$(mk_write "$GRAND_EM_FILE" "$(printf '%s\nextra new %s line' "$GRAND_EM" "$EM")")" 2 "em-dash" ""
+
+run_case "(l) Edit: new_string with a dash -> block (Edit path unchanged)" \
+  "$(mk_edit "$GRAND_EM_FILE" "a freshly edited ${EM} line")" 2 "em-dash" ""
+
+run_case "(m) Write: grandfathered EN-dash rewritten UNCHANGED -> pass" \
+  "$(mk_write "$GRAND_EN_FILE" "$GRAND_EN")" 0 "" "GUARD-BLOCK"
+
+run_case "(n) Write: brand-new EN-dash line -> block" \
+  "$(mk_write "$GRAND_EN_FILE" "$(printf '%s\nextra new %s line' "$GRAND_EN" "$EN")")" 2 "en-dash" ""
+
+# Line-EXISTENCE, not a positional diff: a reorder adds no new line, so it must pass.
+run_case "(o) Write: grandfathered dash doc REORDERED -> pass" \
+  "$(mk_write "$GRAND_EM_FILE" "$(printf 'tail\nold grandfathered %s line\ntitle' "$EM")")" 0 "" "GUARD-BLOCK"
 
 if [ "$fails" -eq 0 ]; then
   echo "test-10-content-scan: ALL PASS"

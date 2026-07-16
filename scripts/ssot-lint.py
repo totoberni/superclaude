@@ -36,6 +36,17 @@ SOT_RE = re.compile(r"SOT:\s*`([^`]+)`")
 SEE_RE = re.compile(r"\bsee\s+`([^`]+)`", re.IGNORECASE)
 POINTER_PATH_RE = re.compile(r"^([~/.]?[\w][\w\-./]*\.(?:md|yaml|yml))")
 
+# Known-benign unresolvable pointers: keyed to the exact (relative referencing file, raw
+# backtick content) pair so an exemption can never widen to mask a different, real broken
+# pointer in the same file. Each entry must document WHY it is intentionally unresolvable.
+POINTER_IGNORES = {
+    ("skills/research/references/report.md", "docs/reprod-notes.md §M3"): (
+        "teaching example inside that file's own item 6, Quantitative grounding, illustrating "
+        "how a downstream project would cite its own reproduction notes; the target is "
+        "deliberately not a real file in this corpus, not drift"
+    ),
+}
+
 
 class SsotLintError(Exception):
     """Malformed registry input -- distinct from a drift finding."""
@@ -298,6 +309,9 @@ def check_generic_pointers(root, corpus_paths, failures, stats):
                 if target is not None:
                     stats["resolved"] += 1
                     continue
+                if (rel, raw) in POINTER_IGNORES:
+                    stats["ignored"] += 1
+                    continue
                 stats["unresolved"] += 1
                 is_bare = "/" not in token and not token.startswith(("~", "/"))
                 matches = basename_index.get(token, []) if is_bare else []
@@ -348,7 +362,7 @@ def main(argv=None):
     for rec in records:
         check_concept(root, rec, corpus_paths, failures)
 
-    pointer_stats = {"resolved": 0, "unresolved": 0}
+    pointer_stats = {"resolved": 0, "unresolved": 0, "ignored": 0}
     check_generic_pointers(root, corpus_paths, failures, pointer_stats)
 
     if failures:
@@ -360,7 +374,8 @@ def main(argv=None):
         print()
         print(
             f"pointer resolver: {pointer_stats['resolved']} resolved, "
-            f"{pointer_stats['unresolved']} unresolved"
+            f"{pointer_stats['unresolved']} unresolved, "
+            f"{pointer_stats['ignored']} ignored"
         )
         return 1
 
@@ -370,7 +385,8 @@ def main(argv=None):
     )
     print(
         f"pointer resolver: {pointer_stats['resolved']} resolved, "
-        f"{pointer_stats['unresolved']} unresolved"
+        f"{pointer_stats['unresolved']} unresolved, "
+        f"{pointer_stats['ignored']} ignored"
     )
     return 0
 

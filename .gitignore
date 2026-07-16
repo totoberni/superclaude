@@ -159,3 +159,8 @@ bin/tsh
 # daemon auth runtime state (repo root, 2026-07-11)
 daemon-auth-cooldown
 daemon-auth-status.json
+
+# /git policy flag (2026-07-16): live local state written by the /git skill and
+# read by hooks/guards/26-git-policy.sh. Machine-local like settings.json, so the
+# live file is never published; the guard treats an absent file as enabled.
+config/git-policy

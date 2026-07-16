@@ -893,9 +893,15 @@ test_comms() {
     [ -d "$dir" ] || continue
     local NAME
     NAME=$(basename "$dir")
-    # Skip special dirs (meta has non-standard comms structure — writes TO orch dirs)
-    [ "$NAME" = "_archive" ] && continue
+    # Skip special dirs (meta has non-standard comms structure -- writes TO orch dirs)
     [ "$NAME" = "meta" ] && continue
+    # Leading underscore marks an infrastructure/broker dir, not an orch's comms
+    # dir: _archive holds retired comms, _roles holds HCOM's per-session
+    # role-broker .jsonl files. Neither carries the 4-file directive/report/
+    # escalation/bootstrap set this check enforces.
+    case "$NAME" in
+      _*) continue ;;
+    esac
     COMMS_COUNT=$((COMMS_COUNT + 1))
     local MISSING=""
     for req in $REQUIRED_FILES; do
@@ -914,7 +920,10 @@ test_comms() {
     [ -d "$dir" ] || continue
     local NAME
     NAME=$(basename "$dir")
-    [ "$NAME" = "_archive" ] && continue
+    # Same infrastructure-dir convention as C1 above: skip underscore-prefixed dirs.
+    case "$NAME" in
+      _*) continue ;;
+    esac
     # Check for direct agent match, or known prefixed pattern
     if [ -f "$AGENT_DIR/$NAME.md" ]; then
       continue  # direct match

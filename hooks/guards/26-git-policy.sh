@@ -43,7 +43,10 @@
 #   - a TAB (or multi-space) between git and the verb: git<TAB>commit
 #   - a BACKSLASH-NEWLINE line continuation: git \<LF>commit
 #   - a LEADING REDIRECTION before git: >f git commit, 2>f git push, &>f git commit,
-#     FOO=1 >f git commit
+#     FOO=1 >f git commit, >|f git commit
+#   - a REDIRECTION BETWEEN git and its verb, which bash runs as a plain commit/push:
+#     git >f commit, git 2>f push, git >|f commit, git --no-pager >f commit
+#   - a PATH-QUALIFIED git: /usr/bin/git commit, ./git commit, FOO=1 /usr/bin/git commit
 #   - an inline alias-to-mutation-verb definition: -c alias.<name>=<verb>
 #   - gh push-like escalations: gh release create, gh pr merge, and gh api with a
 #     POST to a git-data/refs endpoint (uncertain gh api POSTs warn, not block)
@@ -83,18 +86,30 @@
 # `.`/`..`) in the path; a `cd <dir> && <write> <relative>` sequence (relative
 # target resolved against the cd'd dir); a trivial inline `VAR=<literal>; <write>
 # $VAR` indirection and a basename assembled from split literal-valued vars
-# (`b=git; ... ${b}-policy`); a TAB before the target; and a backslash-newline
-# continuation before the target. HOME/`~` expansion and the VAR substitution are
-# done by safe string substitution against the guard's own $HOME / the tracked
-# literal (attacker strings are NEVER eval'd). The write signals covered are shell
-# redirection (>, >>), tee/cp/mv/install/ln/truncate, dd of=, and sed -i.
+# (`b=git; ... ${b}-policy`); a TAB before the target; a backslash-newline
+# continuation before the target; and the CLOBBER (`>| <flag>`, `>|<flag>`) and
+# to-a-FILE dup (`>& <flag>`) redirect operators. HOME/`~` expansion and the VAR
+# substitution are done by safe string substitution against the guard's own $HOME / the
+# tracked literal (attacker strings are NEVER eval'd). The write signals covered are
+# shell redirection (>, >>, and the `>|` / `>&<file>` spellings, which
+# _guard_git_policy_norm_redir_ops rewrites to a plain `>` before the separator split so
+# the `|`/`&` in the operator cannot tear it from its target),
+# tee/cp/mv/install/ln/truncate, dd of=, and sed -i. The two
+# classes are matched differently, by design: a REDIRECTION counts only when the flag
+# is the redirect TARGET, so `cat <flag> 2>&1` stays the pure READ it looks like (its
+# `2>` targets an fd dup, not the flag); the TOOL signals stay deliberately over-
+# inclusive, matching any flag-normalizing token in the segment (so `cp <flag>
+# /tmp/backup`, which only reads, also blocks). An fd DUP (`>&1`, `>&2`, `2>&1`, the
+# whitespace-separated `2>& 1`, and `>&-`) names a descriptor, not a path, and is
+# therefore NOT a write; only a `>&` whose target is a FILE is.
 #
 # This enumerates what is tested; it is NOT complete and must not be read as such.
 # A Bash-string heuristic cannot stop a Bash-capable, same-uid agent from writing an
 # arbitrary file. Residual CLASSES NOT caught: a path or basename produced by command
 # substitution (`echo enabled > $(echo $HOME)/.claude/config/git-policy`), by `eval`,
 # or by a variable whose value itself comes from a subshell/prior call/environment;
-# and any non-Bash interpreter writing the file. Two anti-DoS caps bound the cost so a
+# any non-Bash interpreter writing the file; or an exotic redirection spelling outside
+# the `>`, `>>`, `>|`, `>&<file>` set enumerated above. Two anti-DoS caps bound the cost so a
 # padded command cannot hang the guard past the wired 10s hook timeout, at the price
 # of two conservative dispositions: (1) the inline-VAR substitution processes at most
 # a fixed cap of assignments, so a basename assembled from MORE than that many split
@@ -126,11 +141,38 @@ _guard_git_policy_state() {
   esac
 }
 
+# _guard_git_policy_norm_redir_ops <cmd>: echo <cmd> with the two redirection operators
+# whose second glyph is ALSO a shell separator rewritten to a plain `>`, so that the
+# separator split used by both checks below (it maps `|` and `&` to newlines to isolate
+# chained segments) cannot TEAR the operator from its target word and hide the write:
+#   `>|<f>`  clobber: always a FILE write; that `|` is not a pipe.
+#   `>&<f>`  when <f> is a FILE: writes stdout+stderr to it.
+# Dropping `|`/`&` from the separator set instead is not an option: that split is what
+# stops a write signal in one chained segment from pairing with an unrelated path mention
+# in another. Rewriting the operator keeps the split intact and lets the existing
+# target-scoped redirect logic (_guard_git_policy_redir_hits_flag) and the git_re redir
+# atoms handle these forms unchanged.
+#
+# The fd DUP forms are deliberately NOT rewritten and stay non-writes, because they name
+# a file DESCRIPTOR, not a path: `>&1`, `>&2`, `2>&1`, the whitespace-separated `2>& 1`
+# (bash dups across the space; verified) and `>&-` (close). This is what keeps `cat
+# <flag> 2>&1` the pure READ it looks like. The discriminator is the first char of the
+# target word: a digit or `-` is an fd, anything else is a path. A shell metachar there
+# is not a target word at all, so it is left alone too.
+#
+# Bounded: one sed pass, cost linear in the command length; no loop, no rescan.
+_guard_git_policy_norm_redir_ops() {
+  printf '%s' "${1:-}" \
+    | sed -E -e 's/>[|]/>/g' \
+             -e 's/>&([[:space:]]*)([^[:space:]0-9;&|(){}<>-])/>\1\2/g'
+}
+
 # _guard_git_policy_hits_git <cmd>: return 0 when the command creates a commit or
 # performs a push, handling the tested global-option forms, compound commands,
-# shell wrappers, env prefixes, leading redirections, and quote/backslash/tab/
-# backslash-newline verb obfuscations (see the header's tested-and-blocked list);
-# return 1 otherwise. Not a shell parser; residual classes are in the header.
+# shell wrappers, env prefixes, leading and mid-command redirections, a path-qualified
+# git, and quote/backslash/tab/backslash-newline verb obfuscations (see the header's
+# tested-and-blocked list); return 1 otherwise. Not a shell parser; residual classes
+# are in the header.
 #
 # Method: normalize by translating shell command boundaries (separators, quotes,
 # grouping, backtick, whitespace controls) to newlines, then match, per line, a
@@ -141,13 +183,19 @@ _guard_git_policy_state() {
 # verb to segment start inside `cd X && git commit`, `bash -c "git commit"`, and
 # `VAR=v git commit`.
 _guard_git_policy_hits_git() {
-  local cmd="$1" seps qnorm git_re assign redir prefix globals verb unq alias_re qdel
+  local cmd="$1" seps qnorm git_re assign redir redir_mid pathpfx prefix globals verb
+  local unq alias_re qdel
   local nl=$'\n'
   # Collapse backslash-newline line continuations FIRST, exactly as the shell does:
   # it elides a `\<LF>` and runs `git \<LF>commit` as `git commit`. Without this the
   # backslash-delete in the qdel form below leaves the LF, which the separator split
   # then breaks on, landing git and its verb on separate lines.
   cmd="${cmd//\\$nl/}"
+
+  # Rewrite `>|` / `>&<file>` to a plain `>` before the separator split below tears
+  # those operators apart, so a clobber/dup-to-file spelling of a tolerated redirection
+  # (`>|f git commit`) reaches the redir atoms below like its plain `>` form.
+  cmd=$(_guard_git_policy_norm_redir_ops "$cmd")
 
   # Segment-start prefix tolerated before the literal `git`: zero or more atoms, each
   # either an env assignment (VAR=val) OR a redirection clause, in any order. bash
@@ -158,9 +206,24 @@ _guard_git_policy_hits_git() {
   assign='[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+'
   redir='[0-9]*&?[<>]+&?[0-9]*[[:space:]]*[^[:space:]]*[[:space:]]+'
   prefix='('"$assign"'|'"$redir"')*'
-  globals='([[:space:]]+((-C|-c|--git-dir|--work-tree|--namespace|--super-prefix)([[:space:]]+|=)[^[:space:]]+|--[A-Za-z][A-Za-z0-9-]*|-[pP]))*'
+  # bash also permits a redirection BETWEEN the command word and its arguments: it runs
+  # `git >f commit` as `git commit`, which the globals set must therefore tolerate the
+  # same way it tolerates `-C <dir>`. Unlike the PREFIX redir atom above, the target word
+  # is REQUIRED here (`[^[:space:]]+`, not `*`): letting it match empty would also let
+  # `git > commit` match (a redirect to a FILE named commit, which runs no verb at all)
+  # and false-block it.
+  redir_mid='[0-9]*&?[<>]+&?[0-9]*[[:space:]]*[^[:space:]]+'
+  globals='([[:space:]]+((-C|-c|--git-dir|--work-tree|--namespace|--super-prefix)([[:space:]]+|=)[^[:space:]]+|--[A-Za-z][A-Za-z0-9-]*|-[pP]|'"$redir_mid"'))*'
+  # A PATH-qualified git is still git: bash runs `/usr/bin/git commit` as a commit, but
+  # the bare `git` literal below would never match it. Tolerate an optional leading path
+  # component. The trailing `/` is REQUIRED when this atom is non-empty, so only a real
+  # path prefix matches and a word merely ENDING in git (`mygit`, `legit`) does not: with
+  # the `^` anchor, such a word can reach the `git` literal only through this atom, and
+  # `my`/`le` cannot match it. (`sudo`/`command`/`xargs` prefixing git stays a residual:
+  # those are separate command words, not a path on the git word.)
+  pathpfx='([^[:space:]]*/)?'
   verb='(commit-tree|commit|cherry-pick|revert|rebase|merge|push|am|fast-import)'
-  git_re='^[[:space:]]*'"$prefix"'git'"$globals"'[[:space:]]+'"$verb"'([[:space:]]|$)'
+  git_re='^[[:space:]]*'"$prefix$pathpfx"'git'"$globals"'[[:space:]]+'"$verb"'([[:space:]]|$)'
 
   # Inline alias-to-mutation-verb definition: `git -c alias.<name>=<mutation-verb>`
   # defines a commit/push alias on the command line, then invokes it under a benign
@@ -270,10 +333,39 @@ _guard_git_policy_norm_target() {
   fi
 }
 
+# _guard_git_policy_redir_hits_flag <segment> <flagpath> [cwd]: return 0 (true) when a
+# `>` / `>>` redirection in <segment> TARGETS <flagpath>.
+#
+# A redirection glyph that merely CO-OCCURS with the flag path is not a write TO the
+# flag: `cat <flag> 2>&1` is a pure READ whose `2>` targets an fd dup, not the flag. So
+# each redirect's TARGET word is resolved and compared on its own, instead of pairing
+# any `>` in the segment with any flag-normalizing token elsewhere in it.
+#
+# A target is extracted as: optional leading fd, `>` or `>>`, optional spaces/tabs,
+# then the target word; `>flag`, `> flag` and `>\tflag` all yield `flag`. `<` is NOT
+# matched (an input redirection reads, it does not write). An fd-dup target (`&1`) is
+# not a file and is rejected; in practice the upstream separator split already maps the
+# `&` to a newline, leaving `2>` with no target word at all, which is likewise no write.
+_guard_git_policy_redir_hits_flag() {
+  local line="${1:-}" flagpath="${2:-}" cwd="${3:-}" rtok ntok
+  case "$line" in *'>'*) : ;; *) return 1 ;; esac
+  while IFS= read -r rtok; do
+    [ -n "$rtok" ] || continue
+    case "$rtok" in '&'*) continue ;; esac
+    ntok=$(_guard_git_policy_norm_target "$rtok" "$cwd")
+    [ -n "$ntok" ] || continue
+    [ "$ntok" = "$flagpath" ] && return 0
+  done <<EOF
+$(printf '%s' "$line" | grep -oE '[0-9]*>>?[[:space:]]*[^[:space:]]*' \
+   | sed -E 's/^[0-9]*>>?[[:space:]]*//')
+EOF
+  return 1
+}
+
 # _guard_git_policy_hits_flagwrite <cmd>: return 0 (true) when <cmd> writes to the
-# resolved policy-flag path by ANY of: shell redirection (>, >>), a write-capable
-# tool naming the path (tee, cp, mv, install, ln, truncate), `dd of=<path>`, or
-# `sed -i` / `sed --in-place` targeting the path.
+# resolved policy-flag path by ANY of: shell redirection (>, >>) TARGETING the path, a
+# write-capable tool naming the path (tee, cp, mv, install, ln, truncate), `dd
+# of=<path>`, or `sed -i` / `sed --in-place` targeting the path.
 #
 # Method: an O(1) fast-path first returns unless the flag BASENAME appears literally
 # (see below; this is what keeps large commands cheap). Then `${HOME}`/`$HOME` and
@@ -283,12 +375,15 @@ _guard_git_policy_norm_target() {
 # signal in one chained command never pairs with an unrelated path mention in another.
 # A `cd <dir>` segment updates a running cwd (it affects later segments in the same
 # shell), so a `cd <flagdir> && echo x > <basename>` sequence resolves the relative
-# target against the cd'd directory. Within a write-bearing segment, EVERY whitespace
-# token is REALPATH-NORMALIZED (see _guard_git_policy_norm_target) and compared to the
-# normalized flag path; a normalized flag-path token alongside a write signal is a
-# hit. Deliberately over-inclusive (e.g. `cp <flag> /tmp/backup`, which only READS the
-# flag, also matches) because for this security-critical file a false block is the
-# safe failure mode. Comparing normalized targets (not raw strings) is what closes the
+# target against the cd'd directory. Each segment is then matched by the two write-
+# signal classes. A REDIRECTION hits only when its TARGET word REALPATH-NORMALIZES to
+# the flag path (see _guard_git_policy_redir_hits_flag), because a redirect that merely
+# CO-OCCURS with the flag path (`cat <flag> 2>&1`) does not write it at all. A TOOL
+# signal (tee/cp/mv/install/ln/truncate, dd of=, sed -i) hits when ANY whitespace token
+# in the segment normalizes to the flag path; that class stays deliberately over-
+# inclusive (e.g. `cp <flag> /tmp/backup`, which only READS the flag, also matches)
+# because for this security-critical file a false block is the safe failure mode.
+# Comparing normalized targets (not raw strings) is what closes the
 # STATICALLY spellable bypasses -- $HOME/${HOME}, ~/, //, ./.., cd+relative, and a
 # simple `VAR=<literal>; > $VAR` indirection all resolve to the one real file. A path
 # built by command substitution `$(...)`, `eval`, or a runtime-valued variable is the
@@ -372,6 +467,14 @@ EOF
   # cheap and the expensive per-segment loop is still skipped for the common case).
   printf '%s' "$cmd" | grep -qF -- "$flagbase" || return 1
 
+  # Rewrite `>|` / `>&<file>` to a plain `>` so the split below cannot tear those
+  # operators from the flag path (`echo enabled >| <flag>` writes the flag in bash). Run
+  # AFTER the fast-path above deliberately: the rewrite cannot change whether the flag
+  # BASENAME is present, so gating it behind the fast-path keeps this fork off the hot
+  # path (every Bash call reaches here) while still preceding the split, which is the
+  # only thing it must precede.
+  cmd=$(_guard_git_policy_norm_redir_ops "$cmd")
+
   # A literal TAB is NOT in this separator set (nor in the asrc set above): tab is
   # intra-segment WHITESPACE, so a `tee<TAB><flag>` or `>\t<flag>` must stay in one
   # segment; the tokenizer below folds tab to a space instead. Backslashes are
@@ -411,11 +514,15 @@ EOF
       fi
     fi
 
-    # Write-signal detection on the raw segment (before redirection glyphs are
-    # neutralized for tokenizing).
+    # Redirection write: only a redirect whose TARGET is the flag counts (a bare `>`
+    # in the segment proves nothing; `cat <flag> 2>&1` is a read). Checked on the raw
+    # segment, before redirection glyphs are neutralized for tokenizing below.
+    _guard_git_policy_redir_hits_flag "$line" "$flagpath" "$cwd" && return 0
+
+    # Tool-based write signals: over-inclusive by design (see the header), so any
+    # flag-normalizing token in the segment counts, not just the tool's own target.
     has_write=1
-    if   printf '%s' "$line" | grep -Eq '>>?'; then :
-    elif printf '%s' "$line" | grep -Eq '(^|[[:space:]])(tee|cp|mv|install|ln|truncate)([[:space:]]|$)'; then :
+    if   printf '%s' "$line" | grep -Eq '(^|[[:space:]])(tee|cp|mv|install|ln|truncate)([[:space:]]|$)'; then :
     elif printf '%s' "$line" | grep -Eq '(^|[[:space:]])dd([[:space:]]|$)' \
          && printf '%s' "$line" | grep -Eq 'of='; then :
     elif printf '%s' "$line" | grep -Eq '(^|[[:space:]])sed([[:space:]]|$)' \
@@ -425,11 +532,12 @@ EOF
     fi
     [ "$has_write" -eq 1 ] || continue
 
-    # Tokenize: turn redirection glyphs (and any intra-segment TAB) into spaces so
-    # `>flag` / `> flag` / `>\tflag` all surface `flag` as its own token, then read
-    # into an array on space+tab (read -ra never globs, so a `*`/`?` in the segment
-    # cannot expand against the filesystem). Splitting IFS on tab as well as space
-    # means a leading-tab target can never survive as a non-absolute token.
+    # Tokenize: turn any redirection glyph (and any intra-segment TAB) into spaces so
+    # every path surfaces as its own token (`tee<TAB><flag>`, or a tool segment that
+    # also carries a redirect), then read into an array on space+tab (read -ra never
+    # globs, so a `*`/`?` in the segment cannot expand against the filesystem).
+    # Splitting IFS on tab as well as space means a leading-tab target can never
+    # survive as a non-absolute token.
     clean=$(printf '%s' "$line" | tr '<>\t' '   ')
     IFS=$' \t' read -ra toks <<<"$clean"
     for tok in "${toks[@]}"; do

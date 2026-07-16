@@ -81,11 +81,21 @@ for arg in "$@"; do
   esac
 done
 
-TIMER_DIR="$HOME/.claude/session-timers"
+# Override-able for tests (see scripts/tests/test-session-reaper.sh); same convention
+# as hooks/lib.sh's rm_session_files/already_warned. Defaults to the real dir.
+TIMER_DIR="${TIMER_DIR:-$HOME/.claude/session-timers}"
 mkdir -p "$TIMER_DIR"
 KILLED=0
 FREED_KB=0
 MY_PID=$$
+
+# Current session id (self-skip guard for the orphan timer-file sweep below).
+# Empty when unset: nothing to skip, sweep behaves as before.
+# Trap: a caller that overrides CLAUDE_CODE_SESSION_ID (e.g. to point the self-skip
+# at a fixture sid for testing) without ALSO overriding TIMER_DIR to a fixture dir
+# redirects the guard away from the real live session, leaving it unprotected
+# against the real TIMER_DIR. Always override both together, never just one.
+CURRENT_SID="${CLAUDE_CODE_SESSION_ID:-}"
 
 # Memory pressure threshold (MB): alert if total claude RSS exceeds this
 MEM_ALERT_THRESHOLD=8192
@@ -229,10 +239,16 @@ CLEANED_FILES=0
 if [ -d "$TIMER_DIR" ]; then
   for pid_file in "$TIMER_DIR"/*.pid; do
     [ -f "$pid_file" ] || continue
+    SID=$(basename "$pid_file" .pid)
+    # Never reap our own session's timer files. In this WSL detached-exec
+    # environment the PID recorded in <sid>.pid is routinely stale even
+    # while the session is live, so kill -0 against it is not a reliable
+    # liveness test for the CURRENT session; trust the session-id match
+    # instead. Mirrors hooks/modules/40-gc.sh Phase 2's self-skip idiom.
+    [ -n "$CURRENT_SID" ] && [ "$SID" = "$CURRENT_SID" ] && continue
     TRACKED_PID=$(cat "$pid_file" 2>/dev/null || echo "")
     [ -z "$TRACKED_PID" ] && continue
     if ! kill -0 "$TRACKED_PID" 2>/dev/null; then
-      SID=$(basename "$pid_file" .pid)
       AGENT=$(cat "$TIMER_DIR/${SID}.agent" 2>/dev/null || echo "?")
       START_EPOCH=$(cat "$TIMER_DIR/${SID}.start" 2>/dev/null || echo "")
       DURATION=""

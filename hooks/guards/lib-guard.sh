@@ -2,8 +2,9 @@
 #
 # Defines functions ONLY at source time; no top-level side effects (sourcing is inert).
 # Provides, after guard_init (called once by the dispatcher with the raw hook stdin JSON):
-#   GUARD_TOOL        tool name           GUARD_AGENT   resolved agent (walk_to_agent, lib.sh)
-#   GUARD_INPUT_JSON  raw .tool_input     GUARD_STDIN   raw hook stdin JSON
+#   GUARD_TOOL        tool name           GUARD_AGENT   resolved agent (walk_to_agent,
+#   GUARD_INPUT_JSON  raw .tool_input                   lib.sh; else the per-session
+#   GUARD_STDIN       raw hook stdin JSON               agent marker; "" = unresolved)
 # Accessors (read the parsed context, never re-parse stdin):
 #   guard_field <key|dotted.path>  guard_file_path  guard_command
 #   guard_new_content (Write/Edit/MultiEdit new text)  guard_agent_prompt (Agent prompt)
@@ -45,6 +46,28 @@ guard_init() {
   # Resolve the agent via the shared proc-tree walk (hooks/lib.sh). Absent => "".
   if declare -F walk_to_agent >/dev/null 2>&1; then
     GUARD_AGENT=$(walk_to_agent 2>/dev/null || echo "")
+  fi
+
+  # Fallback: the proc-tree walk yields "" whenever the hook runs detached from the
+  # claude process (its parent is PID 1 at once, so the walk has nothing to climb),
+  # which would leave every identity-gated guard stuck at its default-deny and block
+  # the sanctioned writer. Fall back to the per-session agent marker written by
+  # hooks/modules/00-parse.sh: the identity SOT already read by session-cleanup.sh,
+  # agent-outcome.sh, pre-compact.sh and the session scripts. The session id is
+  # sanitized exactly as 00-parse.sh does, so it can never traverse out of the timer
+  # dir. 00-parse.sh caches an EMPTY marker for a session started with no --agent, so
+  # only a NON-EMPTY marker resolves; an empty one stays unresolved and keeps the
+  # default-deny. Fail-open: a missing or unreadable marker just leaves GUARD_AGENT "".
+  if [ -z "$GUARD_AGENT" ]; then
+    local sid tdir amark
+    sid=$(printf '%s' "$raw" | jq -r '.session_id // ""' 2>/dev/null) || sid=""
+    [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
+    sid=$(printf '%s' "$sid" | tr -cd 'a-zA-Z0-9_-')
+    tdir="${SUPERCLAUDE_SESSION_TIMER_DIR:-$HOME/.claude/session-timers}"
+    if [ -n "$sid" ] && [ -f "$tdir/$sid.agent" ]; then
+      amark=$(tr -d '[:space:]' <"$tdir/$sid.agent" 2>/dev/null) || amark=""
+      [ -n "$amark" ] && GUARD_AGENT="$amark"
+    fi
   fi
 
   if [ "$GUARD_PARSE_OK" -ne 1 ]; then

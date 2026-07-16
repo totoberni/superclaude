@@ -140,7 +140,7 @@ Orch reported DONE on `report.tex`. Scope check: 4 files, all reversible (typo f
 - **NEVER** skip R-1 schema spec when ≥2 workers in the batch share output.
 - **NEVER** invoke this skill from a `w-*` worker — only meta+orch have spawn authority.
 - **NEVER** bundle uncertain calls (file lookups that may fail, ref lookups, commands that might error) with safe calls in the same parallel batch — Anthropic cancels ALL siblings if any single call errors. Run discovery calls first, then dispatch from confirmed inputs.
-- **NEVER** assume thinking depth propagates — embed keywords per spawn prompt.
+- **NEVER** rely on a prompt keyword for thinking depth. Thinking IS inherited from the session; the depth control is the `effort` chain. Set `effort:` in the worker's agent frontmatter, or override model/effort at dispatch. SOT: `~/.claude/rules/13-worker-first-mandate.md` § Critical Implementation Note.
 
 ## Cross-References
 

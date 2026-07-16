@@ -4,9 +4,12 @@
 # Defines functions ONLY at source time; the one sanctioned top-level statement is
 # the default-mode declaration (GUARD_MODE_CONTENT_SCAN), a config, not an action.
 #
-# Scope: diff-scoped. guard_new_content already returns ONLY the new text, so a
-# grandfathered dash or ref elsewhere in the file is never scanned (rules/06 is
-# forward-looking; we only police what this tool call adds).
+# Scope: guard_new_content is a TRUE diff for Edit/MultiEdit (.new_string), but NOT
+# for Write, whose .content is the WHOLE file. The DASH class therefore re-derives a
+# diff for Write against the file on disk (_cs_dash_text): rules/06 is forward-
+# looking, so re-writing an already-present (grandfathered) dash must NOT block; only
+# a dash-bearing line this call ADDS does. The FIREWALL and TRIGGER-TOKEN classes
+# scan the whole text by design (they are not forward-looking rules).
 #
 # Violation classes (each BLOCKs, naming which fired):
 #   1. EM-DASH / EN-DASH  : a U+2014 or U+2013 byte in the new text.        (rules/06)
@@ -33,6 +36,39 @@ _cs_has_dash() {
   em=$(printf '\342\200\224')   # U+2014 em-dash
   en=$(printf '\342\200\223')   # U+2013 en-dash
   printf '%s' "$text" | LC_ALL=C grep -qF -e "$em" -e "$en"
+}
+
+# _cs_added_lines <old_file> <new_text>: prints the lines of <new_text> that do NOT
+# already exist as an exact whole line anywhere in <old_file>.
+#
+# Line EXISTENCE, not a positional diff: an LCS diff reports a MOVED but unchanged
+# line as added, which would false-block a mere section reorder of a grandfathered
+# doc. An EDITED dash line has new exact text, so it IS reported; that is intended
+# (rules/06: introduce no new dashes). -x whole-line keeps a blank line in the old
+# file from matching everything; -F keeps old text from acting as a regex.
+# rc: 0 lines added, 1 none added, >1 grep error (caller falls back to whole text).
+_cs_added_lines() {
+  local old="$1" new="$2"
+  printf '%s\n' "$new" | LC_ALL=C grep -vxF -f "$old"
+}
+
+# _cs_dash_text <text>: the text the DASH class should scan. For a whole-file Write
+# over an EXISTING file that is only the added lines; otherwise (Edit/MultiEdit,
+# where the text already IS a diff, or a genuinely new file) it is the whole text.
+# FAIL-OPEN per the lib-guard contract: on any doubt, return the whole text (scan
+# more, never error). Assignment via '|| rc=$?' so a set -e dispatcher cannot abort.
+_cs_dash_text() {
+  local text="$1" fp added rc=0
+  [ "${GUARD_TOOL:-}" = "Write" ] || { printf '%s' "$text"; return 0; }
+  fp=$(guard_file_path)
+  # A '-'-leading path would be eaten by grep -f as an option/stdin; not a real
+  # absolute tool path, so scan whole. Path is only ever quoted, never eval'd.
+  case "$fp" in -*) printf '%s' "$text"; return 0 ;; esac
+  # Absent file => a genuinely new file: every line of it is new.
+  [ -n "$fp" ] && [ -f "$fp" ] && [ -r "$fp" ] || { printf '%s' "$text"; return 0; }
+  added=$(_cs_added_lines "$fp" "$text" 2>/dev/null) || rc=$?
+  [ "$rc" -le 1 ] || { printf '%s' "$text"; return 0; }
+  printf '%s' "$added"
 }
 
 # ── Class 3: unescaped live trigger token ─────────────────────────────────────
@@ -101,7 +137,9 @@ guard_content_scan() {
 $prompt"
   fi
 
-  if _cs_has_dash "$text"; then
+  # DASH class only: scan the ADDED lines (see _cs_dash_text). The two classes below
+  # deliberately keep scanning "$text" whole.
+  if _cs_has_dash "$(_cs_dash_text "$text")"; then
     guard_block "em-dash/en-dash in new content (rules/06 no-dash); use ; : , . or ()"
   fi
 

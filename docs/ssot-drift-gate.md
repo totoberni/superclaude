@@ -32,9 +32,12 @@ pointer resolver over the whole corpus: every `` SOT: `path` `` and `` see `path
 found anywhere must resolve to a real file.
 
 Invocation: `python3 ~/.claude/scripts/ssot-lint.py --root ~/.claude`. It reports failures, exit 1
-on any, exit 0 clean. As of this writing there is one known pre-existing benign unresolved
-pointer, `skills/research/references/report.md:456`, out of scope of this campaign and not new
-drift; every other check is clean.
+on any, exit 0 clean. One pointer is mechanically exempted via `POINTER_IGNORES` in
+`ssot-lint.py`: `skills/research/references/report.md`'s citation of `docs/reprod-notes.md §M3`
+is a teaching example (illustrating how a downstream project cites its own reproduction notes),
+not a real corpus target, so it is not drift. The exemption is keyed to the exact
+(referencing file, pointer text) pair, not a general allowlist, so a different unresolvable
+pointer anywhere else still fails the gate. With that one exemption applied, the gate is clean.
 
 ## Adding a concept
 
@@ -45,8 +48,8 @@ drift; every other check is clean.
    `ground_truth` for a fact about the filesystem or corpus rather than a designated home;
    `pointer_only` when no marker or pattern can be written without being fragile or
    false-positive-prone (no clean machine-checkable signal exists).
-3. Re-run the linter and confirm zero NEW failures (the one known benign pointer above is the only
-   pre-existing exception).
+3. Re-run the linter and confirm it exits 0 clean (the one `POINTER_IGNORES` exemption above is
+   the only intentional exception; any other failure is real drift to fix, not to ignore).
 
 When the marker is a heading, anchor it to the heading line itself
 (`^#{1,6}\s+Exact Heading Text`) rather than a bare substring, so other files citing that heading
