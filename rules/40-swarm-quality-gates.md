@@ -11,14 +11,14 @@ When ≥2 parallel workers will produce/consume the same artefact (JSON, CSV, fi
 
 Phase-4 example-mlmodel wave required post-hoc hoist due to schema mismatch — this rule prevents recurrence.
 
-## R-2: Auto-Baseline-Stash for /commit false Repos
+## R-2: Auto-Baseline-Stash for No-Commit-Projects Convention
 
-On session start when project policy = `/commit false`, auto-stash baseline:
+On session start when the repo matches the no-commit-projects convention (repos where agents do not auto-commit; owner commits manually; detected via `CLAUDE_COMMIT_POLICY` or `hooks/no-commit-projects.local`), auto-stash baseline:
 ```bash
 git -C <repo> status --short > /tmp/<session_id>-baseline.txt
 git -C <repo> diff > /tmp/<session_id>-baseline.diff
 ```
-Inject baseline path into every `w-reviewer` dispatch prompt. Mitigates dirty-tree attribution false-positive REJECTs.
+Inject baseline path into every `w-reviewer` dispatch prompt. Mitigates dirty-tree attribution false-positive REJECTs. This drives the baseline-stash reviewer-attribution hook only; it does not mechanically block commits (that is `/git`'s job, global).
 
 ## R-3: Worker Verification After Spawn
 
@@ -58,11 +58,11 @@ R-5 is also enforced mechanically by the autonomous driver (`scripts/swarm/conve
 
 ## Enforcement
 
-- R-2 baseline-stash: enforced by `~/.claude/hooks/modules/15-baseline-stash.sh` (when policy=/commit false)
-- R-3 worker verification: enforced by orch.md § Worker Verification protocol
+- R-2 baseline-stash: enforced by `~/.claude/hooks/modules/15-baseline-stash.sh` (when the repo matches the no-commit-projects convention)
+- R-3 worker verification: enforced by orch.md § Worker Verification protocol and mechanized by `~/.claude/hooks/guards/80-worker-verify.sh`
 - R-1 schema spec: enforced by `/swarm-dispatch` skill checks
 - R-4 fleet expansion: enforced by `/promote` skill (queries DB `shared-global` tier for ≥3-occurrence patterns)
-- R-5 no pre-approval: enforced by `/converge` and `/review-dispatch` (fresh-auditor SEAL, most-recent and post-change); SOT `skills/_shared/verdict-schema.md`
+- R-5 no pre-approval: enforced by `/converge` and `/review-dispatch` (fresh-auditor SEAL, most-recent and post-change), mechanized by `~/.claude/hooks/guards/62-review-dispatch.sh` and `~/.claude/hooks/guards/64-seal-binding.sh`; SOT `skills/_shared/verdict-schema.md`
 - R-5 mechanical enforcement (unattended loops): `scripts/swarm/converge_auto.py` (fresh sessions, producer token ban, manifest/commit seal binding) and `scripts/swarm/seal-void-hook.sh` (post-commit seal-void check; when installed via `--install-void-hook`)
 
 ## Cross-References

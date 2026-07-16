@@ -232,10 +232,10 @@ reference this section rather than restating.
   with expected-vs-actual, or a principle name with the clause it
   violates. Opinions without evidence are dropped, not downgraded.
 
-- **Respect project git policy**: check for `/push false` or
-  equivalent before proposing commit steps. When the policy is no
-  agent commits, remediation sequences describe changes for a
-  human to commit manually.
+- **Respect project git policy**: check `config/git-policy` (the
+  `/git` toggle, enforced by `hooks/guards/26-git-policy.sh`) before
+  proposing commit steps. When the policy blocks commits, remediation
+  sequences describe changes for a human to commit manually.
 
 ## Subcommands
 
@@ -258,7 +258,7 @@ reference this section rather than restating.
 - File-based analysis only -- never import/run ML code under
   study; reading data files is fine.
 - All paths absolute, respect git restrictions, respect project
-  `/push` policy.
+  `/git` policy.
 - Every recommendation must cite evidence (file + line, or paper
   + section).
 - Never recommend an experiment without stating what truth it

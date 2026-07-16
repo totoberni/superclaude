@@ -1,6 +1,6 @@
 #!/bin/bash
 # Session reaper: finds and kills zombie claude processes + cleans their timer files.
-# Layer 3 of the session lifecycle manager — on-demand or cron.
+# Layer 3 of the session lifecycle manager: on-demand or cron.
 #
 # Usage:
 #   ~/.claude/scripts/session-reaper.sh           # kill stopped (Tl) processes
@@ -11,7 +11,7 @@
 #   */30 * * * * ~/.claude/scripts/session-reaper.sh >> ~/.claude/session-timers/reaper.log 2>&1
 #
 # Safe to run anytime. Only kills:
-#   - T (stopped) claude processes — frozen, never resuming usefully
+#   - T (stopped) claude processes: frozen, never resuming usefully
 #   - With --all: Sl (active) claude processes older than 3 hours (likely abandoned)
 # Never kills the calling process or its ancestors.
 #
@@ -20,6 +20,12 @@
 # SIGKILL after 5 seconds if the process doesn't exit.
 
 set -uo pipefail
+
+# Shared session-file cleanup helper (SOT: hooks/lib.sh rm_session_files); keeps
+# this script's per-session marker cleanup in lockstep with hooks/modules/40-gc.sh
+# instead of maintaining its own drifting extension list.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/../hooks/lib.sh"
 
 # ── Log rotation: keep logs bounded ──
 rotate_logs() {
@@ -81,7 +87,7 @@ KILLED=0
 FREED_KB=0
 MY_PID=$$
 
-# Memory pressure threshold (MB) — alert if total claude RSS exceeds this
+# Memory pressure threshold (MB): alert if total claude RSS exceeds this
 MEM_ALERT_THRESHOLD=8192
 ALERT_FILE="$TIMER_DIR/memory-alert"
 
@@ -97,7 +103,7 @@ done
 # Stale threshold for --all mode (3 hours in seconds)
 STALE_THRESHOLD=$((3 * 3600))
 
-# Meta session cap — max concurrent meta sessions before oldest get killed
+# Meta session cap: max concurrent meta sessions before oldest get killed
 META_SESSION_CAP=2
 
 echo "=== Session Reaper (mode: $MODE, dry-run: $DRY_RUN) $(date '+%Y-%m-%d %H:%M:%S') ==="
@@ -112,7 +118,7 @@ graceful_kill() {
   kill -CONT "$PID" 2>/dev/null || true
   # Give it a moment to wake up
   sleep 0.2
-  # SIGTERM — lets SessionEnd hook fire if Claude handles it
+  # SIGTERM: lets SessionEnd hook fire if Claude handles it
   kill -TERM "$PID" 2>/dev/null || true
 
   # Wait up to 5 seconds for graceful exit
@@ -205,9 +211,9 @@ if [ "$META_COUNT" -gt "$META_SESSION_CAP" ]; then
     KILL_MIN=$((ELAPSED_S / 60))
     RSS_MB=$((RSS_KB / 1024))
     if [ "$DRY_RUN" = true ]; then
-      echo "[DRY-RUN] Would kill meta PID=$KILL_PID (${KILL_MIN}min old, ${RSS_MB}MB) — over cap of $META_SESSION_CAP"
+      echo "[DRY-RUN] Would kill meta PID=$KILL_PID (${KILL_MIN}min old, ${RSS_MB}MB), over cap of $META_SESSION_CAP"
     else
-      echo "Retiring meta PID=$KILL_PID (${KILL_MIN}min old, ${RSS_MB}MB) — over cap of $META_SESSION_CAP"
+      echo "Retiring meta PID=$KILL_PID (${KILL_MIN}min old, ${RSS_MB}MB), over cap of $META_SESSION_CAP"
       graceful_kill "$KILL_PID" "meta-cap PID=$KILL_PID"
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] ended: agent=meta duration=${KILL_MIN}min pid=$KILL_PID session=meta-cap exit=meta-cap" >> "$TIMER_DIR/session-history.log" 2>/dev/null || true
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] Reaper: meta-cap killed PID=$KILL_PID (${KILL_MIN}min, ${RSS_MB}MB)" >> "$TIMER_DIR/cleanup.log" 2>/dev/null || true
@@ -238,7 +244,7 @@ if [ -d "$TIMER_DIR" ]; then
       else
         # Record session history before deleting
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] ended: agent=$AGENT duration=$DURATION pid=$TRACKED_PID session=${SID:0:8} exit=reaped" >> "$TIMER_DIR/session-history.log" 2>/dev/null || true
-        rm -f "$TIMER_DIR/${SID}".{start,agent,pid,override,calls,tdd,context-warned}
+        rm_session_files "$SID"
         echo "Cleaned timer files: session=${SID:0:8}... agent=$AGENT duration=$DURATION (PID=$TRACKED_PID dead)"
       fi
       CLEANED_FILES=$((CLEANED_FILES + 1))
@@ -258,7 +264,7 @@ if [ "$TOTAL_RSS_MB" -gt "$MEM_ALERT_THRESHOLD" ]; then
   # Write alert file (meta can read this)
   echo "${TOTAL_RSS_MB}MB across ${ACTIVE_COUNT} processes at $(date '+%H:%M:%S')" > "$ALERT_FILE"
 elif [ -f "$ALERT_FILE" ]; then
-  # Pressure resolved — remove alert
+  # Pressure resolved: remove alert
   rm -f "$ALERT_FILE"
 fi
 
@@ -270,7 +276,7 @@ echo "Processes retired: $KILLED (${FREED_MB} MB freed)"
 echo "Timer file sets cleaned: $CLEANED_FILES"
 echo "Active claude processes: $ACTIVE_COUNT (${TOTAL_RSS_MB} MB total)"
 if [ "$META_OVER_CAP" -gt 0 ]; then
-  echo "Meta sessions: $META_COUNT active — $META_OVER_CAP over cap, killed (cap: $META_SESSION_CAP)"
+  echo "Meta sessions: $META_COUNT active, $META_OVER_CAP over cap, killed (cap: $META_SESSION_CAP)"
 else
   echo "Meta sessions: $META_COUNT active (cap: $META_SESSION_CAP)"
 fi

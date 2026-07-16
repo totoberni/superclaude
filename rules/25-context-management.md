@@ -27,7 +27,7 @@ Timer files per session in `~/.claude/session-timers/`:
 - `<session_id>.agent` — agent name
 - `<session_id>.pid` — claude process PID (for liveness checks)
 - `<session_id>.override` — timer bypass (created manually by the user)
-- `<session_id>.context-warned` — one-shot flag for memory footprint warning
+- `<session_id>.context-compact-warned` — one-shot flag for memory footprint warning
 
 ## Periodic Checkpointing (Orchs)
 

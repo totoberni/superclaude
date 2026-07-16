@@ -43,11 +43,9 @@ if [ -f "$HOME/.ssh/skm/ENABLED" ] && [ -x "$HOME/.claude/bin/skm" ]; then
 fi
 
 # Delete all timer files for this session (lib.sh::rm_session_files handles
-# chmod + rm). For this session-id it removes every per-session sidecar:
-#   .start  .agent  .pid  .override  .calls  .tdd  .context-warned
-#   .baseline-stashed  .commit-gate-warned  .bootstrap-warned
-# (the canonical extension list lives in rm_session_files; mirrored here for
-#  readers auditing what a normal SessionEnd cleans without cross-referencing lib.sh).
+# chmod + rm). rm_session_files glob-deletes every "<session_id>.<ext>" marker
+# in one pass; the extension list is a single SOT in hooks/lib.sh, so this stays
+# correct as new marker types are added without a mirrored list here.
 rm_session_files "$SESSION_ID"
 
 # Record session history (structured log for analytics)

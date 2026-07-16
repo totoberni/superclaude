@@ -30,6 +30,9 @@
 # (j-m) SEAL-A-verdict.md M2: keyword-shaped but NOT secret-shaped constant
 # assignments must pass (a short integer, header name, URL path, or TTL value
 # is not a secret). (n) a real high-entropy AWS secret value must still block.
+#
+# (o-p) subject regex tolerates the Conventional-Commits breaking-change
+# marker `!` (feat!: / fix(scope)!:); these must pass with no WARN.
 
 set -uo pipefail
 
@@ -152,6 +155,8 @@ CMD_C='git commit -m "bad message"'
 CMD_D='git add .'
 CMD_E='git add path/to/file'
 CMD_COMPLIANT='git commit -m "fix: x"'
+CMD_BANG='git commit -m "feat!: x"'
+CMD_BANG_SCOPED='git commit -m "fix(api)!: x"'
 
 echo "=== test-30-commit-gate ==="
 run_case "(b) commit, heredoc -m, conventional subject -> pass" \
@@ -180,6 +185,10 @@ run_case "(m) commit, SESSION_TOKEN_TTL=3600 staged -> pass (not secret-shaped)"
   "$REPO_FP" "$CMD_COMPLIANT" 0 "" "GUARD-BLOCK"
 run_case "(n) commit, real high-entropy AWS_SECRET_ACCESS_KEY staged -> block" \
   "$REPO_REALSECRET" "$CMD_COMPLIANT" 2 "secret-shaped" ""
+run_case "(o) commit, feat!: x (breaking-change marker) -> pass, no WARN" \
+  "$REPO_GOOD" "$CMD_BANG" 0 "" "conventional format"
+run_case "(p) commit, fix(api)!: x (scoped breaking-change marker) -> pass, no WARN" \
+  "$REPO_GOOD" "$CMD_BANG_SCOPED" 0 "" "conventional format"
 
 if [ "$fails" -eq 0 ]; then
   echo "test-30-commit-gate: ALL PASS"

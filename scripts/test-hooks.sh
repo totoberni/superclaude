@@ -171,7 +171,7 @@ else
 fi
 
 # G5.4: Existing skills intact
-EXPECTED_SKILLS="nudge pleh health sync-upstream infra-security push session-reaper"
+EXPECTED_SKILLS="nudge pleh health sync-upstream infra-security session-reaper"
 MISSING_SKILLS=""
 for skill in $EXPECTED_SKILLS; do
   if [ ! -f "$HOME/.claude/skills/$skill/SKILL.md" ]; then

@@ -1,4 +1,4 @@
-# Guard: 20-write-acl — path-scoped write ACL keyed on resolved agent identity
+# Guard: 20-write-acl: path-scoped write ACL keyed on resolved agent identity
 # (PHASE2-CONTRACT sec 2/6, enforcement-gap-ledger.md Family 2 rows #4-#7).
 #
 # Fires only for write-class tools (Write/Edit/MultiEdit). Resolves the target path
@@ -8,8 +8,8 @@
 #   - plan.md: meta-only (rules/12 § Plans and State).
 #   - comms/*/directives.md, comms/*/bootstrap.md: meta-only (rules/12 § Communication).
 #   - comms/<other>/...: an orch may write only its OWN comms dir (rules/12 § Communication).
-#   - ~/.claude/settings.json: scaf-only (scaf.md:34; sandbox already denies this, defense
-#     in depth per enforcement-gap-ledger.md Family 2 row #6).
+#   - ~/.claude/settings.json: owner-run-only, blocked for ALL agent roles (sandbox already
+#     denies this; defense in depth per enforcement-gap-ledger.md Family 2 row #6).
 #   - ~/.claude/config/git-policy: meta-only (owner ruling 2026-07-15, guards/26-git-policy.sh
 #     is the SOT enforcing the flag; this rule stops a blocked agent from just flipping it
 #     back via a direct Write/Edit/MultiEdit). UNLIKE every other identity-scoped rule here,
@@ -22,7 +22,7 @@
 #     does not depend on WHO is writing.
 #
 # An unresolved GUARD_AGENT (empty string; walk_to_agent found no `--agent` ancestor) fails
-# OPEN on every identity-scoped rule above (guessing a role is worse than skipping a check) —
+# OPEN on every identity-scoped rule above (guessing a role is worse than skipping a check),
 # except the project-local .claude rule (identity-independent) and the git-policy rule
 # (default-deny by design; see above), both of which fire regardless of identity.
 
@@ -30,7 +30,7 @@ GUARD_MODE_WRITE_ACL=block
 
 # _wacl_norm_path <path>: expand a leading ~ and resolve . / .. / // via `realpath -m`
 # (tolerates a nonexistent target; no filesystem access needed for normalization other
-# than that). Echoes "" for anything that is not absolute after ~-expansion — a relative
+# than that). Echoes "" for anything that is not absolute after ~-expansion, a relative
 # path can't be ACL'd reliably without trusting a caller-supplied CWD, so the caller
 # fails open on empty output.
 _wacl_norm_path() {
@@ -88,8 +88,8 @@ guard_write_acl() {
       ;;
   esac
 
-  # Remaining rules key on agent identity. Fail open when it did not resolve
-  # -- EXCEPT the git-policy flag below, which default-denies instead.
+  # Remaining rules key on agent identity. Fail open when it did not resolve,
+  # EXCEPT the git-policy flag below, which default-denies instead.
   local role
   role=$(_wacl_role "${GUARD_AGENT:-}")
 
@@ -103,8 +103,8 @@ guard_write_acl() {
 
   [ -n "$role" ] || return 0
 
-  if [ "$path" = "$claude_home/settings.json" ] && [ "$role" != "scaf" ]; then
-    guard_block "settings.json write blocked (scaf.md:34, rules/12: scaf-only); agent=${GUARD_AGENT:-} path=$path"
+  if [ "$path" = "$claude_home/settings.json" ]; then
+    guard_block "settings.json write blocked (owner-run-only; sandbox denies all agent roles; rules/12); agent=${GUARD_AGENT:-} path=$path"
     return 0
   fi
 

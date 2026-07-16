@@ -184,7 +184,7 @@ score_skill() {
     [ -f "$fskf" ] || continue
     grep -q '^disable-model-invocation: true$' "$fskf" 2>/dev/null && { flip_hits=$((flip_hits + 1)); flip_list="$flip_list $(basename "$(dirname "$fskf")")"; }
   done
-  for ds2 in push session-reaper handoff; do
+  for ds2 in git session-reaper handoff; do
     dsf2="$CLAUDE/skills/$ds2/SKILL.md"
     if [ ! -f "$dsf2" ]; then
       gate_bad=$((gate_bad + 1)); gate_list="$gate_list $ds2(missing)"; continue

@@ -181,6 +181,8 @@ Standalone hooks:
 | `comms-schema-lint.sh` | PreToolUse (writes to comms) | Schema validation for comms messages |
 | `hcom-pre-tool-use.sh` | PreToolUse | HCOM broker integration (Phase D-full; broker canonical for DIR/RPT/ESC) |
 | `hcom-session-end.sh` | SessionEnd | HCOM broker session-end cleanup (Phase D-full) |
+| `guard-dispatch.sh` | PreToolUse | Guard dispatcher -> 11 guards in `hooks/guards/` (block-first, fail-open); see `~/.claude/docs/guard-subsystem.md` |
+| `guard-post.sh` | PostToolUse | Guard dispatcher (post-phase) -> same 11 guards; see `~/.claude/docs/guard-subsystem.md` |
 
 Details: `~/.claude/rules/25-context-management.md`
 

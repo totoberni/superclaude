@@ -1,6 +1,6 @@
 ---
 name: git
-description: "Use when the owner toggles agent git commit/push permission"
+description: "Use when the user explicitly toggles agent git commit and push permission"
 category: workflow
 user-invocable: true
 argument-hint: "{true|false}"
@@ -13,6 +13,16 @@ Enable or disable ALL agent git commit and push for every agent, by writing the
 policy state file that the `26-git-policy` guard reads.
 
 **Argument**: $ARGUMENTS (`true` = commit and push allowed, `false` = both blocked)
+
+This is the single git commit+push permission toggle. It replaces the old,
+separate `/commit` (which used to also stage and execute commits) and `/push`
+(which used to toggle a `settings.json` deny rule) skills. `/commit` is now
+draft-only (it drafts a conventional commit message and stops; it does not
+commit or gate anything, see `skills/commit/SKILL.md`), and `/push` is removed.
+The legacy `settings.json` `Bash(git push*)` deny this skill used to coexist
+with is retired by the owner-run `~/projects/apply-git-consolidation.sh`
+apply-script, so `26-git-policy.sh` is the sole mechanical gate on git commit
+and push for every agent.
 
 ## Unattended-context gate
 
@@ -31,6 +41,9 @@ reads `~/.claude/config/git-policy` on every Bash tool call. When the file says
 commit-tree, cherry-pick, revert, am, rebase, merge, push, fast-import, and gh
 release create / pr merge / refs-writing api). Read-only git (status, log, diff,
 add) is unaffected.
+
+This skill writes only `~/.claude/config/git-policy`; it does not read or write
+`settings.json`. `settings.json` is owner-run-only (see rules/12-agent-hierarchy.md).
 
 This guard is a best-effort shell-string heuristic, NOT a shell parser and NOT a
 security boundary. Its purpose is to stop an agent's HABITUAL commit/push and

@@ -622,13 +622,13 @@ test_skills() {
   [ "$FLIP_OK" = true ] && pass "S8 DEC-R3 flip invariant (zero skills carry disable-model-invocation: true, incl. gitignored nudge)"
 
   # S9: wf-skills destructive-tier unattended-context gate (W3.5). Each of
-  # skills/push, skills/session-reaper, skills/handoff must carry EXACTLY ONE
+  # skills/git, skills/session-reaper, skills/handoff must carry EXACTLY ONE
   # "## Unattended-context gate" heading AND a description: field starting
   # with "Use when the user explicitly" (guards these destructive skills now
   # that DEC-R3 made every skill model-invocable + loop-able). Real failing
   # paths: a gate section deleted or duplicated, or a description that no
   # longer explicitly guards.
-  local DESTRUCTIVE_SKILLS="push session-reaper handoff"
+  local DESTRUCTIVE_SKILLS="git session-reaper handoff"
   local DESTR_OK=true ds dsf dsfm dsgc
   for ds in $DESTRUCTIVE_SKILLS; do
     dsf="$SKILL_DIR/$ds/SKILL.md"
@@ -642,7 +642,7 @@ test_skills() {
     dsfm=$(sed -n '2,/^---$/p' "$dsf" 2>/dev/null)
     echo "$dsfm" | grep -qE '^description: *"?Use when the user explicitly' || { DESTR_OK=false; fail "S9 destructive gates" "$ds: description does not start with 'Use when the user explicitly'"; }
   done
-  [ "$DESTR_OK" = true ] && pass "S9 destructive gates (push/session-reaper/handoff: exactly 1 gate heading + guarded description)"
+  [ "$DESTR_OK" = true ] && pass "S9 destructive gates (git/session-reaper/handoff: exactly 1 gate heading + guarded description)"
 
   # S10: wf-skills schedule-driver skills (Wave-3). The 5 scheduled loop-driver skills
   # (wf-wave-monitor, wf-watchdog, wf-hpc-watch, wf-nb-watch, wf-hygiene) must each exist

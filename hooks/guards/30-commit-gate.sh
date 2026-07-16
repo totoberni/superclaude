@@ -103,7 +103,7 @@ _guard_commit_gate_commit() {
     local subj
     subj=$(_guard_commit_gate_subject "$cmd")
     if [ -n "$subj" ] \
-       && ! printf '%s' "$subj" | grep -qE -- '^[[:space:]]*(feat|fix|test|docs|chore|refactor|style|ci|perf|build)(\([^)]+\))?:[[:space:]]'; then
+       && ! printf '%s' "$subj" | grep -qE -- '^[[:space:]]*(feat|fix|test|docs|chore|refactor|style|ci|perf|build)(\([^)]+\))?!?:[[:space:]]'; then
       guard_warn "commit subject does not match conventional format feat|fix|test|docs|chore|refactor|style|ci|perf|build(scope)?: <text> (rules/00 Commit Protocol)"
     fi
   fi

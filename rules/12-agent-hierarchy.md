@@ -7,13 +7,13 @@ Chain of command, write scopes, and workspace boundaries for ALL superclaude age
 | Level | Agent | CAN | CANNOT |
 |-------|-------|-----|--------|
 | Strategic | Meta | Write directives/bootstrap/plans, read reports, manage comms bus, spawn read-only helpers, superclaude infra edits (rules/hooks/skills/CLAUDE.md/wrappers) via meta-supervised w-* swarms | Edit project code, git in repos, write state.md during Orch execution, edit settings.json |
-| Infrastructure | Scaffolder (LEGACY 2026-07-01: optional; routine infra now runs on meta+w-* swarms; retained only for large isolated infra campaigns) | Edit `~/.claude/` files (agents, hooks, rules, skills, settings.json), validate infra, write own reports | Edit project code, git in repos, architecture decisions alone, remove deny rules or disable sandbox |
+| Infrastructure | Scaffolder (LEGACY 2026-07-01: optional; routine infra now runs on meta+w-* swarms; retained only for large isolated infra campaigns) | Edit `~/.claude/` files (agents, hooks, rules, skills), validate infra, write own reports | Edit project code, git in repos, architecture decisions alone, remove deny rules or disable sandbox, edit settings.json |
 | Tactical | Orch / Orch-* | Edit project code, git (except push), spawn workers, write state/reports | Push, architecture decisions alone, write plan.md/directives/bootstrap, touch local `.claude/`, edit settings.json |
 | Worker | w-merger, w-debugger, w-refactorer, w-reviewer, w-planner, w-design-reviewer, w-implementer, w-doc, w-explorer, w-tester, w-committer (+ ephemeral via `/autocommission`) | Edit within assigned scope, run scoped commands | Push, touch local `.claude/`, write to comms, unscoped changes, edit settings.json, spawn children |
 
 ## Scaf status (2026-07-01)
 
-Scaf is a legacy v2 pattern; routine superclaude infra edits (rules, hooks, skills, CLAUDE.md, wrappers) now run via meta-supervised w-* swarms with per-diff verification (R-3), not a separate scaf session. Scaf is retained only for large, isolated infra campaigns, the same way orks are reserved for AOS-scale work. `settings.json` stays the one file meta does not edit (permissions boundary unchanged).
+Scaf is a legacy v2 pattern; routine superclaude infra edits (rules, hooks, skills, CLAUDE.md, wrappers) now run via meta-supervised w-* swarms with per-diff verification (R-3), not a separate scaf session. Scaf is retained only for large, isolated infra campaigns, the same way orks are reserved for AOS-scale work. `settings.json` is owner-run-only: the sandbox denies writes to it for every role, including scaf; the old `hooks/guards/20-write-acl.sh` scaf carve-out is dead (being removed).
 
 ## Multi-Orch
 
@@ -102,4 +102,4 @@ A shorthand wrapper exists at `~/.claude/bin/mem`: `mem search "<q>" [-k N]` | `
 
 ## Reviewer Attribution on Dirty Trees
 
-Dirty-tree false-positive REJECT mitigation for `/commit false` repos: step 1 (baseline stash) is enforced by `~/.claude/hooks/modules/15-baseline-stash.sh` (auto-stash on first Edit/Write/MultiEdit). Full mitigation (baseline path injected into every `w-reviewer` dispatch, optional explicit scope-list note): `40-swarm-quality-gates.md` R-2.
+Dirty-tree false-positive REJECT mitigation for no-commit-projects convention repos (repos where agents do not auto-commit; owner commits manually; detected via `CLAUDE_COMMIT_POLICY` or `hooks/no-commit-projects.local`): step 1 (baseline stash) is enforced by `~/.claude/hooks/modules/15-baseline-stash.sh` (auto-stash on first Edit/Write/MultiEdit). Full mitigation (baseline path injected into every `w-reviewer` dispatch, optional explicit scope-list note): `40-swarm-quality-gates.md` R-2.

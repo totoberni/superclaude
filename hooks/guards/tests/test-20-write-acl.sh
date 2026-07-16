@@ -7,7 +7,7 @@
 # stdin JSON for GUARD_TOOL/GUARD_INPUT_JSON; GUARD_AGENT is set directly afterward.
 #
 # guard_block does `exit 2` in block mode, so each case runs guard_write_acl (via
-# run_guard) inside a `()` subshell — the only way to catch that exit as an rc rather than
+# run_guard) inside a `()` subshell, the only way to catch that exit as an rc rather than
 # killing the test runner. Self-contained, /tmp only, no repo mutation.
 #
 # Cases:
@@ -17,6 +17,7 @@
 #   (d) agent=o-foo         write comms/o-foo/reports.md           -> pass  (own dir)
 #   (e) agent=o-foo         write comms/o-bar/state.md             -> block (rule #5, cross-namespace)
 #   (f) agent=orch          write settings.json                    -> block (rule #6)
+#   (f2) agent=scaf         write settings.json                    -> block (rule #6, carve-out removed, owner-run-only)
 #   (g) agent=scaf          write <project>/.claude/settings.json  -> block (rule #7, identity-independent)
 #   (h) agent=""            write plans/X/plan.md                  -> pass  (fail-open, unknown identity)
 #   (i) agent=orch, mode=warn, write plans/X/plan.md               -> exit 0 + WARN (degrade)
@@ -91,8 +92,11 @@ run_case "(d) orch writes its own reports.md -> pass" \
 run_case "(e) orch writes another orch's state.md -> block (cross-namespace)" \
   "Write" "$HOME/.claude/comms/o-bar/state.md" "o-foo" 2 "" ""
 
-run_case "(f) orch writes settings.json -> block (scaf-only)" \
+run_case "(f) orch writes settings.json -> block (owner-run-only)" \
   "Edit" "$HOME/.claude/settings.json" "orch" 2 "" ""
+
+run_case "(f2) scaf writes settings.json -> block (owner-run-only, carve-out removed)" \
+  "Edit" "$HOME/.claude/settings.json" "scaf" 2 "" ""
 
 run_case "(g) scaf writes a project-local .claude/settings.json -> block" \
   "Write" "$HOME/projects/cash/sub/.claude/settings.json" "scaf" 2 "" ""

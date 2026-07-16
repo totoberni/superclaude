@@ -50,7 +50,7 @@ When `/promote` finds an autocommission pattern that has recurred >=3 times (tra
 | `o-example-5.md`, `o-example-6.md`, `o-example-7.md` | IQC orch instances retired after their phases completed |
 | (legacy entries) | Earlier `orch-*.md`, `scaf2.md`, `o-<project>-1b.md` retained for reference |
 
-## Skills (73 total)
+## Skills (72 total)
 
 ### By Category
 
@@ -84,6 +84,8 @@ When `/promote` finds an autocommission pattern that has recurred >=3 times (tra
 | Script | Event | Purpose |
 |--------|-------|---------|
 | `session-timer.sh` | SessionStart, PreToolUse | Dispatcher -> 11 modules |
+| `guard-dispatch.sh` | PreToolUse | Guard dispatcher -> 11 guards in `hooks/guards/`; see `~/.claude/docs/guard-subsystem.md` |
+| `guard-post.sh` | PostToolUse | Guard dispatcher (post-phase) -> same 11 guards; see `~/.claude/docs/guard-subsystem.md` |
 | `pre-compact.sh` | PreCompact | Snapshot state files |
 | `session-cleanup.sh` | SessionEnd | Clean timer files |
 | `stop.sh` | Stop | Stop-event handling |

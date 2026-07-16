@@ -80,12 +80,12 @@ Only the reviewer authors the token; the conductor quotes it verbatim. A round r
 
 ## Critical Rules
 
-- **Reviewer model can DIFFER from producer model** — e.g., sonnet producer + opus reviewer for high-stakes work. Mismatch is a feature, not a bug.
+- **Reviewer model can DIFFER from producer model**: e.g., sonnet producer + opus reviewer for high-stakes work. Mismatch is a feature, not a bug.
 - **--bg back-out risk**: reviewer K's verdict may arrive AFTER producer K+1 has spawned. If reviewer K = REJECT, be prepared to back out producer K+1's work (it built on rejected foundation).
-- **Apply auto-baseline-stash (R-2)** for `/commit false` repos when dispatching reviewer — prevents dirty-tree attribution false-positive REJECTs.
-- **Embed thinking keyword in EACH worker's spawn prompt** — SOT: `rules/13-worker-first-mandate.md` § Critical Implementation Note.
+- **Apply auto-baseline-stash (R-2)** for no-commit-projects convention repos when dispatching reviewer; prevents dirty-tree attribution false-positive REJECTs.
+- **Embed thinking keyword in EACH worker's spawn prompt**: SOT: `rules/13-worker-first-mandate.md` § Critical Implementation Note.
 - When authoring spawn prompts, keep `.workflow` / `/.deep-research` / `.ultracode` dot-escaped (see `rules/13-worker-first-mandate.md` § Trigger Escaping (Author-Time)).
-- **Reviewer is read-only** — fixes route through a NEW producer or escalation, never via the reviewer itself.
+- **Reviewer is read-only**: fixes route through a NEW producer or escalation, never via the reviewer itself.
 
 ## Output Format
 
@@ -110,7 +110,7 @@ Wall time: Ts (savings vs sequential: NN%)
 ## Constraints
 
 - **NEVER use --bg mode** if producer K+1 can be poisoned by producer K's bad output. Sequential is safer when producers chain.
-- **NEVER skip reviewer** for "small" changes — defeats the pattern. If it's truly trivial, don't invoke this skill.
+- **NEVER skip reviewer** for "small" changes: defeats the pattern. If it's truly trivial, don't invoke this skill.
 - Reviewer is read-only audit only. Fixes route through a new producer or escalation, never reviewer-as-fixer.
 - Pattern is a **building block**, not a batch dispatcher. For mixed batches of N independent dyads, use `/swarm-dispatch` and let it embed dyads via this skill.
 - **NEVER build a multi-round loop inside this skill**: one invocation is one dyad (one `/converge` round). To iterate produce-then-review to a sealed finish, delegate to `/converge`; the reviewer never seals its own round.

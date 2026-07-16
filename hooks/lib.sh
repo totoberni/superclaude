@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# ~/.claude/hooks/lib.sh — shared helpers for hook modules
+# ~/.claude/hooks/lib.sh: shared helpers for hook modules
 # Source via: . "$HOME/.claude/hooks/lib.sh" (from any hook script or module)
 #
 # Helpers:
-#   1. get_bash_cmd       — extract Bash tool command from $INPUT JSON
-#   2. walk_to_agent      — proc-tree walk to find `claude --agent <name>`
-#   3. safe_int           — sanitize a value to a non-negative integer
-#   4. rm_session_files   — clean up timer files for a given session id
-#   5. emit_context       — emit JSON {additionalContext: ...} safely via jq
-#   6. already_warned     — one-shot warning marker per (session_id, key)
+#   1. get_bash_cmd       : extract Bash tool command from $INPUT JSON
+#   2. walk_to_agent      : proc-tree walk to find `claude --agent <name>`
+#   3. safe_int           : sanitize a value to a non-negative integer
+#   4. rm_session_files   : clean up timer files for a given session id
+#   5. emit_context       : emit JSON {additionalContext: ...} safely via jq
+#   6. already_warned     : one-shot warning marker per (session_id, key)
 
 # 1. Parse Bash command from tool_input JSON (used by 4+ modules)
 get_bash_cmd() {
@@ -44,14 +44,19 @@ safe_int() {
   echo "${val:-0}"
 }
 
-# 4. Clean up session timer files (used by cleanup.sh + 40-gc 3x)
+# 4. Clean up session timer files (used by cleanup.sh, scripts/session-reaper.sh,
+# hooks/modules/40-gc.sh)
 # Args: $1=session_id
+# Glob-deletes every "<sid>.<ext>" per-session marker in one pass: single SOT for
+# the extension list, instead of three independently maintained lists that drift
+# (this also covers dynamically-suffixed markers like ".thinking-nudge-<worker>"
+# without needing an explicit entry).
 # Note: chmods .start to 644 first because mod_timer set it to 444.
 rm_session_files() {
   local sid="$1" timer_dir="${TIMER_DIR:-$HOME/.claude/session-timers}"
   [ -z "$sid" ] && return 0
   chmod 644 "$timer_dir/${sid}.start" 2>/dev/null || true
-  rm -f "$timer_dir/${sid}".{start,agent,pid,override,calls,tdd,context-warned,baseline-stashed,commit-gate-warned,bootstrap-warned}
+  rm -f "$timer_dir/${sid}".*
 }
 
 # 5. Emit JSON additionalContext safely (used by 5+ modules)
