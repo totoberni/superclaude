@@ -38,6 +38,51 @@ PATCHRIGHT_PIN = "patchright==1.61.*"
 
 _TIMEOUT_MS = 20_000
 
+# Every browser context this system creates is pinned to ONE locale and ONE
+# timezone. A form's advertised date format (the `placeholder` on a start-date
+# box) is a property of the BROWSER SESSION, not of the page: the same live
+# control returns MM/DD/YYYY under en-US and DD/MM/YYYY under en-GB. This
+# factory is the ONLY browser-context-creating site in the system (see the
+# structural guard in tests/test_kernel_locale.py), so pinning it here makes
+# EVERY browser session the engine opens deterministic across hosts and
+# ambient environment (which is itself inconsistent here: LANG=en_GB with
+# LC_TIME=it_IT), rather than agreeing only by coincidence of the ambient
+# locale env. Concretely, today:
+#   - Vendors that capture VIA A BROWSER (lever, ashby) get their capture
+#     session and their later fill session aligned WITH EACH OTHER by this
+#     pin alone.
+#   - Vendors that capture over HTTP (workable, greenhouse) have no browser
+#     probe at all; for them the pin makes only the FILL session
+#     deterministic. The correctness of the typed date for those vendors
+#     still rests on the answers artefact's own recorded format until a
+#     fail-closed fill-time re-derivation lands (deferred to a later wave,
+#     pending the answers-artefact schema). Until that lands, this pin
+#     removes the ambient-locale dependency but does NOT by itself close the
+#     silent-wrong-date defect for the HTTP-capture vendors.
+# A wrong-format date types and reads back cleanly (plain string compare, no
+# `pattern`, no `maxlength`), so the error is silent: 01/09/2026 meaning
+# 1 September would reach an employer as 9 January. en-GB is
+# behaviour-preserving (host default, en-GB and it-IT all yield DD/MM/YYYY on
+# the live control); Europe/Rome is the host's real timezone, so "today" is
+# computed in the operator's day.
+BROWSER_LOCALE = "en-GB"
+BROWSER_TIMEZONE_ID = "Europe/Rome"
+
+# Trade-off, documented here rather than "fixed": `locale=` also collapses
+# `navigator.languages` to a single entry (measured live: bare
+# ["en-GB", "en-US", "en"] becomes pinned ["en-GB"]) and narrows the
+# Accept-Language header along with it. This system deliberately drives real
+# Chrome via Patchright, headed under Xvfb (see PATCHRIGHT_PIN and
+# `_headless_default` above), specifically to avoid looking like a bot; a
+# one-entry languages array is a weak deviation from a real-Chrome profile.
+# This was judged an acceptable trade-off against the ATS surface this engine
+# targets (workable/greenhouse/lever/ashby, not a Cloudflare-hardened one).
+# Do NOT "fix" it with an `extra_http_headers={"Accept-Language": ...}`
+# override: a header advertising `en-GB,en-US;q=0.9,en;q=0.8` while
+# `navigator.languages` reports `["en-GB"]` is a HEADER/JS MISMATCH, which is
+# a STRONGER bot signal than the narrow languages array is on its own.
+# Consistency beats richness here.
+
 
 class CaptureShapeError(RuntimeError):
     """A live DOM/graphql shape did not match this fixture-derived parser.
@@ -82,7 +127,10 @@ def _default_browser_page(user_data_dir=None):
     persistent per-vendor profile (design default is throwaway for capture). The
     STRUCTURAL never-send interceptor is installed on the context by default
     (defence in depth for the fill-only phase): a submit POST is aborted at the
-    network layer regardless of any UI path.
+    network layer regardless of any UI path. Both context-creation branches pin
+    `BROWSER_LOCALE`/`BROWSER_TIMEZONE_ID` (see those constants for what that
+    does and does not guarantee per vendor capture path): every browser session
+    this system opens reads dates in the same locale/timezone.
     """
     from engine.kernel.never_send import install_never_send  # lazy: keeps import light
 
@@ -91,12 +139,15 @@ def _default_browser_page(user_data_dir=None):
     with sync_playwright() as controller:
         if user_data_dir is not None:
             context = controller.chromium.launch_persistent_context(
-                str(user_data_dir), channel="chrome", headless=headless)
+                str(user_data_dir), channel="chrome", headless=headless,
+                locale=BROWSER_LOCALE, timezone_id=BROWSER_TIMEZONE_ID)
             browser = None
         else:
             browser = controller.chromium.launch(
                 channel="chrome", headless=headless)
-            context = browser.new_context()  # anonymous: no storage_state, no cookies
+            # anonymous: no storage_state, no cookies
+            context = browser.new_context(
+                locale=BROWSER_LOCALE, timezone_id=BROWSER_TIMEZONE_ID)
         try:
             install_never_send(context)
             page = context.new_page()

@@ -20,6 +20,7 @@ from engine.kernel.resolve import (
     ANSWERABLE,
     MANUAL_ONLY,
     MISSING_STATUS,
+    _missing_path_guess,
     coverage,
 )
 from engine.ssot import SSOT
@@ -369,6 +370,41 @@ def test_sponsorship_matcher_falls_back_to_legacy_scalar_key():
     report = coverage(fm, ssot, {})
     assert report.fields[0].status == ANSWERABLE
     assert report.fields[0].path == "canned_answers.visa_sponsorship_required"
+
+
+# -- F.1 exact-slug precedence (the G6 trap): a label whose EXACT canned slug is -
+# seeded is answered from that owner datum, ahead of every keyword-table guess.
+# Exact data beats heuristic; the tables stay the fallback for an unseeded label.
+
+def test_exact_canned_slug_beats_keyword_table_guess():
+    # This label BOTH hits the relocation keyword tuple AND has its exact slug
+    # seeded, with the OPPOSITE value. The exact owner datum wins (live G6 trap:
+    # greenhouse question_37393963 keyword-derived "No" while the seeded slug
+    # said "Yes").
+    label = "Are you willing to relocate for this role?"
+    exact = _missing_path_guess(label)                     # canned_answers.<slug>
+    slug = exact.split(".", 1)[1]
+    ssot = SSOT({"canned_answers": {
+        "willing_to_relocate": "No",                       # the keyword-table target
+        slug: "Yes"}})                                     # the exact owner-seeded slug
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field("q", label)])
+    report = coverage(fm, ssot, {})
+    assert report.fields[0].status == ANSWERABLE
+    assert report.fields[0].path == exact
+
+
+def test_unseeded_exact_slug_falls_back_to_keyword_table():
+    # The SAME label with its exact slug NOT seeded still resolves via the
+    # relocation keyword table: the precedence fix never disturbs the tables'
+    # legitimate work for the labels they exist to serve.
+    label = "Are you willing to relocate for this role?"
+    ssot = SSOT({"canned_answers": {"willing_to_relocate": "No"}})
+    fm = FieldMap(vendor="greenhouse", posting_id="9", captured_at=_PINNED,
+                  fields=[_field("q", label)])
+    report = coverage(fm, ssot, {})
+    assert report.fields[0].status == ANSWERABLE
+    assert report.fields[0].path == "canned_answers.willing_to_relocate"
 
 
 # -- W5 additive schema extension (schema_version 2) -------------------------

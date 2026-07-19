@@ -120,7 +120,7 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
             queue.enqueue(posting, breakdown)
             enqueued += 1
 
-    rescored = (_rescore_carryover(scorer, store, discovered_index)
+    rescored = (_rescore_carryover(scorer, store, discovered_index, queue)
                 if options.rescore else 0)
 
     rerank = queue.rerank()
@@ -190,7 +190,8 @@ def _close_board_absent(store, discovery) -> list[str]:
     return closed
 
 
-def _rescore_carryover(scorer: Scorer, store, discovered_index: dict) -> int:
+def _rescore_carryover(scorer: Scorer, store, discovered_index: dict,
+                       queue: QueueStateMachine) -> int:
     """Recompute breakdowns for still-live queued items against the LIVE board.
 
     Carryover items were scored on the run that discovered them; an axis-function
@@ -199,8 +200,22 @@ def _rescore_carryover(scorer: Scorer, store, discovered_index: dict) -> int:
     re-score from the fresh posting and stage a (score, payload.breakdown) update;
     all updates are flushed in ONE store transaction (67-min per-row regression
     guard). The ledger score is updated in the same batch. Returns the count.
+
+    W5.1e round 2, THE BACKFILL: the discard channels are applied to new_postings
+    only, so without this the wave would have changed NOTHING for the rows already
+    in the owner's digest -- the two impossible postings at the top of it would go
+    on being served every morning. A row that the CURRENT scorer discards is
+    therefore carried through the queue state machine to `demoted` (rerank then
+    drops it out of the visible list on its zero score), and the discard plus its
+    reason are persisted in the payload so the demotion can be explained and
+    audited. A row is NEVER deleted, and the state machine is never bypassed.
+
+    Only rows still on the board TODAY are touched (`discovered_index`), so every
+    re-score reads a FRESH posting WITH its full JD text: a JD-less row cannot be
+    discarded here for lacking the sponsorship language it never had.
     """
     updates = []
+    now_discarded = []
     for row in store.all_queue_rows():
         if row["state"] not in ("pending_review", "demoted"):
             continue
@@ -214,10 +229,17 @@ def _rescore_carryover(scorer: Scorer, store, discovered_index: dict) -> int:
             "matched": breakdown.matched,
             "weak": breakdown.weak,
             "ats_warnings": breakdown.ats_warnings,
+            "discard": breakdown.discard,
+            "discard_reason": breakdown.discard_reason,
         }
         updates.append((row["item_id"], row["identity_key"], breakdown.total,
                         payload))
-    return store.bulk_update_scores(updates)
+        if breakdown.discard and row["state"] == "pending_review":
+            now_discarded.append(row["item_id"])
+    rescored = store.bulk_update_scores(updates)
+    for item_id in now_discarded:
+        queue.transition(item_id, "demoted")
+    return rescored
 
 
 def _capture_fieldmaps(config, queue, store, discovered_index, ssot, profile,

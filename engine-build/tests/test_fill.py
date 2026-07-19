@@ -45,6 +45,7 @@ from engine.providers.greenhouse.capture import _SECTION_FOR_SOURCE
 from engine.providers.greenhouse.resolve import GREENHOUSE_WIDGET_RESOLVER
 from engine.profile_map import profile_from_real_ssot
 from engine.ssot import SSOT
+from engine.kernel.ssot import MISSING
 
 _PINNED = "2026-07-03T00:00:00+00:00"
 _NO_OVERRIDE = object()  # sentinel: no readback override forced (input_value()
@@ -1655,13 +1656,207 @@ def test_consent_ticked_even_when_coverage_classifier_misses_path(
     assert resolved.values["q_ack"] is True
 
 
-def test_talent_pool_checkbox_is_ticked_true(real_ssot_path):
-    ssot = SSOT.load(real_ssot_path)
+def _consent_policy_ssot(**overrides):
+    """An SSOT seeded with the owner-ruled (2026-07-19) `policies.consent`
+    subtree (RS-g R-1 schema). `canned_answers.optional_consents` is present so a
+    consent SELECT is ANSWERABLE (reaches `_render_select`); per-class overrides
+    let a test flip one verdict. Extra top-level keys (e.g. a region-keyed
+    `work_authorization` for an assertion) are merged in via `extra`."""
+    consent = {
+        "application_privacy": "consent",
+        "talent_pool": "decline",
+        "marketing": "decline",
+        "assessment": "consent",
+        "ai_notetaker": "opt_out",
+        "assertion": "truthful_only",
+    }
+    extra = overrides.pop("extra", {})
+    consent.update(overrides)
+    data = {"policies": {"consent": consent},
+            "canned_answers": {"optional_consents": "yes, consents"}}
+    data.update(extra)
+    return SSOT(data)
+
+
+def test_talent_pool_checkbox_not_ticked_under_decline_policy():
+    # REVERSED (owner ruling 2026-07-19): the superseded talent-pool YES split is
+    # retired. The live lever wording "...consent to contact me about future job
+    # opportunities" (first-pass census wrongly consented it) is a future-contact
+    # opt-in -> talent_pool -> policy decline -> NEVER ticked, even though the box
+    # carries the verb "consent". This test formerly asserted `q_pool is True`.
+    ssot = _consent_policy_ssot()
+    fm = _fieldmap(_field(
+        "q_pool",
+        "Palantir Technologies has my consent to contact me about future job "
+        "opportunities",
+        type_="boolean", role="checkbox", required=False))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_pool" not in resolved.values
+    assert "not ticked" in dict(resolved.skipped)["q_pool"]
+
+
+def test_talent_pool_bare_wording_still_declines():
+    # The explicit talent-pool wording also declines under the policy.
+    ssot = _consent_policy_ssot()
     fm = _fieldmap(_field(
         "q_pool", "Add me to your talent pool for future opportunities",
+        type_="boolean", role="checkbox", required=False))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_pool" not in resolved.values
+
+
+def test_application_privacy_checkbox_ticked_under_consent_policy():
+    # (b) An application-necessary privacy-notice box ticks when the policy says
+    # consent (the policy IS the owner's ratification; no legacy SSOT answer
+    # needed).
+    ssot = _consent_policy_ssot()
+    fm = _fieldmap(_field(
+        "q_priv", "I have read and agree to the Privacy Notice.",
         type_="boolean", role="checkbox"))
-    resolved = resolve_values(fm, ssot, profile_from_real_ssot(ssot))
-    assert resolved.values["q_pool"] is True
+    resolved = resolve_values(fm, ssot, {})
+    assert resolved.values["q_priv"] is True
+
+
+def test_assessment_participation_checkbox_ticked_under_consent_policy():
+    # (c) W1: an assessment-participation consent ("20 minute aptitude
+    # assessment ... happy to do this?") ticks under policy consent.
+    ssot = _consent_policy_ssot()
+    fm = _fieldmap(_field(
+        "q_assess",
+        "This role includes a 20 minute aptitude assessment. Are you happy to "
+        "do this?",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert resolved.values["q_assess"] is True
+
+
+def test_assertion_checkbox_false_claim_unchecked_by_name():
+    # (d) W2: an ASSERTION checkbox is truthful_only. The owner is NOT
+    # US-work-authorized (region-keyed work_authorization: us needs sponsorship),
+    # so checking it would claim a false fact -> left unchecked with the
+    # owner-ruled reason, recorded BY NAME. Never a false check.
+    ssot = _consent_policy_ssot(extra={
+        "work_authorization": {"us": {"sponsorship_required": True},
+                               "eu": True}})
+    fm = _fieldmap(_field(
+        "q_usauth",
+        "Are you legally authorized to work in the United States?",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_usauth" not in resolved.values
+    reason = dict(resolved.skipped)["q_usauth"]
+    assert "owner ruling 2026-07-19" in reason
+    assert "never falsely checked" in reason
+
+
+def test_assertion_checkbox_true_claim_is_ticked():
+    # (d) The mirror: a provable-true assertion (EU work rights) IS ticked, via
+    # the RS-b work-authorization machinery (region read from the label).
+    ssot = _consent_policy_ssot(extra={
+        "work_authorization": {"us": {"sponsorship_required": True},
+                               "eu": True}})
+    fm = _fieldmap(_field(
+        "q_euauth",
+        "Are you legally authorized to work in the European Union?",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert resolved.values["q_euauth"] is True
+
+
+def test_consent_select_single_affirmative_option_is_picked():
+    # (e) The live greenhouse question_37455721: a privacy-notice SELECT whose
+    # sole option is a non-yes/no affirmative ("Acknowledge/Confirm") failed
+    # "no option match". Under the application-privacy consent policy the single
+    # affirmative option is now picked.
+    ssot = _consent_policy_ssot()
+    fm = _fieldmap(_field(
+        "q_priv_select",
+        "Please confirm that you have read and agree to the Recruitment Privacy "
+        "Notice and Privacy Policy.",
+        type_="multi_value_single_select", options=["Acknowledge/Confirm"]))
+    resolved = resolve_values(fm, ssot, {})
+    assert resolved.values["q_priv_select"] == "Acknowledge/Confirm"
+
+
+def test_consent_select_not_picked_when_policy_declines():
+    # The negative control: with application_privacy DECLINED, the same select
+    # falls back to the honest "no option matches" skip (never auto-picked).
+    ssot = _consent_policy_ssot(application_privacy="decline")
+    fm = _fieldmap(_field(
+        "q_priv_select",
+        "Please confirm that you have read and agree to the Recruitment Privacy "
+        "Notice and Privacy Policy.",
+        type_="multi_value_single_select", options=["Acknowledge/Confirm"]))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_priv_select" not in resolved.values
+
+
+def _live_shape_consent_ssot():
+    """The LIVE toto SSOT shape for the consent classes (NOT the synthetic
+    fixture): `canned_answers.privacy_consent_default` is seeded and
+    `canned_answers.optional_consents` is ABSENT. This is the exact divergence
+    that let `question_37455721` classify MISSING live (the consent matcher pointed
+    ONLY at the absent `optional_consents`) while the offline test passed on the
+    fixture key -- the fixture-friendlier trap F-2 names."""
+    return SSOT({
+        "policies": {"consent": {"application_privacy": "consent"}},
+        "canned_answers": {
+            "privacy_consent_default": (
+                "Application-necessary privacy-policy / data-processing consents "
+                "(required to submit): YES, always tick."),
+        },
+    })
+
+
+def test_consent_select_answerable_via_privacy_consent_default_live_shape():
+    # F-2 LIVE PATH: on the live SSOT (privacy_consent_default present,
+    # optional_consents ABSENT) the greenhouse privacy select must still be
+    # ANSWERABLE -> reach `_render_select` -> RS-g single-affirmative pick. Before
+    # the matcher carried privacy_consent_default this classified MISSING and the
+    # overlay then reported the live "no option match".
+    ssot = _live_shape_consent_ssot()
+    assert ssot.get("canned_answers.optional_consents") is MISSING  # the trap
+    fm = _fieldmap(_field(
+        "question_37455721",
+        "Please confirm that you have read and agree to Canonical's Recruitment "
+        "Privacy Notice and Privacy Policy.",
+        type_="multi_value_single_select", options=["Acknowledge/Confirm"]))
+    resolved = resolve_values(fm, ssot, {})
+    assert resolved.values["question_37455721"] == "Acknowledge/Confirm"
+
+
+_ATTESTATION_LABEL = (
+    "During this application process I agree to use only my own words. I "
+    "understand that plagiarism, the use of AI or other generated content will "
+    "disqualify my application.")
+
+
+def test_ai_attestation_select_never_auto_answered_under_consent_policy():
+    # F-10 SAFETY: the AI-policy attestation is a Yes/No SELECT whose label also
+    # carries "I agree", so it matches the consent matcher and (once answerable via
+    # privacy_consent_default) would reach `_consent_select_option` and auto-pick
+    # "Yes". It MUST fail closed: its polarity is a stance the owner did not make
+    # (FX3 forbids it at generate time). Never auto-answered -> stays skipped ->
+    # the content overlay routes it to the class-ii tos_forbidden verdict.
+    ssot = _live_shape_consent_ssot()
+    fm = _fieldmap(_field(
+        "question_42878852", _ATTESTATION_LABEL,
+        type_="multi_value_single_select", options=["Yes", "No"]))
+    resolved = resolve_values(fm, ssot, {})
+    assert "question_42878852" not in resolved.values
+
+
+def test_ai_attestation_checkbox_never_auto_ticked_under_consent_policy():
+    # The boolean twin: an AI-attestation CHECKBOX ("... I agree ... AI ... will
+    # disqualify") classifies application_privacy via "agree" and would otherwise
+    # tick True under the consent policy. It fails closed too (defense in depth,
+    # the same predicate), recorded by name -- never a silent tick.
+    ssot = _consent_policy_ssot()
+    fm = _fieldmap(_field(
+        "q_attest_cb", _ATTESTATION_LABEL, type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_attest_cb" not in resolved.values
+    assert "AI-policy attestation" in dict(resolved.skipped)["q_attest_cb"]
 
 
 def test_marketing_checkbox_left_unticked(real_ssot_path):
@@ -1907,3 +2102,296 @@ def test_country_of_residence_fills_country_option_from_long_list():
 
     assert resolved.values["q_country"] == "Italy"
     assert resolved.skipped == []
+
+
+# ============================================================================ #
+# RS-h: cross-domain canned mis-fill (compensation matcher hardening).
+# ============================================================================ #
+# Live defect (greenhouse canonical 4124053, 2026-07-18): a FREE-TEXT degree
+# question "What was your bachelor's university degree result, or expected result
+# if you have not yet graduated?" was filled with the compensation scalar
+# "EUR 26,000 gross annual (RAL)" because the bare adjective "expected" matched
+# "expected result". A compensation match now requires a compensation NOUN.
+
+def test_degree_result_free_text_is_never_filled_from_compensation_scalar():
+    ssot = SSOT({"preferences": {"comp_floor": "EUR 26,000 gross annual (RAL)"}})
+    fm = _fieldmap(_field(
+        "q_degree",
+        "What was your bachelor's university degree result, or expected "
+        "result if you have not yet graduated? Please state the GPA/grade."))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert "q_degree" not in resolved.values
+    assert "EUR 26,000 gross annual (RAL)" not in list(resolved.values.values())
+    reason = dict(resolved.skipped)["q_degree"]
+    assert reason.startswith("missing:")            # honest park, not a wrong fill
+
+
+def test_legit_compensation_question_still_resolves_from_comp_floor():
+    ssot = SSOT({"preferences": {"comp_floor": "EUR 47,000 gross annual (RAL)"}})
+    fm = _fieldmap(_field(
+        "q_comp", "What are your compensation expectations for the role?"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_comp"] == "EUR 47,000 gross annual (RAL)"
+    assert resolved.skipped == []
+
+
+def test_expected_salary_question_still_resolves_via_noun():
+    # A salary question phrased with the (previously over-broad) "expected" still
+    # matches, now anchored on the compensation NOUN "salary".
+    ssot = SSOT({"preferences": {"comp_floor": "EUR 47,000 gross annual (RAL)"}})
+    fm = _fieldmap(_field("q_sal", "What is your expected salary for this role?"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_sal"] == "EUR 47,000 gross annual (RAL)"
+
+
+def test_bare_notice_verb_does_not_fill_notice_period_scalar():
+    # Same failure mode as the compensation bug: the bare verb "notice" used to
+    # land the "1 month" notice-period scalar in any free text carrying it.
+    ssot = SSOT({"canned_answers": {"notice_period": "1 month"}})
+    fm = _fieldmap(_field(
+        "q_take_notice",
+        "Is there anything you would like us to take notice of?"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert "q_take_notice" not in resolved.values
+    assert "1 month" not in list(resolved.values.values())
+
+
+def test_notice_period_question_still_resolves():
+    ssot = SSOT({"canned_answers": {"notice_period": "1 month"}})
+    fm = _fieldmap(_field("q_np", "What is your current notice period?"))
+    resolved = resolve_values(fm, ssot, {})
+
+    assert resolved.values["q_np"] == "1 month"
+
+
+# ============================================================================ #
+# RS-b: work_authorization mapping -> scalar by posting country.
+# ============================================================================ #
+# Live defect (lever palantir, 2026-07-18): "Are you legally authorized to work
+# in the country for which you are applying?" failed with "work_authorization
+# resolved to a mapping with no usable scalar" -- the region-keyed mapping was
+# scanned blindly. The resolver now selects the region entry by posting country.
+
+def _work_auth_ssot():
+    # Structured region-keyed mapping (profile_map's shape): each region carries
+    # a sponsorship_required fact. Authorized-to-work = NOT needing sponsorship.
+    return SSOT({"work_authorization": {
+        "eu": {"sponsorship_required": False},
+        "uk": {"sponsorship_required": True},
+        "us": {"sponsorship_required": True},
+    }})
+
+
+def _work_auth_field():
+    return _fieldmap(_field(
+        "q_auth",
+        "Are you legally authorized to work in the country for which you are "
+        "applying?",
+        type_="multi_value_single_select", options=["Yes", "No"],
+        role="combobox"))
+
+
+def test_work_auth_mapping_resolves_no_for_us_posting():
+    fm = _work_auth_field()
+    resolved = resolve_values(fm, _work_auth_ssot(),
+                              {"posting_location": "New York, United States"})
+    # US needs sponsorship -> not authorized -> "No" (never the bare mapping).
+    assert resolved.values["q_auth"] == "No"
+    assert resolved.skipped == []
+
+
+def test_work_auth_mapping_resolves_no_for_uk_posting():
+    fm = _work_auth_field()
+    resolved = resolve_values(fm, _work_auth_ssot(),
+                              {"posting_location": "London, United Kingdom"})
+    assert resolved.values["q_auth"] == "No"
+
+
+def test_work_auth_mapping_resolves_yes_for_eu_posting():
+    fm = _work_auth_field()
+    resolved = resolve_values(fm, _work_auth_ssot(),
+                              {"posting_location": "Berlin, Germany"})
+    # EU: no sponsorship needed -> authorized -> "Yes". Proves region selection
+    # differentiates (EU != US/UK), not a constant answer.
+    assert resolved.values["q_auth"] == "Yes"
+
+
+def test_work_auth_mapping_parks_when_country_unknown():
+    fm = _work_auth_field()
+    resolved = resolve_values(fm, _work_auth_ssot(), {})   # no posting_location
+    assert "q_auth" not in resolved.values
+    reason = dict(resolved.skipped)["q_auth"]
+    assert "work authorization" in reason
+    assert "posting country" in reason
+    assert "no usable scalar" not in reason               # not the old blind scan
+
+
+def test_work_auth_mapping_parks_when_country_unmapped():
+    fm = _work_auth_field()
+    resolved = resolve_values(fm, _work_auth_ssot(),
+                              {"posting_location": "Somewhere, Atlantis"})
+    assert "q_auth" not in resolved.values
+    assert "posting country" in dict(resolved.skipped)["q_auth"]
+
+
+def test_work_auth_mapping_scalar_region_values_render():
+    # Robustness: a mapping whose region values are the owner's own answer
+    # STRINGS (not structured facts) also resolves by country.
+    ssot = SSOT({"work_authorization": {
+        "eu": "Yes, I have full EU work rights",
+        "us": "No, I would require visa sponsorship",
+    }})
+    fm = _work_auth_field()
+    us = resolve_values(fm, ssot, {"posting_location": "Remote, US"})
+    eu = resolve_values(fm, ssot, {"posting_location": "Milan, Italy"})
+    assert us.values["q_auth"] == "No"
+    assert eu.values["q_auth"] == "Yes"
+
+
+# ============================================================================ #
+# RS-a: visa-sponsorship SELECT value derived by posting country from the region
+# policy, never inherited from a US-specific canned seed.
+# ============================================================================ #
+# Live defect (lever, 2026-07-18): the sponsorship radio resolved "No" from
+# canned_answers.us_visa_sponsorship_required on a UK posting. The value is now
+# derived from policies.sponsorship_by_region keyed by the POSTING country.
+
+def _sponsorship_ssot():
+    # The region policy seeded on toto (eu/eea -> "No", default -> "Yes"). The
+    # US-specific canned seed is ALSO present, so the tests prove the policy
+    # OVERRIDES it rather than merely filling a gap it left.
+    return SSOT({
+        "policies": {"sponsorship_by_region": {
+            "eu": "No", "eea": "No", "default": "Yes"}},
+        "canned_answers": {"us_visa_sponsorship_required": "No"}})
+
+
+def _sponsorship_field():
+    return _fieldmap(_field(
+        "q_visa",
+        "Will you now or in the future require sponsorship for employment visa "
+        "status (e.g., H-1B, etc.)?",
+        type_="multi_value_single_select", options=["Yes", "No"],
+        role="combobox"))
+
+
+def test_sponsorship_value_is_yes_for_uk_posting():
+    fm = _sponsorship_field()
+    resolved = resolve_values(fm, _sponsorship_ssot(),
+                              {"posting_location": "London, United Kingdom"})
+    # UK is not eu/eea -> the policy "default" ("Yes"), never the US-seed "No".
+    assert resolved.values["q_visa"] == "Yes"
+    assert resolved.skipped == []
+
+
+def test_sponsorship_value_is_no_for_eu_posting():
+    fm = _sponsorship_field()
+    resolved = resolve_values(fm, _sponsorship_ssot(),
+                              {"posting_location": "Berlin, Germany"})
+    # An EU posting -> "No". Proves region selection differentiates (eu != uk),
+    # not a constant answer.
+    assert resolved.values["q_visa"] == "No"
+
+
+def test_sponsorship_value_parks_when_country_unknown():
+    fm = _sponsorship_field()
+    resolved = resolve_values(fm, _sponsorship_ssot(), {})   # no posting_location
+    assert "q_visa" not in resolved.values
+    reason = dict(resolved.skipped)["q_visa"]
+    assert "visa sponsorship" in reason
+    assert "posting country" in reason
+
+
+def test_sponsorship_policy_overrides_us_specific_canned_seed():
+    # The US-seed alone gave "No" on every posting (the live bug); with the region
+    # policy present a UK posting now derives "Yes" from the default instead.
+    fm = _sponsorship_field()
+    resolved = resolve_values(fm, _sponsorship_ssot(),
+                              {"posting_location": "London, United Kingdom"})
+    assert resolved.values["q_visa"] == "Yes"
+
+
+def test_sponsorship_without_region_policy_keeps_legacy_scalar_behaviour():
+    # Backward compat: no policies.sponsorship_by_region -> the SELECT still
+    # resolves from the canned scalar exactly as before (here "No"), so the
+    # existing sponsorship path is untouched for SSOTs that lack the policy.
+    ssot = SSOT({"canned_answers": {"visa_sponsorship_required": "no"}})
+    fm = _sponsorship_field()
+    resolved = resolve_values(fm, ssot,
+                              {"posting_location": "London, United Kingdom"})
+    assert resolved.values["q_visa"] == "No"
+
+
+# ============================================================================ #
+# RS-d: in-office-commitment boolean derived from the W4-COMMUTE-GATE policy.
+# ============================================================================ #
+# Live defect (workable rokt, New York US): QA_11599466 "commit to 4 days/week in
+# office" failed as "boolean question resolved to a non-boolean value" because
+# the canned in-office answer is PROSE. The boolean is now DERIVED per posting
+# from the owner commute policy (SSOT preferences.location_policy) plus the posting location.
+
+def _commute_ssot():
+    return SSOT({"preferences": {"location_policy": {
+        "allowed_cities": ["Milan", "Bologna"],
+        "max_onsite_days_per_week_europe": 1,
+        "max_onsite_days_per_month_rest": 4,
+    }}})
+
+
+def _in_office_field():
+    return _fieldmap(_field(
+        "q_office", "Can you commit to being in the office 4 days/week?",
+        type_="boolean", role="checkbox"))
+
+
+def test_in_office_boolean_is_false_outside_eu():
+    fm = _in_office_field()
+    resolved = resolve_values(fm, _commute_ssot(),
+                              {"posting_location": "New York, US"})
+    # 4 days/week ~= 17 days/month, over the 4 days/month rest-of-world cap -> No.
+    assert resolved.values["q_office"] is False
+    assert resolved.skipped == []
+
+
+def test_in_office_boolean_is_true_in_milan():
+    fm = _in_office_field()
+    resolved = resolve_values(fm, _commute_ssot(),
+                              {"posting_location": "Milan, Italy"})
+    # Milan is an owner allowed city: any in-office cadence is viable -> Yes.
+    assert resolved.values["q_office"] is True
+
+
+def test_in_office_boolean_parks_when_location_unknown():
+    fm = _in_office_field()
+    resolved = resolve_values(fm, _commute_ssot(), {})     # no posting_location
+    assert "q_office" not in resolved.values
+    reason = dict(resolved.skipped)["q_office"]
+    assert "in-office commitment" in reason               # honest park, no coercion
+
+
+def test_in_office_boolean_weekly_cap_in_europe():
+    # A rest-of-Europe posting is banded by the weekly cap (1 day/week here):
+    # 1 day/week is viable (True), 3 days/week is not (False).
+    ok = resolve_values(
+        _fieldmap(_field("q1", "Able to be in the office 1 day per week?",
+                         type_="boolean", role="checkbox")),
+        _commute_ssot(), {"posting_location": "Berlin, Germany"})
+    no = resolve_values(
+        _fieldmap(_field("q2", "Able to be in the office 3 days per week?",
+                         type_="boolean", role="checkbox")),
+        _commute_ssot(), {"posting_location": "Berlin, Germany"})
+    assert ok.values["q1"] is True
+    assert no.values["q2"] is False
+
+
+def test_in_office_boolean_parks_when_no_policy():
+    # No location policy in the SSOT -> fail-closed park, never a coerced answer.
+    fm = _in_office_field()
+    resolved = resolve_values(fm, SSOT({}),
+                              {"posting_location": "New York, US"})
+    assert "q_office" not in resolved.values
+    assert "location policy" in dict(resolved.skipped)["q_office"]

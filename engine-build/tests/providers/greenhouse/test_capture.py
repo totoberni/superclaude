@@ -15,6 +15,7 @@ from engine.kernel.contracts import (
     FieldType,
     Locator,
     Section,
+    _role_for_type,
 )
 from engine.kernel.resolve import (
     ANSWERABLE,
@@ -24,6 +25,8 @@ from engine.kernel.resolve import (
 )
 from engine.profile_map import profile_from_real_ssot
 from engine.providers.greenhouse.capture import (
+    EDUCATION_TYPEAHEAD_TYPE,
+    _greenhouse_role_for_type,
     capture_greenhouse,
     parse_greenhouse,
 )
@@ -167,9 +170,18 @@ def test_coverage_classifies_answerable_missing_and_manual_only(
 
 
 def test_capture_populates_section_and_decline_allowed_additively():
-    # A synthetic questions=true payload exercising all four Greenhouse
-    # buckets (questions, location_questions, compliance,
-    # demographic_questions) plus an input_hidden tracking sub-field.
+    # A questions=true payload exercising all four Greenhouse buckets
+    # (questions, location_questions, compliance, demographic_questions) plus an
+    # input_hidden tracking sub-field.
+    #
+    # THE `compliance` BUCKET USES THE REAL LIVE SHAPE (re-derived 2026-07-14 from
+    # the boards-api payload of the live anthropic seal posting): a list of BLOCKS,
+    # each with a `type`, a `description` and its own `questions` list nested ONE
+    # LEVEL DEEPER than the other buckets. This fixture previously fed a FLAT
+    # question, a shape greenhouse has NEVER served, and the parser silently
+    # dropped the entire section on every real payload while this test stayed
+    # green. A description-only block with no questions leads the live payload, so
+    # it is modelled here too.
     raw = {
         "id": "9001",
         "questions": [
@@ -186,9 +198,30 @@ def test_capture_populates_section_and_decline_allowed_additively():
                         "values": []}]},
         ],
         "compliance": [
-            {"label": "I certify the above is accurate", "required": True,
-             "fields": [{"name": "certify", "type": "boolean",
-                        "values": []}]},
+            {"type": "eeoc", "description": "PUBLIC BURDEN STATEMENT",
+             "questions": []},
+            {"type": "eeoc", "description": "Voluntary Self-Identification",
+             "questions": [
+                 {"label": "DisabilityStatus", "required": False,
+                  "fields": [{"name": "disability_status",
+                              "type": "multi_value_single_select",
+                              "values": [
+                                  {"label": "I do not want to answer",
+                                   "value": "3"},
+                                  {"label": "No", "value": "2"},
+                                  {"label": "Yes", "value": "1"}]}]},
+             ]},
+            {"type": "eeoc", "description": "Voluntary Self-Identification",
+             "questions": [
+                 {"label": "Gender", "required": True,
+                  "fields": [{"name": "gender",
+                              "type": "multi_value_single_select",
+                              "values": [{"label": "Male", "value": "1"},
+                                         {"label": "Female", "value": "2"}]}]},
+                 {"label": "Race", "required": False,
+                  "fields": [{"name": "race", "type": "multi_value_single_select",
+                              "values": [{"label": "Decline", "value": "0"}]}]},
+             ]},
         ],
         "demographic_questions": {
             "questions": [
@@ -214,14 +247,141 @@ def test_capture_populates_section_and_decline_allowed_additively():
     assert location.section == Section.LOCATION
     assert location.decline_allowed is False
 
-    compliance = by_key["certify"]
-    assert compliance.section == Section.COMPLIANCE_EEOC
-    assert compliance.decline_allowed is True
-    assert compliance.required is False  # forced despite raw required=True
-    assert compliance.norm_type == FieldType.BOOLEAN
+    # EVERY question nested in a compliance BLOCK becomes a Field. Declining an
+    # EEOC question is not the same as being BLIND to it: the parser must SEE all
+    # three so the census can account for them as justified skips.
+    compliance_keys = {f.key for f in fm.fields if f.source == "compliance"}
+    assert compliance_keys == {"disability_status", "gender", "race"}
+
+    for key in ("disability_status", "gender", "race"):
+        field = by_key[key]
+        assert field.section == Section.COMPLIANCE_EEOC
+        assert field.decline_allowed is True
+        assert field.norm_type == FieldType.SINGLE_SELECT
+        # forced False even for "Gender", whose raw payload says required=True:
+        # an EEOC question can never block a fill.
+        assert field.required is False
+
+    assert by_key["disability_status"].options == [
+        "I do not want to answer", "No", "Yes"]
 
     demographic = by_key["demographic_1"]
     assert demographic.section == Section.DEMOGRAPHIC
     assert demographic.decline_allowed is True
     assert demographic.required is False  # forced despite raw required=True
     assert demographic.norm_type == FieldType.SINGLE_SELECT
+
+
+def test_capture_types_a_multi_value_multi_select_as_a_live_true_checkbox_group():
+    """THE PHANTOM ROLE. `multi_value_multi_select` must capture as `checkbox`.
+
+    LIVE (read-only fetch of a gitlab language-fluency question, 2026-07-14, whose
+    control is REQUIRED): greenhouse renders this type as a `<fieldset
+    class="checkbox" aria-required="true">` holding one native `<input
+    type="checkbox">` per option. The page carries ZERO `role=listbox` nodes, so
+    the kernel map's generic `listbox` is a role NO ELEMENT ON THE PAGE HAS: the
+    fill built `get_by_role("listbox", name=<question>)`, resolved nothing, drove
+    it anyway via `select_option`, and died in a 30-second timeout that was then
+    booked as a `fill-error` on a REQUIRED field (55 such controls live across four
+    boards, all required). A role the DOM does not carry is a CAPTURE bug.
+
+    The role is not cosmetic: `checkbox` is a click-hazard role, so `fill()` hands
+    the control to a human BEFORE any locator is built (pinned separately by
+    `test_fill_hands_off_a_checkbox_group_before_building_any_locator`). Reverting
+    this role silently restores the phantom AND the 30-second timeout with it.
+    """
+    raw = {
+        "id": "9003",
+        "questions": [
+            {"label": "Which of these languages are you fluent in?",
+             "required": True,
+             "fields": [{"name": "question_langs[]",
+                         "type": "multi_value_multi_select",
+                         "values": [{"value": 1, "label": "Dutch"},
+                                    {"value": 2, "label": "French"}]}]},
+            {"label": "Preferred office", "required": True,
+             "fields": [{"name": "question_office",
+                         "type": "multi_value_single_select",
+                         "values": [{"value": 1, "label": "Remote"}]}]},
+        ],
+        # The SECOND emission site: the demographic block builds its own Locator,
+        # and it serves this type too (the live boards carry more of them here than
+        # in the questions bucket). A fix applied to only one site leaves the other
+        # emitting the phantom.
+        "demographic_questions": {"questions": [
+            {"id": 7, "label": "Which categories describe you?",
+             "type": "multi_value_multi_select",
+             "answer_options": [{"id": 1, "label": "Prefer not to disclose"}]},
+        ]},
+    }
+    fm = parse_greenhouse(raw, "acme", "9003", now=lambda: _PINNED)
+    by_key = {f.key: f for f in fm.fields}
+
+    assert by_key["question_langs[]"].locator.role == "checkbox"   # questions
+    assert by_key["demographic_7"].locator.role == "checkbox"      # demographic
+
+    # The override is GREENHOUSE-LOCAL and stays that way: the shared kernel map is
+    # written for the vendors that genuinely serve a listbox (ashby's pronouns
+    # field is one, and it has a test to prove it), so correcting greenhouse's DOM
+    # claim inside the kernel would break THEM. The locator is a claim about THIS
+    # vendor's page; the kernel map is deliberately left alone.
+    assert _role_for_type("multi_value_multi_select") == "listbox"
+
+    # ... and the override may not swallow the types the kernel gets RIGHT: every
+    # other type still comes from the kernel map, unmodified.
+    assert by_key["question_office"].locator.role == "combobox"
+    assert _greenhouse_role_for_type("input_text") == "textbox"
+    assert _greenhouse_role_for_type("input_file") == "button"
+
+
+def test_capture_still_reads_a_bare_compliance_question():
+    """The block flattener does not lose a compliance entry that carries its
+    `fields` DIRECTLY (no `questions` nesting). Greenhouse serves blocks today,
+    but a parser that understands exactly one shape is how the section got
+    dropped in the first place: neither shape may be silently discarded."""
+    raw = {
+        "id": "9002",
+        "compliance": [
+            {"label": "I certify the above is accurate", "required": True,
+             "fields": [{"name": "certify", "type": "boolean", "values": []}]},
+        ],
+    }
+    fm = parse_greenhouse(raw, "acme", "9002", now=lambda: _PINNED)
+    by_key = {f.key: f for f in fm.fields}
+
+    certify = by_key["certify"]
+    assert certify.section == Section.COMPLIANCE_EEOC
+    assert certify.decline_allowed is True
+    assert certify.required is False  # forced despite raw required=True
+    assert certify.norm_type == FieldType.BOOLEAN
+
+
+def test_capture_emits_education_typeaheads_from_the_toggle():
+    """The education section is NOT a questions bucket: Greenhouse serves only a
+    top-level `education` toggle and renders School/Degree/Discipline client-side
+    as async react-select typeaheads. Capture keys STRUCTURALLY on the toggle to
+    emit them (the producer the fill async-typeahead branch consumes); an enabled
+    toggle -> the three, each `education_typeahead` + combobox role; hidden or
+    absent -> none. This is what kept them BLANK on the 2026-07-18 live run: they
+    were never captured, so never driven."""
+    enabled = parse_greenhouse(
+        {"id": "9004", "education": "education_optional"}, "acme", "9004",
+        now=lambda: _PINNED)
+    edu = [f for f in enabled.fields if f.type == EDUCATION_TYPEAHEAD_TYPE]
+    assert [(f.key, f.label, f.locator.role, f.section, f.required) for f in edu] == [
+        ("education_school", "School", "combobox", Section.STANDARD, False),
+        ("education_degree", "Degree", "combobox", Section.STANDARD, False),
+        ("education_discipline", "Discipline", "combobox", Section.STANDARD, False)]
+
+    # `education_required` -> required=True on the same three.
+    required = parse_greenhouse(
+        {"id": "9005", "education": "education_required"}, "acme", "9005",
+        now=lambda: _PINNED)
+    assert all(f.required for f in required.fields
+               if f.type == EDUCATION_TYPEAHEAD_TYPE)
+
+    # Hidden / absent toggle -> no education fields (no phantom controls).
+    for raw in ({"id": "9006", "education": "education_hidden"},
+                {"id": "9007"}):
+        fm = parse_greenhouse(raw, "acme", raw["id"], now=lambda: _PINNED)
+        assert [f for f in fm.fields if f.type == EDUCATION_TYPEAHEAD_TYPE] == []

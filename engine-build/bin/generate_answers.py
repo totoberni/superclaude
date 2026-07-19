@@ -15,7 +15,17 @@ That file is NEVER committed: it carries application prose derived from the SSOT
 Two subcommands:
 
     capture   capture a posting's fieldmap through the provider registry and
-              write the FREE-TEXT questions to JSON. Three exclusions: uploads
+              write the FREE-TEXT questions to JSON, together with the POSTING
+              CONTEXT the content overlay's policy resolvers need and cannot get
+              anywhere else (W5.1d, owner rulings 12/13/14): the posting's own
+              LOCATION (from the vendor's board API, for the nearest-city
+              choice), how the posting was FOUND (for a required referral box),
+              and what each DATE control actually IS -- read off the LIVE DOM,
+              because a vendor form schema declares `type: date` and says nothing
+              about whether the box wants 05/08 or 08/05. Nothing here is
+              assumed: an order that cannot be read off the control is written as
+              null and the overlay leaves that field EMPTY.
+              Three exclusions: uploads
               (the asset channel's business); the fields policy never
               auto-answers -- COMPLIANCE_EEOC / DEMOGRAPHIC / VOLUNTARY, or any
               `decline_allowed` field (`engine.content.is_policy_declined`), so a
@@ -103,9 +113,25 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from engine.content import is_free_text, is_policy_declined  # noqa: E402
+from engine.content import (  # noqa: E402
+    MECHANISM_NATIVE_DATE,
+    MECHANISM_PICKER_ONLY,
+    MECHANISM_PLAIN_TEXT,
+    MECHANISM_TEXT_ENTRY,
+    MECHANISM_UNPROBED,
+    POLICY_DATE_KEYWORDS,
+    date_format_from_placeholder,
+    is_free_text,
+    is_policy_declined,
+    is_referral_question,
+)
 from engine.kernel.capture_toolkit import _utc_now_iso  # noqa: E402
 from engine.kernel.fill_toolkit import _is_upload_field  # noqa: E402
+# `is_ai_policy_question` is the SINGLE SOURCE (`engine.kernel.resolve`) both this
+# generator (forbid an attestation at write time) and the kernel's fill-time
+# consent paths (fail closed on it) must agree on; a copy here would drift. Kept
+# importable as `generate_answers.is_ai_policy_question` for the existing seam.
+from engine.kernel.resolve import is_ai_policy_question  # noqa: E402
 from engine.kernel.ssot import MISSING, SSOT  # noqa: E402
 
 SCHEMA_VERSION = "1"
@@ -131,22 +157,6 @@ MIN_DISCLOSED_ANSWER = 200
 # question with an unrelated paragraph, count the field complete, and leave the
 # real question in neither `answers` nor `tos_forbidden` -- exactly the silent loss
 # this tool exists to prevent. Such an essay goes to the model like any other.
-#
-# The AI token is matched on WORD BOUNDARIES ("ai", not the "ai" inside "email").
-_AI_TOKEN_RE = re.compile(
-    r"\b(ai|a\.i\.|chatgpt|copilot|artificial intelligence|"
-    r"large language models?|llms?|generative ai)\b")
-_AI_POLICY_PHRASES = ("ai policy", "ai-use policy", "ai use policy",
-                      "ai usage policy", "policy on ai", "policy on the use of ai",
-                      "ai disclosure", "disclosure of ai")
-_APPLICATION_CONTEXT = ("this application", "this form", "this questionnaire",
-                        "this submission", "this response", "these responses",
-                        "your responses", "this answer", "these answers",
-                        "your answers", "this cover letter", "this essay",
-                        "write this", "writing this", "complete this",
-                        "completing this", "draft this", "drafting this",
-                        "prepare this", "preparing this", "answering these")
-
 # The SSOT grounding excerpt: the canned prose the answers must be built from.
 # Nothing outside this excerpt (plus academic.yaml and the JD) may enter a prompt.
 _GROUNDING_PATHS = (
@@ -193,21 +203,9 @@ def _command_runner(command: str):
 
 
 # -- questions ----------------------------------------------------------------
-
-def is_ai_policy_question(label: str) -> bool:
-    """True iff the label asks whether AI was used to WRITE THIS APPLICATION.
-
-    Narrow ON PURPOSE (see `_APPLICATION_CONTEXT`): a question about the owner's
-    AI WORK ("your experience using large language models") is an essay, not a
-    policy question, and it must reach the model rather than be answered with the
-    authorship disclosure.
-    """
-    low = re.sub(r"\s+", " ", str(label or "").casefold())
-    if any(phrase in low for phrase in _AI_POLICY_PHRASES):
-        return True
-    if not _AI_TOKEN_RE.search(low):
-        return False
-    return any(phrase in low for phrase in _APPLICATION_CONTEXT)
+# `is_ai_policy_question` now lives in `engine.kernel.resolve` (imported above):
+# the generator forbids an attestation at write time and the kernel's fill-time
+# consent paths fail closed on the same predicate, so it must be ONE definition.
 
 
 def is_essay_question(question: dict) -> bool:
@@ -227,9 +225,19 @@ def is_essay_question(question: dict) -> bool:
 def questions_from_fieldmap(fieldmap) -> list[dict]:
     """The questions THIS TOOL answers, out of a captured fieldmap.
 
-    Three exclusions, none of them a label-matching rule of this tool's own (a
+    Four exclusions, none of them a label-matching rule of this tool's own (a
     mirrored predicate drifts from its source the moment that source moves):
 
+    * REFERRAL questions (`is_referral_question`, the overlay's own predicate) are
+      never sent to a model. A referral is a FACT about the owner, not a thing to
+      compose, and a model asked about one composes: an essay-shaped referral box on
+      a real posting was answered "a member of your engineering team referred me",
+      a relationship that DOES NOT EXIST, and it was then typed into a live
+      application. The overlay refuses to fill these boxes (`_referral_verdict`);
+      this stops the fabrication from ever being written down. The referral policy
+      answers the only referral question the engine may answer -- a REQUIRED control
+      that OFFERS the source class as an option -- and nothing here can reach it,
+      because an option-bearing field is not essay-shaped;
     * uploads (`_is_upload_field`, the kernel's) belong to the asset channel;
     * policy-declined fields (`is_policy_declined`, the kernel's policy:
       COMPLIANCE_EEOC / DEMOGRAPHIC / VOLUNTARY / `decline_allowed`) are never
@@ -251,7 +259,8 @@ def questions_from_fieldmap(fieldmap) -> list[dict]:
     """
     questions = []
     for fld in fieldmap.fields:
-        if _is_upload_field(fld) or is_policy_declined(fld):
+        if (_is_upload_field(fld) or is_policy_declined(fld)
+                or is_referral_question(fld.label or "")):
             continue
         question = {
             "key": fld.key,
@@ -265,6 +274,225 @@ def questions_from_fieldmap(fieldmap) -> list[dict]:
         if is_essay_question(question) or is_ai_policy_question(fld.label or ""):
             questions.append(question)
     return questions
+
+
+# -- posting context (W5.1d: owner rulings 12, 13, 14) ------------------------
+#
+# The three policy resolvers in `engine.content` need something the FIELDMAP does
+# not carry: what the date box on the live page actually LOOKS LIKE, where the
+# posting IS, and how it was FOUND. This tool is the only place that can supply
+# them. It runs once per posting, on toto, with the network and a browser; the
+# engine's overlay runs offline, on a page it must never re-derive facts from.
+#
+# The one hard rule: this block DERIVES, it never ASSUMES. A date order that could
+# not be read off the control is written as `null`, and the overlay leaves that
+# field empty.
+
+# The controls worth probing are the ones the POLICY claims: `POLICY_DATE_KEYWORDS`
+# is imported from `engine.content`, never mirrored here. A label keyword only
+# decides WHAT TO LOOK AT; what the control WANTS is read from the control itself
+# (`derive_date_control`). A vendor whose schema says `text` but whose DOM renders a
+# DD/MM/YYYY box is exactly why the label cannot be trusted, and exactly why the DOM
+# is read.
+#
+# The mirror this replaces had already DRIFTED: the policy claimed a bare "notice"
+# that this list never probed, so a control labelled "Notice" rendering a DD/MM/YYYY
+# box but declared `text` by its vendor was never looked at, arrived at the resolver
+# with no DOM evidence, was classified from the schema it exists to distrust, and had
+# prose typed into a date box. One list, one source of truth (rules/20).
+
+# The attributes a date control declares its ORDER in, best evidence first.
+_PLACEHOLDER_ATTRS = ("placeholder", "aria-placeholder", "title")
+
+
+def _schema_is_date(fld) -> bool:
+    """True iff the vendor's own SCHEMA calls this control a date."""
+    return (str(getattr(fld, "norm_type", "") or "").upper() == "DATE"
+            or str(getattr(fld, "type", "") or "").strip().lower() == "date")
+
+
+def date_control_candidates(fieldmap) -> list:
+    """The controls to probe: every one the schema calls a DATE, plus every one
+    whose LABEL asks the start/notice question.
+
+    The second set is what catches the interchange owner ruling 12 flagged: a
+    vendor that asks "when can you start?" with a plain TEXT field wants a
+    duration, and one that asks it with a text field carrying a DD/MM/YYYY
+    placeholder wants a date. Both are probed; the DOM tells them apart.
+    """
+    out = []
+    for fld in fieldmap.fields:
+        if _is_upload_field(fld) or is_policy_declined(fld):
+            continue
+        label = re.sub(r"\s+", " ", str(fld.label or "").casefold())
+        if _schema_is_date(fld) or any(w in label for w in POLICY_DATE_KEYWORDS):
+            out.append(fld)
+    return out
+
+
+def derive_date_control(key: str, attrs: dict, schema_is_date: bool) -> dict:
+    """What ONE date control IS, derived from the attributes read off the LIVE
+    element. Never from its label, never from a vendor default.
+
+    Order of evidence, each step a fact the element itself declares:
+
+    1. `type=date`: a NATIVE date input. Its VALUE is ISO by the HTML standard, no
+       matter what the browser DISPLAYS, so the format is known without a hint.
+    2. READONLY (or `aria-readonly=true`): a box only a CLICK can set. The content
+       channel supplies values and never drives the page, so this is not ours to
+       fill: it is recorded for the W5.1c click-policy wave and left empty.
+    3. A PLACEHOLDER (or aria-placeholder/title) built from dd/mm/yyyy tokens: a
+       TYPED box, and the token order IS the answer to the question this whole
+       resolver exists to ask. Workable declares `DD/MM/YYYY` here.
+    4. Nothing date-shaped at all. If the SCHEMA still says this is a date, the
+       order is UNDERIVABLE and the control stays a text-entry with NO format --
+       which the overlay fails closed on. It does NOT become a prose box: typing
+       "available immediately" into a date field is as wrong as typing the wrong
+       day. Only a control the schema does NOT call a date is prose.
+    """
+    kind = str(attrs.get("type") or "").strip().lower()
+    if kind == "date":
+        return {"key": key, "mechanism": MECHANISM_NATIVE_DATE,
+                "date_format": "%Y-%m-%d", "evidence": "input[type=date]"}
+
+    readonly = attrs.get("readonly")
+    aria_readonly = str(attrs.get("aria-readonly") or "").strip().lower()
+    if (readonly is not None and str(readonly).lower() != "false") or aria_readonly == "true":
+        return {"key": key, "mechanism": MECHANISM_PICKER_ONLY, "date_format": None,
+                "evidence": "readonly input (calendar widget)"}
+
+    for name in _PLACEHOLDER_ATTRS:
+        declared = str(attrs.get(name) or "").strip()
+        if not declared:
+            continue
+        fmt = date_format_from_placeholder(declared)
+        if fmt:
+            return {"key": key, "mechanism": MECHANISM_TEXT_ENTRY, "date_format": fmt,
+                    "evidence": f"{name}={declared}"}
+
+    if schema_is_date:
+        return {"key": key, "mechanism": MECHANISM_TEXT_ENTRY, "date_format": None,
+                "evidence": "date control declaring no order"}
+    return {"key": key, "mechanism": MECHANISM_PLAIN_TEXT, "date_format": None,
+            "evidence": f"input[type={kind or 'text'}] with no date affordance"}
+
+
+def _read_control_attrs(page, key: str) -> dict | None:
+    """The attributes of the element a field key names, or None when the page has
+    no such element (the field is on another step, or the vendor re-keyed it).
+
+    Keyed on the field key the CAPTURE produced, through the attributes a form
+    control carries it in. Not a role/label lookup: the label is the very thing
+    this probe refuses to trust."""
+    for selector in (f'input[name="{key}"]', f'input[id="{key}"]',
+                     f'input[data-ui="{key}"]', f'[data-ui="{key}"] input'):
+        element = page.query_selector(selector)
+        if element is None:
+            continue
+        attrs = {"type": element.get_attribute("type")}
+        for name in (*_PLACEHOLDER_ATTRS, "readonly", "aria-readonly", "pattern"):
+            attrs[name] = element.get_attribute(name)
+        return attrs
+    return None
+
+
+def probe_date_controls(apply_url: str, fields: list, page_factory=None) -> list[dict]:
+    """Read every candidate date control off the LIVE apply page.
+
+    The bridge between what the vendor's SCHEMA declares (a date) and what its PAGE
+    renders (a text box wanting DD/MM/YYYY). Workable's form API declares neither
+    the order nor the mechanism, and its apply page is a client-rendered SPA whose
+    raw HTML carries no control at all, so the hydrated DOM is the only witness
+    there is. A browser is therefore not a convenience here, it is the evidence.
+
+    NOTHING IS HIDDEN AND NOTHING IS ASSUMED. A control the page does not show, or
+    a browser that will not start, yields an UNPROBED entry carrying the reason,
+    and the overlay fails closed on it (an unprobed DATE control is never filled).
+    A silent empty list would read as "no date controls", which is the one lie this
+    function must not tell.
+    """
+    if not fields:
+        return []
+    factory = page_factory if page_factory is not None else _default_page_factory()
+    controls: list[dict] = []
+    try:
+        with factory(apply_url) as page:
+            for fld in fields:
+                attrs = _read_control_attrs(page, fld.key)
+                if attrs is None:
+                    controls.append({"key": fld.key, "mechanism": MECHANISM_UNPROBED,
+                                     "date_format": None,
+                                     "evidence": "control not found on the apply page"})
+                    continue
+                controls.append(derive_date_control(fld.key, attrs,
+                                                    _schema_is_date(fld)))
+    except Exception as exc:  # a browser that will not start is a GAP, not a crash
+        print(f"warning: date probe failed: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return [{"key": fld.key, "mechanism": MECHANISM_UNPROBED, "date_format": None,
+                 "evidence": f"probe failed: {type(exc).__name__}"} for fld in fields]
+    return controls
+
+
+def _default_page_factory():
+    """The production page factory: the kernel's own browser page (never-send guard
+    installed), navigated to the apply URL and given the SPA time to hydrate.
+
+    Imported at CALL time so `generate` stays a light, offline import: only a
+    posting that actually has a date control ever pays for a browser.
+    """
+    from contextlib import contextmanager
+
+    from engine.kernel import capture_toolkit
+
+    @contextmanager
+    def factory(apply_url: str):
+        with capture_toolkit._default_browser_page() as page:
+            page.goto(apply_url, wait_until="domcontentloaded", timeout=45000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:
+                pass
+            page.wait_for_timeout(2500)
+            yield page
+
+    return factory
+
+
+def posting_location(vendor: str, slug: str, job_id: str, opener) -> str:
+    """The posting's own location, from the VENDOR'S OWN board API.
+
+    Read through the vendor's discover adapter (`_registry`), which already knows
+    how each board shapes a location: no second parser lives here to drift from it.
+    The request carries the engine's sanctioned capture User-Agent (the kernel's
+    one definition of the polite reader), because a board that does not recognize
+    the caller answers 403 and a 403 here would read as "this posting has no
+    location" -- a silent city gap manufactured by a missing header.
+
+    An unreachable board, or a posting the board does not list, yields "" -- and ""
+    means the city resolver reports a GAP. A location this tool could not read is
+    not a location it may invent.
+    """
+    import urllib.request
+
+    from engine.kernel.capture_toolkit import UA
+    from engine.providers import _registry
+
+    spec = _registry.PROVIDERS.get(vendor)
+    if spec is None or spec.adapter is None or spec.endpoint_fn is None:
+        return ""
+    try:
+        request = urllib.request.Request(spec.endpoint_fn(slug),
+                                         headers={"User-Agent": UA})
+        with opener.open(request, timeout=30) as response:
+            raw = json.loads(response.read().decode("utf-8"))
+        for posting in spec.adapter().parse(raw, slug):
+            if str(posting.job_id) == str(job_id):
+                return str((posting.locations or [""])[0] or "")
+    except Exception as exc:
+        print(f"warning: posting location unavailable: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+    return ""
 
 
 # -- prompt -------------------------------------------------------------------
@@ -348,14 +576,14 @@ def generate_answers(questions_doc: dict, ssot: SSOT, *, company: str,
     run = runner if runner is not None else _RUNNER
     posting_lang = str(questions_doc.get("posting_lang") or "en")
     disclosure = _seeded_disclosure(ssot)
-    attestation = _seeded_attestation(ssot)
+    posting_forbids_ai = _posting_forbids_ai(questions)
     answers: list[dict] = []
     forbidden: list[dict] = []
 
     for question in questions:
         label = str(question.get("label") or "")
         verdict, payload = _route_by_tos(question, label, tos_mode, disclosure,
-                                         attestation)
+                                         posting_forbids_ai)
         if verdict == "forbid":
             forbidden.append({"label": label, "reason": payload})
             continue
@@ -382,6 +610,13 @@ def generate_answers(questions_doc: dict, ssot: SSOT, *, company: str,
         "posting_lang": posting_lang,
         "generated_at": _utc_now_iso(),
         "model": model,
+        # The posting context, carried THROUGH from `capture` untouched (W5.1d).
+        # This tool answers questions; it does not re-derive facts. Re-deriving the
+        # date order here (with no page in front of it) is precisely the assumption
+        # the probe exists to prevent.
+        "posting_location": str(questions_doc.get("posting_location") or ""),
+        "discovery_source": str(questions_doc.get("discovery_source") or ""),
+        "date_controls": list(questions_doc.get("date_controls") or []),
         "answers": answers,
         "tos_forbidden": forbidden,
     }
@@ -432,19 +667,23 @@ def _seeded_disclosure(ssot: SSOT) -> str | None:
     return str(value).strip() or None
 
 
-def _seeded_attestation(ssot: SSOT) -> str | None:
-    """The owner's answer to an AI-policy ATTESTATION SELECT, or None if unseeded.
+def _posting_forbids_ai(questions: list[dict]) -> bool:
+    """True when the posting carries an AI-policy ATTESTATION SELECT, which forces
+    forbid-essays for the WHOLE posting (owner ruling, W5.1-R2 FX3).
 
-    Distinct from `_seeded_disclosure` because the two answer different shapes of
-    the same subject: the disclosure is PROSE that qualifies an essay, this is an
-    EXACT OPTION LABEL the owner picked ("Yes" to a form's confirm-you-have-read-our
-    -AI-guidelines select). Neither can stand in for the other: prose cannot satisfy
-    a Yes/No control, and an option label is not a disclosure.
+    An AI-policy question that offers OPTIONS is an attestation: the employer is
+    making the applicant commit to a stance on AI use (Canonical's "I agree to use
+    only my own words ... the use of AI ... will disqualify my application", Yes/No).
+    An employer that puts such an attestation on its form has SIGNALLED that it cares
+    about AI-authored content, so no free-text answer on that posting may be shipped
+    to it: every essay routes to `tos_forbidden` (human handoff) rather than the
+    model. The attestation's polarity cannot be read reliably from one label, so the
+    safe reading is that its mere presence forbids essays. See docs/vendor-tos.md
+    (Canonical) and `_route_by_tos`.
     """
-    value = ssot.get("canned_answers.ai_policy_attestation")
-    if value is MISSING:
-        return None
-    return str(value).strip() or None
+    return any(is_ai_policy_question(str(question.get("label") or ""))
+               and (question.get("options") or [])
+               for question in questions)
 
 
 def _suffix_text(disclosure: str) -> str:
@@ -496,7 +735,7 @@ def _reserve(question: dict, reserved: int) -> dict:
 
 def _route_by_tos(question: dict, label: str, tos_mode: str,
                   disclosure: str | None,
-                  attestation: str | None = None) -> tuple[str | None, str]:
+                  posting_forbids_ai: bool = False) -> tuple[str | None, str]:
     """What the ToS policy says about ONE question, BEFORE any model call:
 
     ("forbid", reason)  the question is not answered, and is recorded by name;
@@ -513,39 +752,44 @@ def _route_by_tos(question: dict, label: str, tos_mode: str,
     carries the career facts and the canned prose, not a fact about how this
     application was written), so a model asked "did you use AI to write this?" has
     nothing truthful to draw on and can only invent a stance about the applicant's
-    conduct. It is answered from the seeded disclosure or not at all.
+    conduct. A PROSE AI-use question is answered from the seeded disclosure or not
+    at all; an AI-policy ATTESTATION (an AI-policy question that offers OPTIONS)
+    FAILS CLOSED in every mode and is recorded by name.
+
+    An attestation is never answered from a seeded scalar, seeded or not (owner
+    ruling, W5.1-R2 FX3). Its Yes/No polarity is not fixed across employers:
+    Canonical's "I agree to use only my own words ... AI ... will disqualify" reads
+    Yes = compliant, while another form's "did you use AI?" reads Yes = used AI, so
+    one scalar cannot answer both honestly. The engine hands it to a human rather
+    than risk attesting a stance the owner did not make (docs/vendor-tos.md,
+    Canonical). Its mere presence also forbids essays for the whole posting
+    (`posting_forbids_ai`): an employer that puts an AI attestation on its form has
+    signalled it cares about AI-authored content, so no free-text answer is shipped.
 
     Under `disclose` an ESSAY needs that same disclosure to ride with it, so an
     UNSEEDED disclosure forbids every free-text question rather than shipping a
     REQUIRES-DISCLOSURE employer an undisclosed model-authored essay, and a cap with
     no room for the disclosure forbids that question too (`_room_for_disclosure`).
-    Under `forbid-essays` every free-text question goes to human handoff (the
-    operational consequence of a FORBIDS verdict, docs/vendor-tos.md), listed by
-    name so the acceptance gate subtracts it rather than the engine hiding it.
+    Under `forbid-essays` -- and on any posting whose `posting_forbids_ai` is set --
+    every free-text question goes to human handoff (the operational consequence of a
+    FORBIDS verdict, docs/vendor-tos.md), listed by name so the acceptance gate
+    subtracts it rather than the engine hiding it.
     """
-    forbids_ai = tos_mode == "forbid-essays"
+    forbids_ai = tos_mode == "forbid-essays" or posting_forbids_ai
     if is_ai_policy_question(label) and (question.get("options") or []):
-        # ATTESTATION SELECT, not prose. An AI-policy question that offers OPTIONS
-        # is not asking the applicant to write anything: it is asking them to pick
-        # one. Live evidence (anthropic 5164820008, 2026-07-13): "AI Policy for
-        # Application" is a ['Yes','No'] select whose description reads "review our
-        # AI partnership guidelines ... and confirm your understanding by selecting
-        # Yes". Routing it down the essay path mislabelled an owner-answerable
-        # attestation as AI-GENERATED CONTENT and left a required field permanently
-        # blank, which no ToS mode intends: SELECTING AN OPTION GENERATES NOTHING,
-        # so no ToS verdict about generated content can reach it. It is answered
-        # from an exact-option SSOT scalar the OWNER seeds, in every mode, or not at
-        # all. Unseeded FAILS CLOSED (recorded by name, never guessed): an
-        # attestation the owner did not make is the one thing the engine must never
-        # invent on their behalf.
-        options = [str(o) for o in (question.get("options") or [])]
-        seeded = str(attestation).strip() if attestation is not None else ""
-        exact = next((o for o in options
-                      if o.casefold() == seeded.casefold()), None) if seeded else None
-        if exact is not None:
-            return "answer", exact
-        return "forbid", ("attestation answer not seeded "
-                          "(canned_answers.ai_policy_attestation)")
+        # ATTESTATION SELECT, not prose. An AI-policy question that offers OPTIONS is
+        # not asking the applicant to write anything, it is asking them to attest a
+        # stance on AI use (Canonical: "I agree to use only my own words ... the use
+        # of AI ... will disqualify my application", Yes/No). It FAILS CLOSED in every
+        # mode: never answered from a seeded scalar, seeded or not. The Yes/No
+        # polarity is not fixed across employers (Yes = compliant here, Yes = used-AI
+        # on a "did you use AI?" form), so one scalar cannot answer both honestly, and
+        # an attestation the owner did not personally make is the one thing the engine
+        # must never pick on their behalf. Recorded by name for human handoff so the
+        # acceptance gate subtracts it. (Owner ruling W5.1-R2 FX3; docs/vendor-tos.md.)
+        return "forbid", ("AI-policy attestation: human handoff (its Yes/No polarity "
+                          "varies per posting, so no seeded scalar can answer it "
+                          "honestly)")
     if is_ai_policy_question(label):
         if forbids_ai:
             return "forbid", "employer forbids AI-generated content"
@@ -690,18 +934,34 @@ def cmd_capture(args) -> int:
         print(f"error: no field-map capture for vendor {args.vendor!r}",
               file=sys.stderr)
         return 2
-    fieldmap = spec.capture(args.slug, args.job_id,
-                            urllib.request.build_opener())
+    opener = urllib.request.build_opener()
+    fieldmap = spec.capture(args.slug, args.job_id, opener)
     questions = questions_from_fieldmap(fieldmap)
+
+    # The POSTING CONTEXT the policy resolvers need (W5.1d, rulings 12/13/14). It
+    # travels with the questions file and then with the answers file, because the
+    # overlay's only caller (w5_accept.py, frozen) passes nothing else.
+    candidates = date_control_candidates(fieldmap)
+    date_controls = probe_date_controls(spec.apply_url(args.slug, args.job_id),
+                                        candidates)
     doc = {
         "vendor": args.vendor,
         "slug": args.slug,
         "job_id": str(args.job_id),
         "posting_lang": args.posting_lang,
+        "posting_location": posting_location(args.vendor, args.slug, args.job_id,
+                                             opener),
+        # How this posting reached us. The engine discovers through the vendor's
+        # own board and `engine/fetch.py` refuses any other source, so the vendor
+        # IS the source unless a human says otherwise.
+        "discovery_source": args.discovery_source or args.vendor,
+        "date_controls": date_controls,
         "questions": questions,
     }
     Path(args.out).expanduser().write_text(json.dumps(doc, indent=2))
-    print(f"captured: {len(questions)} text-answerable questions")
+    print(f"captured: {len(questions)} text-answerable questions | "
+          f"date controls: {len(date_controls)} | "
+          f"location: {'yes' if doc['posting_location'] else 'NO (city gap)'}")
     return 0
 
 
@@ -771,6 +1031,9 @@ def build_parser() -> argparse.ArgumentParser:
     cap.add_argument("--slug", required=True)
     cap.add_argument("--job-id", required=True)
     cap.add_argument("--posting-lang", default="en")
+    cap.add_argument("--discovery-source", default=None,
+                     help="how this posting was found (default: the vendor's own "
+                          "board, which is the engine's only discovery path)")
     cap.add_argument("--out", required=True)
     cap.set_defaults(func=cmd_capture)
 

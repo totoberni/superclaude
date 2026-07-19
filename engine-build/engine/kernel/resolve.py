@@ -119,7 +119,15 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
     (("github",), ["links.github"]),
     (("portfolio", "personal website", "personal site", "web site", "website"),
      ["links.site", "links.website", "links.portfolio"]),
-    (("notice period", "notice",),
+    # KEYWORD DISCIPLINE (RS-h): every keyword must be DOMAIN-ANCHORED, never a
+    # bare generic adjective/verb that also occurs in an unrelated question. A
+    # bare token that matches a foreign-domain free-text field fills it from a
+    # domain-mismatched scalar (a WRONG FILL, worse than a skip). The bare verb
+    # "notice" is dropped for notice-DOMAIN phrases: "1 month" must not land in
+    # a "please take notice ..." box.
+    (("notice period", "period of notice", "notice required",
+      "much notice", "weeks notice", "weeks of notice", "months notice",
+      "months of notice", "give notice", "notice to give"),
      ["canned_answers.notice_period"]),
     (("employment agreement", "post-employment", "post employment",
       "non-compete", "noncompete", "restrictive covenant"),
@@ -128,8 +136,16 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
       "previously employed at", "previously interned"),
      ["canned_answers.previously_worked_at_company",
       "canned_answers.previously_applied_default"]),
+    # RS-a: the region-keyed owner policy leads, so a sponsorship SELECT derives
+    # its value from the POSTING country (via `_render_sponsorship_by_region`)
+    # rather than inheriting a US-specific canned seed on a non-US posting. It is
+    # PREFERRED over the work_authorization.<region>.sponsorship_required
+    # structured fact (profile_map.py:70): the two are cross-checked and the
+    # explicit policy wins on disagreement. The canned scalars stay the fallback
+    # for an SSOT that carries no region policy.
     (("sponsorship", "sponsor", "visa"),
-     ["canned_answers.sponsorship_answer_by_region",
+     ["policies.sponsorship_by_region",
+      "canned_answers.sponsorship_answer_by_region",
       "canned_answers.visa_sponsorship_required",
       "canned_answers.us_visa_sponsorship_required"]),
     (("authorized to work", "authorised to work", "right to work",
@@ -138,7 +154,14 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
      ["work_authorization", "canned_answers.work_authorization"]),
     (("relocat",),
      ["canned_answers.relocation", "canned_answers.willing_to_relocate"]),
-    (("salary", "compensation expectation", "expected", "desired compensation"),
+    # The bare adjective "expected" is dropped (RS-h live defect: it matched a
+    # degree question's "expected result" and filled the compensation scalar
+    # "EUR 26,000 gross annual (RAL)" into a FREE-TEXT box). A compensation match
+    # now requires a compensation NOUN (salary / compensation / remuneration) or
+    # an explicit pay phrase, never a generic adjective. "What are your
+    # compensation expectations for the role?" still hits on "compensation".
+    (("salary", "compensation", "remuneration", "pay expectation",
+      "expected pay"),
      ["preferences.comp_floor", "canned_answers.salary_expectation"]),
     (("country of residence", "current country", "country you reside",
       "country you are located"),
@@ -147,8 +170,17 @@ _ANSWER_MATCHERS: list[tuple[tuple[str, ...], list[str]]] = [
       "where are you currently located", "where are you located",
       "current location", "location"),
      ["identity.current_location", "identity.address", "identity.country"]),
+    # A consent/privacy SELECT is ANSWERABLE (reaches `_render_select` -> the RS-g
+    # `_consent_select_option` single-affirmative pick) whenever EITHER consent
+    # source datum is seeded. `privacy_consent_default` is the live SSOT key
+    # (`optional_consents` is the synthetic-fixture key and is ABSENT live), so
+    # without it the live greenhouse `question_37455721` privacy select classified
+    # MISSING, never reached RS-g, and fell to the overlay's "no option match".
+    # Both are `_CONSENT_SOURCE_PATHS`. An AI-policy attestation that also matches
+    # here ("I agree ... AI ...") is failed closed inside `_consent_select_option`.
     (("please confirm", "privacy policy", "consent to", "i agree"),
-     ["canned_answers.optional_consents"]),
+     ["canned_answers.optional_consents",
+      "canned_answers.privacy_consent_default"]),
     (("accommodation", "accommodations", "accessible and inclusive",
       "reasonable adjustment", "accessibility need"),
      ["canned_answers.accommodations"]),
@@ -273,6 +305,17 @@ def _answerable_path(fld: Field, ssot: SSOT, profile: dict,
     key_text_path = vendor_resolver.key_text_path(fld, ssot)
     if key_text_path is not None:
         return key_text_path
+    # F.1 EXACT-SLUG PRECEDENCE (the G6 trap): a question whose EXACT canned slug
+    # is seeded is answered from that owner datum BEFORE any keyword-table guess.
+    # Exact data beats heuristic -- a keyword tuple ("sponsor", the in-person
+    # phrasing) can otherwise fire on a label whose owner-seeded answer says the
+    # opposite (live: greenhouse question_37393963 was keyword-derived "No" while
+    # the exact slug the owner later seeded says "Yes"). The keyword tables below
+    # stay the fallback for every UNseeded label; they still legitimately serve a
+    # label whose exact slug is absent.
+    exact_slug = _missing_path_guess(fld.label)
+    if ssot.get(exact_slug) is not MISSING:
+        return exact_slug
     low = fld.label.lower()
     if _SKILLS_EXPERIENCE_RE.search(low) and ssot.get("skills") is not MISSING:
         return "skills"
@@ -322,22 +365,114 @@ _SELECT_TYPES = frozenset({
     "multi_value_single_select", "multi_value_multi_select", "yes_no",
 })
 
-# -- checkbox intent classifiers (criterion: consent checkboxes) ---------------
-# A checkbox is ticked True only when its label reads as a legal
-# consent/confirmation ask, or as a talent-pool / future-opportunities opt-in
-# (YES per the owner split). A pure marketing/newsletter box is left unticked.
-# Order at the call site is talent-pool -> marketing -> consent, so a "marketing"
-# ask that also says "I agree" is never mistaken for legal consent.
+# -- checkbox intent classifiers (RS-g consent classes) ------------------------
+# Each consent-class checkbox is dispositioned by an OWNER POLICY seeded under
+# `policies.consent.<class>` in the SSOT, NOT by a hard-coded YES/NO. A label is
+# first sorted into ONE class (`_classify_checkbox`), then that class's policy
+# verdict decides the fill:
+#   assertion          -> policies.consent.assertion    (truthful_only: tick ONLY
+#                         if the SSOT proves the factual claim true; never a false
+#                         check -- owner ruling 2026-07-19)
+#   assessment         -> policies.consent.assessment   (consent -> tick)
+#   talent_pool        -> policies.consent.talent_pool  (decline -> never tick;
+#                         RETIRES the superseded talent-pool YES split)
+#   marketing          -> policies.consent.marketing    (decline -> never tick)
+#   application_privacy -> policies.consent.application_privacy (consent -> tick;
+#                         the ONLY class auto-consented when application-necessary)
+# Classification order below is assertion -> assessment -> talent_pool ->
+# marketing -> application_privacy, so a factual/assessment/marketing ask that
+# also says "I agree" is never mis-sorted into legal privacy consent.
+# BACKWARD COMPAT: when `policies.consent` is ABSENT, only application_privacy
+# auto-fills, and only when the legacy `_CONSENT_SOURCE_PATHS` ratify it;
+# talent-pool/marketing/assessment/assertion never auto-fill (conservative).
 _CONSENT_RE = re.compile(
     r"please confirm|privacy|consent|i agree|\bagree\b|\bterms\b|gdpr|"
     r"data processing|i acknowledge|i certify|i confirm", re.I)
+# The future-contact / talent-pool opt-in. The `future\s+(?:\w+\s+){0,3}...`
+# window catches the live lever wording "future job opportunities" (the
+# "...consent to contact me about future job opportunities" box the first-pass
+# census wrongly consented) as well as the bare "future opportunities"; a
+# leading "consent" verb in that same box must NOT reroute it to legal privacy
+# consent, which is exactly why talent_pool is classified BEFORE
+# application_privacy.
 _TALENT_POOL_RE = re.compile(
-    r"talent (pool|community|network)|future opportunit|future role|"
+    r"talent (pool|community|network)|"
+    r"future\s+(?:\w+\s+){0,3}(?:opportunit|role|position|job|vacan|opening)|"
+    r"contact me about (?:future|other|new)|"
     r"keep .*on file|consider me for|stay in touch|keep me in mind|"
     r"other (roles|positions|opportunit)", re.I)
 _MARKETING_RE = re.compile(
     r"marketing|newsletter|promotional|promotions|subscribe|mailing list|"
     r"updates and offers|product updates|latest news", re.I)
+# An assessment/aptitude PARTICIPATION consent (W1: "20 minute aptitude
+# assessment ... Are you happy to do this?").
+_ASSESSMENT_RE = re.compile(r"\baptitude\b|\bassessment\b|\bskills? test\b", re.I)
+# An affirmative acknowledgement option on a consent SELECT ("Acknowledge",
+# "Confirm", "I agree") that no bare yes/no option match can reach (RS-g).
+_AFFIRMATIVE_OPTION_RE = re.compile(
+    r"acknowledg|\bconfirm\b|\bagree\b|\baccept\b|\byes\b|\bconsent\b", re.I)
+
+# -- AI-policy attestation detector (SSOT, shared with bin/generate_answers.py) --
+# An AI-policy question asks whether AI was used to WRITE THIS APPLICATION. It is
+# the ONE thing the engine must never answer on the owner's behalf: its Yes/No
+# polarity is not fixed across employers (Canonical's "I agree to use only my own
+# words ... AI ... will disqualify" reads Yes = compliant, while "did you use
+# AI?" reads Yes = used AI), so no seeded scalar can answer both honestly. The
+# generator (`bin/generate_answers.py`) forbids it at write time; the fill-time
+# consent paths below MUST fail closed on it too, because a consent label that
+# also carries "I agree" would otherwise be auto-ticked once it becomes
+# answerable. This predicate is the SINGLE SOURCE both layers consult (a mirrored
+# copy in the generator would drift, exactly as `is_essay_question` delegates to
+# `content.is_free_text`); `bin/generate_answers.py` re-imports it from here.
+# The AI token is matched on WORD BOUNDARIES ("ai", not the "ai" inside "email").
+_AI_TOKEN_RE = re.compile(
+    r"\b(ai|a\.i\.|chatgpt|copilot|artificial intelligence|"
+    r"large language models?|llms?|generative ai)\b")
+_AI_POLICY_PHRASES = ("ai policy", "ai-use policy", "ai use policy",
+                      "ai usage policy", "policy on ai", "policy on the use of ai",
+                      "ai disclosure", "disclosure of ai")
+_AI_APPLICATION_CONTEXT = (
+    "this application", "this form", "this questionnaire",
+    "this submission", "this response", "these responses",
+    "your responses", "this answer", "these answers",
+    "your answers", "this cover letter", "this essay",
+    "write this", "writing this", "complete this",
+    "completing this", "draft this", "drafting this",
+    "prepare this", "preparing this", "answering these")
+
+
+def is_ai_policy_question(label: str) -> bool:
+    """True iff the label asks whether AI was used to WRITE THIS APPLICATION.
+
+    Narrow ON PURPOSE (see `_AI_APPLICATION_CONTEXT`): a question about the owner's
+    AI WORK ("your experience using large language models") is an essay, not a
+    policy question, and it must reach the model rather than be answered with the
+    authorship disclosure.
+    """
+    low = re.sub(r"\s+", " ", str(label or "").casefold())
+    if any(phrase in low for phrase in _AI_POLICY_PHRASES):
+        return True
+    if not _AI_TOKEN_RE.search(low):
+        return False
+    return any(phrase in low for phrase in _AI_APPLICATION_CONTEXT)
+
+
+# The skip reason a fill-time consent path records when it fails closed on an
+# AI-policy attestation (never auto-answered; routed to human handoff / the
+# content overlay's ToS-forbidden verdict instead).
+_AI_ATTESTATION_SKIP_REASON = (
+    "AI-policy attestation: never auto-answered (its Yes/No polarity varies per "
+    "posting, so no seeded scalar answers it honestly; human handoff)")
+
+# RS-g consent-class -> the owner policy dotted path that dispositions it. The
+# policy value is one of "consent" | "decline" | "truthful_only" | "opt_out".
+_CONSENT_POLICY_PATHS = {
+    "assertion": "policies.consent.assertion",
+    "assessment": "policies.consent.assessment",
+    "talent_pool": "policies.consent.talent_pool",
+    "marketing": "policies.consent.marketing",
+    "application_privacy": "policies.consent.application_privacy",
+}
 
 # -- yes/no select intent + region coverage (criterion: yes/no selects) --------
 # Right-to-work / sponsorship selects are answered by deriving an affirmative or
@@ -439,6 +574,11 @@ def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
     """
     resolver = vendor_resolver if vendor_resolver is not None else _NOOP_RESOLVER
     profile = profile or {}
+    # POSTING context (RS-b/RS-d): the resolution profile carries the posting's
+    # location under "posting_location" (w5_accept seeds it from the generated
+    # document, the same value the content overlay's nearest-city policy reads).
+    # Absent -> "" -> the two posting-aware resolvers park honestly.
+    posting_location = str(profile.get("posting_location") or "")
     assets = assets.verified() if assets is not None else None
     resolved = ResolvedValues()
     has_photo_field = _form_has_photo_field(fieldmap)
@@ -456,7 +596,8 @@ def resolve_values(fieldmap: FieldMap, ssot: SSOT, profile: dict, *,
         if classified.status == MISSING_STATUS:
             resolved.skipped.append((fld.key, classified.classification()))
             continue
-        value, skip_reason = _render_value(fld, classified.path, ssot)
+        value, skip_reason = _render_value(fld, classified.path, ssot,
+                                           posting_location)
         if skip_reason is not None:
             resolved.skipped.append((fld.key, skip_reason))
             continue
@@ -579,37 +720,71 @@ def _select_cv(assets: FillAssets, has_photo_field: bool):
 
 # -- checkbox (boolean) resolution ---------------------------------------------
 
+# RS-g consent-checkbox skip reasons.
+_NON_CONSENT_CHECKBOX_REASON = "non-consent checkbox not auto-checked in dry run"
+_MARKETING_SKIP_REASON = "marketing/newsletter checkbox left unticked"
+_CONSENT_UNRATIFIED_REASON = (
+    "consent checkbox not auto-ticked: SSOT carries no ratified consent answer")
+_ASSERTION_UNPROVEN_REASON = (
+    "assertion checkbox left unchecked (owner ruling 2026-07-19): checking it "
+    "would claim a fact the SSOT does not prove true; a truthful_only assertion "
+    "is never falsely checked")
+
+
 def _resolve_boolean(fld, resolved: ResolvedValues, ssot: SSOT,
                      profile: dict, vendor_resolver=_NOOP_RESOLVER) -> None:
-    """Resolve a checkbox by its label intent (criterion: consent checkboxes).
+    """Resolve a checkbox by its label intent (RS-g consent classes).
 
     An EEO/demographic or file boolean stays manual-only (never auto-answered).
-    A consent/confirmation box is ticked True when the SSOT ratifies consent; a
-    talent-pool / future-opportunities box is ticked True (YES per the owner
-    split); a marketing/newsletter box is left unticked; any other checkbox is
-    left for a human (unchanged pre-existing behaviour)."""
+    An in-office-commitment boolean is DERIVED from the W4-COMMUTE-GATE policy
+    (RS-d). Every other checkbox is sorted into a consent CLASS
+    (`_classify_checkbox`) and dispositioned by that class's owner policy under
+    `policies.consent.<class>` (`_consent_disposition`): application-privacy /
+    assessment consent ticks True, talent-pool / marketing decline, an assertion
+    ticks ONLY when the SSOT proves its factual claim true (owner ruling
+    2026-07-19: never a false check). Absent a seeded policy, only
+    application-necessary privacy consent auto-fills (from the legacy
+    `_CONSENT_SOURCE_PATHS`); the superseded talent-pool YES is retired. A
+    checkbox matching no class is left for a human."""
     classified = _classify_field(fld, ssot, profile, vendor_resolver)
     if classified.status == MANUAL_ONLY:
         resolved.skipped.append((fld.key, classified.reason or MANUAL_ONLY))
         return
-    kind = _classify_checkbox(fld.label)
-    if kind == "marketing":
-        resolved.skipped.append(
-            (fld.key, "marketing/newsletter checkbox left unticked"))
+    # RS-d: an in-office-commitment boolean is DERIVED from the W4-COMMUTE-GATE
+    # policy plus the posting location, never truthiness-coerced from the prose
+    # attendance answer (that PROSE reaching a boolean control is the live
+    # "boolean question resolved to a non-boolean value" defect). Resolving it to
+    # a real bool here also keeps the additive content overlay from re-routing it
+    # to the prose scalar (the overlay only touches still-skipped fields).
+    if _is_in_office_commitment(fld.label):
+        value, skip = _resolve_in_office_boolean(fld, ssot, profile)
+        if skip is not None:
+            resolved.skipped.append((fld.key, skip))
+        else:
+            resolved.fields.append(_bool_field(fld, value))
         return
-    if kind == "talent_pool":
+    if is_ai_policy_question(fld.label):
+        # An AI-policy attestation checkbox ("... I agree to use only my own words
+        # ... AI ... will disqualify") classifies as application_privacy via
+        # "agree", but its polarity is a stance the owner did not make: fail closed
+        # here exactly as the SELECT consent path does, never a silent tick.
+        resolved.skipped.append((fld.key, _AI_ATTESTATION_SKIP_REASON))
+        return
+    kind = _classify_checkbox(fld.label)
+    if kind is None:
+        resolved.skipped.append((fld.key, _NON_CONSENT_CHECKBOX_REASON))
+        return
+    action, reason = _consent_disposition(kind, ssot)
+    if action == "tick":
         resolved.fields.append(_bool_field(fld, True))
         return
-    if kind == "consent":
-        if _consent_ratified(ssot):
+    if action == "truthful_only":
+        if _assertion_proven_true(fld, ssot, profile) is True:
             resolved.fields.append(_bool_field(fld, True))
         else:
-            resolved.skipped.append(
-                (fld.key, "consent checkbox not auto-ticked: SSOT carries no "
-                 "ratified consent answer"))
+            resolved.skipped.append((fld.key, _ASSERTION_UNPROVEN_REASON))
         return
-    resolved.skipped.append(
-        (fld.key, "non-consent checkbox not auto-checked in dry run"))
+    resolved.skipped.append((fld.key, reason))
 
 
 def _bool_field(fld, value: bool) -> FieldValue:
@@ -618,19 +793,100 @@ def _bool_field(fld, value: bool) -> FieldValue:
 
 
 def _classify_checkbox(label: str) -> str | None:
-    """One of "talent_pool" | "marketing" | "consent" | None for a checkbox.
+    """The RS-g consent class of a checkbox label, or None.
 
-    Talent-pool is checked first, then marketing, then consent: a marketing box
-    that also says "I agree" must never read as legal consent, and a
-    future-opportunities box (owner: YES) must not be dropped as marketing."""
+    One of "assertion" | "assessment" | "talent_pool" | "marketing" |
+    "application_privacy" | None. Order is load-bearing: a factual work-auth
+    ASSERTION and an ASSESSMENT-participation ask are sorted before the generic
+    consent/marketing patterns, and marketing before application_privacy, so a
+    box that also says "I agree" is never mis-sorted into legal privacy consent.
+    `_WORK_AUTH_INTENT_RE` is the same right-to-work matcher the yes/no select
+    path uses, reused here per the owner ruling to route the assertion truth
+    lookup through the RS-b work-authorization machinery."""
     low = (label or "").lower()
+    if _WORK_AUTH_INTENT_RE.search(low):
+        return "assertion"
+    if _ASSESSMENT_RE.search(low):
+        return "assessment"
     if _TALENT_POOL_RE.search(low):
         return "talent_pool"
     if _MARKETING_RE.search(low):
         return "marketing"
     if _CONSENT_RE.search(low):
-        return "consent"
+        return "application_privacy"
     return None
+
+
+def _consent_disposition(kind: str, ssot: SSOT):
+    """RS-g: the fill disposition for a consent-class checkbox, driven by the
+    owner policy seeded under `policies.consent.<class>`.
+
+    Returns ("tick" | "truthful_only" | "skip", skip_reason_or_None). A seeded
+    verdict of "consent" ticks, "truthful_only" defers to the SSOT truth check
+    (assertions), and anything else ("decline" / "opt_out" / unknown) is an
+    honest non-fill. When NO policy is seeded, backward compat holds via
+    `_consent_disposition_legacy`."""
+    raw = ssot.get(_CONSENT_POLICY_PATHS[kind])
+    if raw is MISSING:
+        return _consent_disposition_legacy(kind, ssot)
+    verdict = str(raw).strip().lower()
+    if verdict == "consent":
+        return "tick", None
+    if verdict == "truthful_only":
+        return "truthful_only", None
+    return "skip", _policy_decline_reason(kind, verdict)
+
+
+def _consent_disposition_legacy(kind: str, ssot: SSOT):
+    """Backward compat when `policies.consent` is absent (owner ruling
+    2026-07-19): only application-necessary privacy consent auto-fills, and only
+    when `_CONSENT_SOURCE_PATHS` ratify it; marketing / talent-pool / assessment /
+    assertion never auto-fill (the superseded talent-pool YES is retired)."""
+    if kind == "application_privacy":
+        if _consent_ratified(ssot):
+            return "tick", None
+        return "skip", _CONSENT_UNRATIFIED_REASON
+    if kind == "marketing":
+        return "skip", _MARKETING_SKIP_REASON
+    return "skip", _consent_unseeded_reason(kind)
+
+
+def _consent_unseeded_reason(kind: str) -> str:
+    return (f"{kind} checkbox left unticked: no consent policy seeded "
+            "(owner ruling 2026-07-19; only application-necessary privacy "
+            "consent auto-fills without a seeded policy)")
+
+
+def _policy_decline_reason(kind: str, verdict: str) -> str:
+    return f"{kind} checkbox not ticked: consent policy verdict {verdict!r}"
+
+
+def _assertion_proven_true(fld, ssot: SSOT, profile: dict):
+    """RS-g/W2: is the factual claim an assertion checkbox makes PROVABLY true?
+    True / False / None.
+
+    Routes through the RS-b work-authorization machinery (never a duplicate): the
+    region is read from the assertion LABEL (which names the country, e.g. "...
+    authorized to work in the United States"), falling back to the posting
+    location; the region-keyed `work_authorization` mapping then yields the
+    authorized verdict (`_authorized_verdict`). None when the SSOT carries no
+    region-keyed mapping, the region cannot be placed, or the entry states no
+    usable answer -- the checkbox then stays unchecked (never a false check)."""
+    raw = ssot.get("work_authorization")
+    if raw is MISSING:
+        raw = ssot.get("canned_answers.work_authorization")
+    if raw is MISSING or not isinstance(raw, dict):
+        return None
+    region = _posting_region_key(fld.label)
+    if region is None:
+        region = _posting_region_key(
+            str((profile or {}).get("posting_location") or ""))
+    if region is None:
+        return None
+    entry = raw.get(region, MISSING)
+    if entry is MISSING:
+        return None
+    return _authorized_verdict(entry)
 
 
 def _consent_ratified(ssot: SSOT) -> bool:
@@ -652,19 +908,22 @@ def _consent_ratified(ssot: SSOT) -> bool:
 _FULL_NAME_PATHS = frozenset({"identity.name", "identity.full_name"})
 
 
-def _render_value(fld, path: str, ssot: SSOT):
+def _render_value(fld, path: str, ssot: SSOT, posting_location: str = ""):
     """Render one ANSWERABLE field to (value, None) or (None, skip_reason).
 
     File and boolean fields are handled by their own branches of `resolve_values`
     and never reach here; the file guard below is defence in depth so a file
-    field can never be rendered as free text even if the dispatch changes."""
+    field can never be rendered as free text even if the dispatch changes.
+
+    `posting_location` reaches only the work-authorization mapping resolver (RS-b),
+    which selects the region scalar by the posting's country."""
     if fld.type == "input_file":
         return None, "file-upload"
     raw = ssot.get(path)
     if raw is MISSING:
         return None, f"answerable via {path} but no literal SSOT value"
     if isinstance(raw, dict):
-        return _render_dict_value(fld, path, raw)
+        return _render_dict_value(fld, path, raw, posting_location)
     if path in _FULL_NAME_PATHS:
         kind = _name_part_kind(fld.label)
         if kind is not None:
@@ -674,7 +933,7 @@ def _render_value(fld, path: str, ssot: SSOT):
     return _render_text(raw, path)
 
 
-def _render_dict_value(fld, path: str, raw: dict):
+def _render_dict_value(fld, path: str, raw: dict, posting_location: str = ""):
     """A dotted path that resolved to an SSOT sub-tree (dict) rather than a
     scalar. A select field may still be answerable from one of the dict's
     scalar values matching an option (exact match first, then the leading-
@@ -682,7 +941,16 @@ def _render_dict_value(fld, path: str, raw: dict):
     `sponsorship_answer_by_region` dict whose EU sub-value is a full sentence
     "No, I have the right to work..." maps onto a bare "No" option); a text
     field (or a select with no matching scalar) is honestly skipped rather
-    than typing/matching the mapping itself."""
+    than typing/matching the mapping itself.
+
+    The work_authorization MAPPING (RS-b) is region-keyed and CANNOT be answered
+    by blindly scanning its values (that is exactly the live "no usable scalar"
+    failure): it is routed to the per-country resolver, which selects the region
+    entry by the posting's country and parks honestly without one."""
+    if path in _WORK_AUTH_DICT_PATHS:
+        return _render_work_auth_by_country(fld, raw, posting_location)
+    if path == _SPONSORSHIP_BY_REGION_PATH:
+        return _render_sponsorship_by_region(fld, raw, posting_location)
     if fld.type in _SELECT_TYPES:
         for value in raw.values():
             match = _match_option(fld.options, value)
@@ -739,7 +1007,47 @@ def _render_select(fld, raw, ssot: SSOT):
     extracted = _extract_yesno_option(fld.options, raw)
     if extracted is not None:
         return extracted, None
+    consent_option = _consent_select_option(fld, raw, ssot)
+    if consent_option is not None:
+        return consent_option, None
     return None, f"no option matches SSOT value {_short(raw)!r}"
+
+
+def _consent_select_option(fld, raw, ssot: SSOT):
+    """RS-g: a consent-class SELECT (an application-necessary privacy-notice
+    acknowledgement) whose sole affirmative option ("Acknowledge"/"Confirm"/"I
+    agree") no bare yes/no match can reach. Under an application_privacy consent
+    policy that ticks, pick that single affirmative option; return None (leaving
+    the caller's honest "no option matches" skip) otherwise.
+
+    Fixes the live greenhouse `question_37455721` ("Please confirm that you have
+    read and agree to ... Privacy Notice and Privacy Policy", options
+    ["Acknowledge/Confirm"]) failing "no option match". Never overrides an
+    explicit SSOT "no", and never invents a choice among SEVERAL affirmatives.
+
+    FAILS CLOSED on an AI-policy attestation (`is_ai_policy_question`): a label
+    such as "During this application process I agree to use only my own words ...
+    AI ... will disqualify" also matches `_classify_checkbox` as
+    application_privacy via "agree", but its affirmative is a stance the owner did
+    not make (FX3, the generator forbids it) and must never be auto-picked."""
+    if is_ai_policy_question(fld.label):
+        return None
+    if _classify_checkbox(fld.label) != "application_privacy":
+        return None
+    action, _ = _consent_disposition("application_privacy", ssot)
+    if action != "tick":
+        return None
+    if _yesno(raw) is False:                # an explicit SSOT "no" is respected
+        return None
+    affirmatives = [o for o in (fld.options or []) if _is_affirmative_option(o)]
+    if len(affirmatives) == 1:
+        return affirmatives[0]
+    return None
+
+
+def _is_affirmative_option(option) -> bool:
+    """An option label that reads as an affirmative acknowledgement (RS-g)."""
+    return bool(_AFFIRMATIVE_OPTION_RE.search(str(option)))
 
 
 def _extract_yesno_option(options, raw):
@@ -933,6 +1241,297 @@ def _short(value) -> str:
     return text if len(text) <= 60 else text[:57] + "..."
 
 
+# ============================================================================ #
+# Posting-location resolution (RS-b work auth by country, RS-d commute boolean).
+# ============================================================================ #
+#
+# Two resolver classes genuinely need the POSTING's country, which the kernel
+# historically did not carry. It now rides on the resolution profile
+# ("posting_location", seeded by w5_accept from the generated document -- the
+# same value the content overlay's nearest-city policy reads). Both resolvers
+# park honestly without it: a wrong answer is a lie sent under the owner's name.
+#
+# Two DISTINCT notions of region ride on the location, kept deliberately apart:
+#   * work ELIGIBILITY (RS-b): the SSOT work_authorization region KEY
+#     (eu/ch/uk/us/ca) a posting country belongs to. The UK is its OWN key
+#     (post-Brexit it is not EU for work rights), mirroring profile_map's split.
+#   * GEOGRAPHIC commute band (RS-d): how far the owner would travel, where the
+#     UK IS Europe. match.py draws the same _EU_* vs _EUROPE_* distinction; the
+#     kernel firewall (stdlib + engine.kernel.* only) forbids importing it, so
+#     the focused tables below are a deliberate, documented duplication.
+
+_WEEKS_PER_MONTH = 4.33  # calendar constant, mirrors match._WEEKS_PER_MONTH
+
+# posting country -> SSOT work_authorization region key. Order is load-bearing:
+# the sponsorship-required regions (us/uk/ca/ch) are tested BEFORE eu so a
+# "London, United Kingdom" posting keys uk, never eu.
+_REGION_KEY_PATTERNS = [
+    ("us", re.compile(r"united states|\bu\.?s\.?a?\.?\b|\bamerica\b", re.I)),
+    ("uk", re.compile(r"united kingdom|\bu\.?k\.?\b|great britain|\bbritain\b|"
+                      r"\bengland\b|\bscotland\b|\bwales\b|northern ireland",
+                      re.I)),
+    ("ca", re.compile(r"\bcanada\b|\bcanadian\b|\btoronto\b|\bvancouver\b|"
+                      r"\bmontreal\b|\bottawa\b", re.I)),
+    ("ch", re.compile(r"switzerland|\bswiss\b|\bz(?:u|ü)rich\b|\bgeneva\b|"
+                      r"\bbasel\b|\blausanne\b|\bbern\b", re.I)),
+    ("eu", re.compile(
+        r"european union|\beu\b|\be\.u\.\b|\beea\b|\beurope\b|"
+        r"ireland|\bdublin\b|germany|\bberlin\b|\bmunich\b|france|\bparis\b|"
+        r"spain|\bmadrid\b|\bbarcelona\b|ital|\brome\b|\bmilan\b|\bbologna\b|"
+        r"netherlands|\bamsterdam\b|belgium|\bbrussels\b|portugal|\blisbon\b|"
+        r"austria|\bvienna\b|poland|\bwarsaw\b|sweden|\bstockholm\b|denmark|"
+        r"\bcopenhagen\b|finland|\bhelsinki\b|luxembourg|greece|\bathens\b|"
+        r"czech|\bprague\b|hungary|romania|bulgaria|croatia|"
+        r"slovak|sloven|estonia|latvia|lithuania|\bmalta\b|cyprus", re.I)),
+]
+
+# GEOGRAPHIC commute bands (RS-d): the UK IS Europe here (a London commute is a
+# European commute). A location classifiable as NEITHER Europe nor a known
+# outside country is left UNPLACEABLE (None) so the boolean parks, never guesses.
+_EUROPE_GEO_RE = re.compile(
+    r"european union|\beu\b|\beea\b|\beurope\b|united kingdom|\bu\.?k\.?\b|"
+    r"great britain|\bbritain\b|\bengland\b|\bscotland\b|\bwales\b|\blondon\b|"
+    r"ireland|\bdublin\b|germany|\bberlin\b|\bmunich\b|france|\bparis\b|"
+    r"spain|\bmadrid\b|\bbarcelona\b|ital|\brome\b|\bmilan\b|\bbologna\b|"
+    r"switzerland|\bswiss\b|\bz(?:u|ü)rich\b|\bgeneva\b|"
+    r"netherlands|\bamsterdam\b|belgium|\bbrussels\b|portugal|\blisbon\b|"
+    r"austria|\bvienna\b|poland|\bwarsaw\b|sweden|\bstockholm\b|denmark|"
+    r"\bcopenhagen\b|finland|\bhelsinki\b|luxembourg|greece|\bathens\b|"
+    r"czech|\bprague\b|hungary|romania|bulgaria|croatia|norway|\boslo\b|"
+    r"iceland|slovak|sloven|estonia|latvia|lithuania|\bmalta\b|cyprus", re.I)
+_OUTSIDE_EUROPE_RE = re.compile(
+    r"united states|\bu\.?s\.?a?\.?\b|\bamerica\b|\bcanada\b|\btoronto\b|"
+    r"\bvancouver\b|\bmontreal\b|australia|\bsydney\b|\bmelbourne\b|"
+    r"\bindia\b|\bbangalore\b|\bbengaluru\b|singapore|\buae\b|\bdubai\b|"
+    r"\bisrael\b|tel aviv|\bjapan\b|\btokyo\b|\bchina\b|\bbrazil\b|"
+    r"new zealand|south africa|mexico", re.I)
+
+# W4-COMMUTE-GATE cadence shapes (SSOT preferences.location_policy), mirroring
+# match._ONSITE_AMOUNT_PATTERNS (the kernel firewall forbids importing it).
+_ONSITE_CADENCE_PATTERNS = (
+    (re.compile(r"(\d+)\s*days?\s*(?:per|a|/)\s*month", re.I), "month"),
+    (re.compile(r"(\d+)\s*days?\s*(?:per|a|/)\s*week", re.I), "week"),
+    (re.compile(r"(\d+)\s*times?\s*(?:per|a|/)\s*month", re.I), "month"),
+    (re.compile(r"(\d+)\s*times?\s*(?:per|a|/)\s*week", re.I), "week"),
+    (re.compile(r"(\d+)\s*days?\s*in\s*(?:the\s*)?office", re.I), "week"),
+)
+
+_IN_OFFICE_RE = re.compile(
+    r"in[\s-]*office|in the office|on[\s-]*site|in[\s-]*person|"
+    r"come\s+in(?:to)?\s+the\s+office|days?\s+in\s+(?:the\s+)?office", re.I)
+
+# The work_authorization candidate paths (mirrors the work-auth `_ANSWER_MATCHERS`
+# row): a dict resolved via one of these is region-keyed and routed to the
+# per-country resolver, never scanned blindly for a matching option value.
+_WORK_AUTH_DICT_PATHS = frozenset({
+    "work_authorization", "canned_answers.work_authorization",
+})
+
+# RS-a: the region-keyed owner sponsorship policy. A dict resolved via this path
+# is the visa-sponsorship ANSWER per region (eu/eea -> "No", any other region ->
+# the "default"), selected by the POSTING country and NEVER by a US-specific seed.
+_SPONSORSHIP_BY_REGION_PATH = "policies.sponsorship_by_region"
+
+
+def _posting_region_key(posting_location: str):
+    """The SSOT work_authorization region key a posting country belongs to, or
+    None when the location is empty or maps to no known region (park, never
+    guess)."""
+    text = (posting_location or "").strip().lower()
+    if not text:
+        return None
+    for key, pattern in _REGION_KEY_PATTERNS:
+        if pattern.search(text):
+            return key
+    return None
+
+
+def _render_work_auth_by_country(fld, raw: dict, posting_location: str):
+    """RS-b: a work-authorization question that resolved to the region-keyed
+    work_authorization MAPPING. Select the region entry by the POSTING country
+    and render its authorized-to-work verdict. Parks honestly when the posting
+    country is unavailable, unmapped, or the region entry states no usable
+    answer -- never guesses a region, never types the mapping."""
+    region = _posting_region_key(posting_location)
+    if region is None:
+        return None, _questionnaire_skip(
+            fld, "work authorization: posting country unavailable or unmapped")
+    entry = raw.get(region, MISSING)
+    if entry is MISSING:
+        return None, _questionnaire_skip(
+            fld, f"work authorization: no SSOT entry for posting region {region!r}")
+    verdict = _authorized_verdict(entry)
+    if verdict is None:
+        return None, _questionnaire_skip(
+            fld, f"work authorization for region {region!r} states no usable answer")
+    if fld.type in _SELECT_TYPES:
+        option = _pick_option(fld.options, verdict)
+        if option is None:
+            return None, f"no yes/no option to answer {_short(fld.label)!r}"
+        return option, None
+    return ("Yes" if verdict else "No"), None
+
+
+def _render_sponsorship_by_region(fld, raw: dict, posting_location: str):
+    """RS-a: a visa-sponsorship question that resolved to the region-keyed
+    `policies.sponsorship_by_region` policy. Select the region entry by the
+    POSTING country (eu/eea -> "No", any other region -> the "default"), so a UK
+    or US posting no longer inherits a US-specific canned "No"/"Yes". The looked-
+    up value ("No"/"Yes") IS the answer; a SELECT gets the matching option, a
+    text field the literal.
+
+    Parks honestly when the posting country is unavailable, unmapped, or the
+    policy states no usable answer for it -- a wrong sponsorship answer is a lie
+    sent under the owner's name. Preferred over the
+    work_authorization.<region>.sponsorship_required structured fact
+    (profile_map.py:70): when both exist and disagree, this explicit owner policy
+    wins (its path leads the sponsorship matcher, so it is the one that resolves)."""
+    region = _posting_region_key(posting_location)
+    if region is None:
+        return None, _questionnaire_skip(
+            fld, "visa sponsorship: posting country unavailable or unmapped")
+    answer = raw.get(region, raw.get("default", MISSING))
+    if answer is MISSING:
+        return None, _questionnaire_skip(
+            fld, f"visa sponsorship: no policy entry for region {region!r} "
+            "and no default")
+    verdict = _yesno(answer)
+    if verdict is None:
+        return None, _questionnaire_skip(
+            fld, f"visa sponsorship for region {region!r} states no usable answer")
+    if fld.type in _SELECT_TYPES:
+        option = _pick_option(fld.options, verdict)
+        if option is None:
+            return None, f"no yes/no option to answer {_short(fld.label)!r}"
+        return option, None
+    return ("Yes" if verdict else "No"), None
+
+
+def _authorized_verdict(entry):
+    """Is the owner authorized to work in this region? True/False/None.
+
+    A scalar entry is the owner's own answer (a yes/no leading token, or a bool).
+    A structured entry carries `sponsorship_required`: authorized-to-work is the
+    NEGATION of needing sponsorship (no sponsorship needed -> already authorized).
+    None when the entry states neither (park)."""
+    if isinstance(entry, bool):
+        return entry
+    if isinstance(entry, dict):
+        flag = _sponsorship_required_flag(entry.get("sponsorship_required"))
+        return (not flag) if flag is not None else None
+    return _yesno(entry)
+
+
+def _sponsorship_required_flag(value):
+    """A boolean-ish `sponsorship_required` value -> True/False, else None."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return _yesno(value)
+    return None
+
+
+def _is_in_office_commitment(label: str) -> bool:
+    """An in-office ATTENDANCE-cadence boolean: it names in-office presence AND
+    carries a parseable days-per-week|month cadence. The cadence requirement
+    keeps a plain consent box ("consent to in-office monitoring?") out of the
+    derivation path."""
+    low = (label or "").lower()
+    if not _IN_OFFICE_RE.search(low):
+        return False
+    amount, _ = _detect_onsite_cadence(low)
+    return amount is not None
+
+
+def _resolve_in_office_boolean(fld, ssot: SSOT, profile: dict):
+    """RS-d: derive an in-office-commitment boolean from the W4-COMMUTE-GATE
+    owner policy (SSOT preferences.location_policy) plus the POSTING location, never by truthiness-
+    coercing the prose attendance answer. Milan/Bologna -> any cadence viable;
+    elsewhere in Europe -> viable at or under the weekly cap; outside Europe ->
+    viable at or under the monthly cap. Parks honestly (no location, no policy,
+    unparseable cadence, or an unplaceable location).
+
+    Returns (bool_value, None) when derived, or (None, skip_reason) to park."""
+    posting_location = str((profile or {}).get("posting_location") or "")
+    if not posting_location:
+        return None, _questionnaire_skip(
+            fld, "in-office commitment: posting location unavailable")
+    policy = _commute_policy(ssot)
+    if policy is None:
+        return None, _questionnaire_skip(
+            fld, "in-office commitment: no location policy in the SSOT")
+    amount, unit = _detect_onsite_cadence(fld.label)
+    if amount is None:
+        return None, _questionnaire_skip(
+            fld, "in-office commitment: on-site cadence not parseable")
+    band = _commute_band(posting_location, policy["allowed_cities"])
+    if band is None:
+        return None, _questionnaire_skip(
+            fld, "in-office commitment: posting location not placeable")
+    if band == "allowed_city":
+        return True, None
+    if band == "europe":
+        detected = amount if unit == "week" else amount / _WEEKS_PER_MONTH
+        threshold = policy["max_onsite_days_per_week_europe"]
+    else:
+        detected = amount * _WEEKS_PER_MONTH if unit == "week" else amount
+        threshold = policy["max_onsite_days_per_month_rest"]
+    return detected <= threshold, None
+
+
+def _commute_policy(ssot: SSOT):
+    """The W4-COMMUTE-GATE policy from SSOT preferences.location_policy, or None
+    when absent/partial (fail-closed: no policy -> the boolean parks). Mirrors
+    match._location_policy_from_ssot (kernel firewall forbids importing it)."""
+    raw = ssot.get("preferences.location_policy")
+    if raw is MISSING or not isinstance(raw, dict):
+        return None
+    week_cap = raw.get("max_onsite_days_per_week_europe")
+    month_cap = raw.get("max_onsite_days_per_month_rest")
+    if (isinstance(week_cap, bool) or isinstance(month_cap, bool)
+            or not isinstance(week_cap, (int, float))
+            or not isinstance(month_cap, (int, float))):
+        return None
+    cities = raw.get("allowed_cities")
+    allowed = ([str(c) for c in cities]
+               if isinstance(cities, (list, tuple)) else [])
+    return {"allowed_cities": allowed,
+            "max_onsite_days_per_week_europe": float(week_cap),
+            "max_onsite_days_per_month_rest": float(month_cap)}
+
+
+def _detect_onsite_cadence(text: str):
+    """(day-count, "week"|"month") parsed from an in-office question label, or
+    (None, None)."""
+    for pattern, unit in _ONSITE_CADENCE_PATTERNS:
+        match = pattern.search(text or "")
+        if match:
+            return float(match.group(1)), unit
+    return None, None
+
+
+def _commute_band(posting_location: str, allowed_cities):
+    """"allowed_city" | "europe" | "outside" | None for a posting location.
+
+    An owner allowed city (Milan/Bologna) beats the coarse Europe/outside bands.
+    None when the location is empty or classifiable as neither Europe nor a known
+    outside country (park, never guess a band)."""
+    text = (posting_location or "").strip().lower()
+    if not text:
+        return None
+    for city in allowed_cities or []:
+        name = str(city).strip().lower()
+        if name and re.search(rf"\b{re.escape(name)}\b", text):
+            return "allowed_city"
+    if _EUROPE_GEO_RE.search(text):
+        return "europe"
+    if _OUTSIDE_EUROPE_RE.search(text):
+        return "outside"
+    return None
+
+
 # -- fill completeness accounting ----------------------------------------------
 
 def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
@@ -966,7 +1565,8 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
         fillable_total = filled + len(skip_reason)
         justified = sum(1 for reason in skip_reason.values()
                         if _is_eeo_reason(reason) or _is_upload_skip(reason)
-                        or _is_satisfied_by_sibling_upload(reason))
+                        or _is_satisfied_by_sibling_upload(reason)
+                        or _is_tos_forbidden_skip(reason))
         return fillable_total, [], justified
 
     non_hidden = [f for f in fieldmap.fields if not _is_hidden_field(f, resolver)]
@@ -979,6 +1579,12 @@ def _completeness(fieldmap: FieldMap | None, filled_keys: set[str],
         if _is_justified_eeo_skip(f, reason):
             justified += 1
         elif _is_satisfied_by_sibling_upload(reason):
+            justified += 1
+        elif _is_tos_forbidden_skip(reason):
+            # Verdict class ii: the employer's ToS forbids the ENGINE from
+            # answering this field (documented handoff to a human), so it is a
+            # justified skip subtracted from the gate, never a data gap -- even
+            # when required. The never-send guard means the human completes it.
             justified += 1
         elif _is_upload_skip(reason) and not f.required:
             justified += 1
@@ -1047,6 +1653,22 @@ def _is_satisfied_by_sibling_upload(reason: str) -> bool:
     IS satisfied by the equivalent uploaded artifact, not merely excused
     because the field happens to be optional."""
     return (reason or "").lower().startswith("satisfied by sibling file upload")
+
+
+# The skip-reason prefix a ToS-forbidden field carries (verdict class ii). The
+# content overlay writes it (`content.apply_content_overlay`, when a field label
+# matches a `generated.tos_forbidden` entry) and `_is_tos_forbidden_skip` /
+# `_completeness` read it. A single shared constant is the SSOT across the two
+# modules, the same string-keying pattern `_is_satisfied_by_sibling_upload` uses.
+TOS_FORBIDDEN_SKIP_PREFIX = "tos_forbidden (documented ToS, class ii)"
+
+
+def _is_tos_forbidden_skip(reason: str) -> bool:
+    """True iff the skip reason names a documented-ToS handoff (verdict class ii):
+    the employer's Terms forbid the ENGINE from answering the field, so it is left
+    for a human and counted a justified skip, never a data gap. The content
+    overlay stamps this prefix when it routes a field to `tos_forbidden`."""
+    return (reason or "").startswith(TOS_FORBIDDEN_SKIP_PREFIX)
 
 
 def _is_upload_skip(reason: str) -> bool:

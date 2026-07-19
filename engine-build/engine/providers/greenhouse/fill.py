@@ -36,18 +36,21 @@ resolves it directly). The workpls names are kept here as a REFERENCE/
 FALLBACK comment only, for a human debugging a selector miss offline; they
 are not consulted by any code path in this wave.
 
-DEFERRED (TODO, not built this wave -- see the module-level `_TODO_*`
-markers below for the exact seams a later refinement lands in):
+The async school/degree/discipline education typeahead (education questions
+Greenhouse exposes as a debounced remote-search select rather than a plain
+text/select field) IS now driven, by `select_education_typeahead` -- the
+async-aware sibling of the react-select combobox driver (same live-region
+readback + focus-following keyboard Enter, plus a bounded settle for the
+debounce). Its offline seam is pinned by test; the live debounce timing is a
+TB5-R2 toto-gate confirmation (offline fixtures cannot prove it).
+
+DEFERRED (TODO, not built this wave -- see the module-level `_TODO_*` marker
+below for the exact seam a later refinement lands in):
 - intl-tel-input phone-country widget (a phone field currently goes through
   the same `type_human` path as any other text field; the widget's country
-  dropdown is not driven).
-- async school/degree typeahead (education questions, when Greenhouse
-  exposes them as a typeahead rather than a plain text/select field, are not
-  specially handled; they fall through to the generic text/select path,
-  which will usually mis-fire on a typeahead's debounce).
-Both need a live-DOM probe (W5.2's fixture-validation promise) before they
-can be built correctly; stubbing them now would be guessing at behaviour this
-wave does not have evidence for.
+  dropdown is not driven). It needs a live-DOM probe (W5.2's fixture-validation
+  promise) before it can be built correctly; stubbing it now would be guessing
+  at behaviour this wave does not have evidence for.
 """
 
 from __future__ import annotations
@@ -62,17 +65,26 @@ from typing import Any
 # half-initialised `engine.fill` and raise. (Since wave 4B1 this module has NO
 # `engine.fill` import at any scope; primitives come from the kernel.)
 from engine.kernel.contracts import (
-    FieldMap, FillAssets, FillReport, FillSafetyError, ResolvedValues)
+    FieldMap, FieldValue, FillAssets, FillReport, FillSafetyError,
+    ResolvedValues)
 # Generic form-driving primitives the moved react-select / upload-poll widget
 # cluster (below) calls bare, exactly as it did when it lived in providers/base
 # (base re-exports these same kernel names). Not monkeypatched anywhere.
 from engine.kernel.fill_toolkit import (
-    _current_assets, _current_url, _is_upload, _locator_text, _normalize_name,
-    _strip_fragment, _sweep_gaps, type_human)
+    _current_assets, _current_url, _is_upload, _locator_text, _needs_human_handoff,
+    _normalize_name, _strip_fragment, _sweep_gaps, type_human)
+from engine.kernel.control_toolkit import ControlKind, ControlSpec, drive_control
 from engine.kernel.capture_toolkit import _utc_now_iso
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
+from engine.kernel.ssot import MISSING
 from engine.providers import base
 from engine.providers.greenhouse.resolve import GREENHOUSE_WIDGET_RESOLVER
+# The education-typeahead field type is MINTED by capture (the producer) and
+# CONSUMED here (the detector). Single source of truth; capture is browser-free
+# so this module-scope import keeps the lazy-import invariant (no browser code
+# loaded at fill import). `capture()` below still lazily imports
+# `capture_greenhouse` separately to preserve its monkeypatch seam.
+from engine.providers.greenhouse.capture import EDUCATION_TYPEAHEAD_TYPE
 
 vendor = "greenhouse"
 
@@ -84,6 +96,47 @@ vendor = "greenhouse"
 # driven. Keys mirror `fieldmap._KEY_TEXT_PATHS`'s exact key set.
 _TEXT_UPLOAD_SIBLINGS = {"resume_text": "resume",
                         "cover_letter_text": "cover_letter"}
+
+# W5.1c (research verdict 2026-07-13): "a programmatic click is riskier than a
+# programmatic keystroke" was a folk belief with no supporting evidence -- both
+# go through Playwright/Patchright's native APIs (CDP -> isTrusted=true, the
+# same trust tier as this vendor's own `type_human` keystrokes) as long as no JS
+# dispatchEvent is used, which this path never does. `_needs_human_handoff`
+# (`fill_toolkit`: a boolean tick, or a checkbox/radio locator role) still NAMES
+# the click-hazard set; greenhouse no longer DEFERS it to a human, it DRIVES it
+# through the shared kernel mechanism (`control_toolkit.drive_control`) via
+# `_drive_click_control` below.
+#
+# What this buys concretely: greenhouse's `multi_value_multi_select` is a group
+# of native option checkboxes (see `capture._ROLE_OVERRIDES`), and the
+# QUESTION's own label resolves to no checkbox at all (only each OPTION does,
+# 1-to-1, by its own label -- the live probe re-served in `tests/
+# test_providers_greenhouse.py::test_fill_hands_off_a_checkbox_group_before_
+# building_any_locator`'s docstring); `_drive_click_control` drives each OPTION
+# by its own label/name, one `.check()` per option -- the "checkbox GROUP
+# option-by-option" driving this wave named as its job. A control that does not
+# CONFIRM (readback mismatch, or a locator exposing no `.check()`/`.uncheck()`)
+# still books its own gap: never a silent auto-click counted as filled, never a
+# laundered exemption. A group is filled ONLY when EVERY option it drove
+# confirmed; a partially-confirmed group is a gap, never a fill.
+#
+# `_HUMAN_HANDOFF_REASON` is kept defined, though no longer produced by this
+# loop, only because the pre-W5.1c suite `tests/test_providers_greenhouse.py`
+# still names it; nothing else in this module references it any more.
+_HUMAN_HANDOFF_REASON = (
+    "checkbox/radio needs a human-operated trusted click: greenhouse scores the "
+    "session with reCAPTCHA v3, so a programmatic checkbox/radio click is handed "
+    "off for a human (a required one forces NOT_COMPLETE, never a silent "
+    "auto-click); driving a checkbox GROUP option-by-option is W5.1c's job")
+
+# The ONLY click-hazard role greenhouse's own vocabulary ever produces
+# (`kernel.contracts._ROLE_FOR_TYPE` + `capture._ROLE_OVERRIDES`): "boolean" and
+# the overridden "multi_value_multi_select" both map to "checkbox". Greenhouse
+# has no field type that maps to "radio" today -- a `yes_no` question is a
+# react-select COMBOBOX on the live DOM (driven by `select_react_combobox`
+# below), never a radio pair. Kept as a map, not a bare "always CHECKBOX", so a
+# future radio-shaped field routes correctly without a new branch here.
+_ROLE_TO_CONTROL_KIND = {"checkbox": ControlKind.CHECKBOX, "radio": ControlKind.RADIO}
 
 
 # -- capture / apply_url: thin delegation to the registry wiring ---------------
@@ -115,27 +168,118 @@ def apply_url(slug: str, job_id: str) -> str:
 # on the form's own upload-field shape (`kernel.resolve._form_has_photo_field`,
 # read from the vendor schema captured at `capture()` time, never the posting's
 # free text -- an attacker-independent structural signal per anti-injection
-# finding 5) and is posting-language independent. Greenhouse contributes only its
-# portal-widget resolver (`GREENHOUSE_WIDGET_RESOLVER`); there is no vendor-side
-# post-process any more.
+# finding 5) and is posting-language independent. Greenhouse contributes its
+# portal-widget resolver (`GREENHOUSE_WIDGET_RESOLVER`) for the classification-
+# time quirks, plus ONE post-process the vendor resolver structurally cannot do:
+# the education typeaheads (see `_resolve_education_typeaheads`).
+
+
+# The SSOT `education` is a LIST of entries; the PRIMARY (first) entry's fields
+# feed the three typeaheads. School <- institution, Degree <- degree. Discipline
+# has NO structured key in the education entries (v1.4 keys them as
+# {degree, institution, year}; discipline lives inside the degree string), so it
+# falls back to the OWNER-SEEDED `canned_answers.discipline` scalar ("Computer
+# Science") -- never parsed out of the degree string (that would be guessing).
+# When neither is present it stays skipped BY NAME. The degree/discipline
+# VALUE-vs-option match on the live widget is a TB5-R2 concern; this maps the
+# SSOT datum, and the fill readback reports honestly if it does not take.
+_EDUCATION_SSOT_LIST = "education"
+_EDUCATION_CONTROL_SSOT_KEY = {
+    "education_school": "institution",
+    "education_degree": "degree",
+    "education_discipline": "discipline",
+}
+# The discipline datum's fallback SSOT path when the primary education entry
+# carries no structured `discipline` key (the live SSOT shape).
+_EDUCATION_DISCIPLINE_FALLBACK_PATH = "canned_answers.discipline"
+
+# The LIVE react-select id root each capture-time education key drives (probed on
+# canonical/4124053, 2026-07-19): the widget ids are `school--0` / `degree--0` /
+# `discipline--0`, NOT the capture keys. Capture mints stable namespaced keys
+# (`education_school` etc., so they never collide with a schema question literally
+# named "degree"); THIS is the one place that maps a key onto the DOM id the
+# react-select driver anchors its `-live-region` selector on. A key with no entry
+# here falls back to itself (the pre-probe assumption).
+_EDUCATION_DOM_FIELD_ID = {
+    "education_school": "school--0",
+    "education_degree": "degree--0",
+    "education_discipline": "discipline--0",
+}
 
 
 def resolve_values(fieldmap: FieldMap, ssot, profile: dict, *,
                    assets: FillAssets | None = None,
                    posting_lang: str = "en") -> ResolvedValues:
     """Render every field to a concrete fill value via the vendor-agnostic kernel
-    resolver, injecting Greenhouse's portal-widget resolver.
+    resolver, injecting Greenhouse's portal-widget resolver, then reconnect the
+    async education typeaheads to the structured SSOT `education` list.
 
     The CV/photo choice (owner-ratified structural rule) and all other
     classification -- text/select/boolean rendering, EEO/demographic exclusion,
     missing-field skips -- live in `kernel.resolve.resolve_values`. Greenhouse's
     location-autocomplete `location` field, the paste-in `resume_text`/
     `cover_letter_text` textareas, and the `longitude`/`latitude` telemetry are
-    reconnected through the injected `GREENHOUSE_WIDGET_RESOLVER`.
+    reconnected through the injected `GREENHOUSE_WIDGET_RESOLVER`. The education
+    typeaheads need a SEPARATE post-process (`_resolve_education_typeaheads`): the
+    vendor resolver can only return a scalar dotted SSOT path, and `ssot.get`
+    does not index a list, so it cannot reach `education[0].institution` -- the
+    kernel would (and does) skip School/Degree/Discipline as
+    `missing:canned_answers.<label>`. This is the vendor-widget analogue of the
+    location autocomplete, one structural level deeper.
     """
-    return _kernel_resolve_values(
+    resolved = _kernel_resolve_values(
         fieldmap, ssot, profile, assets=assets, posting_lang=posting_lang,
         vendor_resolver=GREENHOUSE_WIDGET_RESOLVER)
+    _resolve_education_typeaheads(fieldmap, ssot, resolved)
+    return resolved
+
+
+def _resolve_education_typeaheads(fieldmap: FieldMap, ssot,
+                                  resolved: ResolvedValues) -> None:
+    """Inject a FieldValue for each education typeahead whose datum is present in
+    the structured SSOT `education` list, dropping the kernel's stale
+    `missing:canned_answers.<label>` skip for it. Discipline, which the education
+    entries do not carry structurally, falls back to the owner-seeded
+    `canned_answers.discipline` scalar; a field whose datum is absent everywhere
+    is LEFT skipped by name -- partial data fills what it has and records the
+    rest, never fabricated. Idempotent: a field the kernel somehow already
+    resolved is left untouched. No-op on a posting with no education typeaheads."""
+    edu_fields = [f for f in fieldmap.fields
+                  if f.type == EDUCATION_TYPEAHEAD_TYPE]
+    if not edu_fields:
+        return
+    entries = ssot.get(_EDUCATION_SSOT_LIST)
+    primary = (entries[0] if isinstance(entries, list) and entries
+               and isinstance(entries[0], dict) else {})
+    already = {fv.key for fv in resolved.fields}
+    for fld in edu_fields:
+        if fld.key in already:
+            continue
+        ssot_key = _EDUCATION_CONTROL_SSOT_KEY.get(fld.key)
+        raw = primary.get(ssot_key) if ssot_key else None
+        value = str(raw).strip() if raw is not None else ""
+        if not value:
+            value = _education_fallback_value(fld.key, ssot)
+        if not value:
+            continue  # datum absent -> leave the kernel's skip (recorded by name)
+        resolved.skipped[:] = [(k, r) for k, r in resolved.skipped
+                               if k != fld.key]
+        resolved.fields.append(FieldValue(
+            key=fld.key, label=fld.label, type=fld.type,
+            locator=fld.locator, value=value))
+
+
+def _education_fallback_value(key: str, ssot) -> str:
+    """The fallback SSOT scalar for an education typeahead whose structured entry
+    datum is absent. Only Discipline has one today (`canned_answers.discipline`,
+    the owner-seeded degree subject); every other key returns "" so it stays
+    honestly skipped by name rather than fabricated."""
+    if key != "education_discipline":
+        return ""
+    raw = ssot.get(_EDUCATION_DISCIPLINE_FALLBACK_PATH)
+    if raw is MISSING or raw is None:
+        return ""
+    return str(raw).strip()
 
 
 # -- fill(): the Provider contract's ordered sequence ---------------------------
@@ -208,6 +352,29 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
 
     # (2) + (3) drive + readback-gate every resolved non-upload field.
     for fv in other_fields:
+        if _needs_human_handoff(fv):
+            # W5.1c: DRIVE the click-hazard control through the shared kernel
+            # mechanism instead of handing it to a human (see the block
+            # comment above `_HUMAN_HANDOFF_REASON`). A single checkbox drives
+            # one control; a checkbox GROUP drives each of its selected options
+            # by that option's own label. A control that does not confirm still
+            # books its own gap (a group needs EVERY option to confirm); a
+            # required one still forces NOT_COMPLETE. Fail-soft exactly like
+            # `_fill_field` below: a locator that resolves to nothing, or a
+            # `.check()` that times out, books ONE gap for ONE field rather than
+            # escaping `fill()` and crashing the whole run.
+            try:
+                confirmed, reason = _drive_click_control(page, fv)
+            except FillSafetyError:
+                raise
+            except Exception as exc:  # per-field drive error is fail-soft
+                extra_skips.append((fv.key, f"fill-error: {exc}"))
+                continue
+            if confirmed:
+                filled_keys.add(fv.key)
+            else:
+                extra_skips.append((fv.key, reason))
+            continue
         sibling_key = _TEXT_UPLOAD_SIBLINGS.get(fv.key)
         if sibling_key is not None and sibling_key in file_attached_keys:
             # Greenhouse's schema exposes BOTH the file field and its
@@ -223,6 +390,25 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
             extra_skips.append(
                 (fv.key, f"satisfied by sibling file upload: {sibling_key}"))
             satisfied_by_sibling.add(fv.key)
+            continue
+        if sibling_key is not None and not _control_rendered(page, fv):
+            # The sibling upload did NOT attach (else the branch above took it)
+            # AND greenhouse does not render this paste-textarea at all: on the
+            # live anthropic seal posting the org is in FILE mode, so
+            # `resume_text`'s own locator resolves to ZERO nodes (read-only probe
+            # 2026-07-14). Driving it burns a full Playwright
+            # actionability timeout hunting a control that does not exist, then
+            # fail-softs anyway.
+            #
+            # This skip is deliberately NOT a justified one: the reason string
+            # matches no predicate in `kernel.resolve._completeness`, so a
+            # REQUIRED paste-textarea still books its gap and the run still forces
+            # NOT_COMPLETE. The guard buys back the timeout; it never buys the
+            # field an excuse. (The real finding in this state is the sibling
+            # upload's own failure, which books its own gap independently.)
+            extra_skips.append(
+                (fv.key, f"control not rendered (vendor is in file-upload mode) "
+                         f"and sibling {sibling_key} did not attach"))
             continue
         try:
             ok, actual = _fill_field(page, fv)
@@ -267,14 +453,15 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     # per-field fill loop achieved. A field satisfied by a sibling upload
     # (BUG 3) is excluded from `schema_required` -- the DOM genuinely never
     # renders it, so it must never be swept as a schema/DOM disagreement --
-    # and an uploaded field's OWN label is reconciled against the filename
-    # Greenhouse appends to it post-upload (`_reconcile_uploaded_labels`).
+    # and a REQUIRED upload that genuinely attached has its own widget legend
+    # folded back to its bare schema label (`_reconcile_uploaded_labels`, whose
+    # three-part bound is what keeps that fold from silencing a foreign gap).
     from engine.kernel.resolve import _completeness
 
     schema_required = {f.label for f in fieldmap.required_fields()
                        if f.key not in satisfied_by_sibling}
     dom_required = _reconcile_uploaded_labels(
-        base.sweep_required(page), uploads, fieldmap)
+        base.sweep_required(page), uploads, fieldmap, schema_required)
     mismatch = base.completeness_mismatch(schema_required, dom_required)
 
     filled = len(filled_keys)
@@ -294,39 +481,138 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
         url_unchanged=url_unchanged, screenshot="", ts=ts)
 
 
-def _reconcile_uploaded_labels(dom_required: set[str], uploads: list[dict],
-                               fieldmap: FieldMap) -> set[str]:
-    """Fold a successfully-uploaded file field's POST-FILL DOM-sweep label
-    back to its bare schema label before the completeness diff runs (BUG 3).
+# The tokens Greenhouse's OWN upload widget contributes to the fieldset legend
+# that the post-fill sweep reads. LIVE (read-only sweep 2026-07-14 of the same
+# gitlab posting the LIVE-DOM comments further down cite) the legend of a
+# REQUIRED Resume/CV mashes the control's label together with its chrome:
+#   "resume/cv attach attach enter manually enter manually accepted file types:
+#    pdf, doc, docx, txt, rtf"
+# `<label for="resume">` reads only "Attach" and `<label for="resume_text">` only
+# "Enter manually", so the schema's "Resume/CV" is never what arm 1 of the sweep
+# names: the LEGEND is what arm 2 reads, whole. A remainder built ONLY from these
+# tokens (plus the uploaded file's own name) is the upload widget talking about
+# ITSELF. Anything else is a DIFFERENT question and MUST keep its gap.
+_UPLOAD_LEGEND_TOKENS = frozenset({
+    "attach", "attached", "enter", "manually", "accepted", "file", "files",
+    "type", "types", "upload", "uploaded", "browse", "choose", "select",
+    "drop", "drag", "here", "or", "remove", "delete", "clear",
+    "pdf", "doc", "docx", "txt", "rtf", "odt", "pages",
+})
 
-    Once a resume/cover-letter FILE is attached, Greenhouse appends the
-    chosen filename to the control's own accessible label (observed live:
-    "Resume/CV" becomes "resume/cv cv-ats.pdf" post-upload), so
-    `base.sweep_required`'s POST-FILL scan reads a label the schema's
-    PRE-FILL label no longer matches -- a pure upload-confirmation artefact,
-    never a genuine schema/DOM disagreement. For every field this run
-    actually uploaded, any DOM label that equals or starts with (on a word
-    boundary) its normalized schema label is folded back to the bare label,
-    so the two sides compare equal again."""
+# The punctuation the legend carries on its own words ("types:", "pdf,").
+_LEGEND_PUNCT = ",:;.()[]"
+
+
+def _reconcile_uploaded_labels(dom_required: set[str], uploads: list[dict],
+                               fieldmap: FieldMap,
+                               schema_required: set[str]) -> set[str]:
+    """Fold an uploaded file field's OWN post-fill sweep label back to its bare
+    schema label before the completeness diff runs (BUG 3).
+
+    WHAT THE SWEEP ACTUALLY READS (read-only live probe 2026-07-14, the same
+    gitlab posting the LIVE-DOM comments below cite).
+    This supersedes the earlier account, which claimed Greenhouse "appends the
+    chosen filename to the control's label" post-upload: the current job-boards
+    React DOM does no such thing. The resume control's `<label>` reads "Attach",
+    its paste sibling's reads "Enter manually", and the schema's "Resume/CV"
+    survives only inside the upload fieldset's `<legend>` -- which arm 2 of
+    `base.sweep_required` reads WHOLE, mashing label and widget chrome into
+    `_UPLOAD_LEGEND_TOKENS`' example string above. The schema side says
+    "Resume/CV". Unfolded, the two sides never compare equal, and EVERY
+    required-resume posting books a phantom PAIR (a `dom_only` for the legend and
+    a `schema_only` for the label) against a control that uploaded perfectly.
+
+    THE INVARIANT: a dom label folds to `bare` ONLY when ALL THREE hold. (The
+    W5B-WORKABLE wave hit this same class in KEY space and bounded its fold the
+    same way; greenhouse diffs in LABEL space, which is why (c) is needed here
+    and not there.)
+
+    (a) PROVEN ATTACHMENT. `bare` is the label of a field in `uploads`, i.e. one
+        whose own input readback AND Greenhouse's rendered confirmation both
+        passed (`_fill_upload`). A required upload that FAILED to attach is
+        absent from `uploads`, so the fold stays inert and its gap still bites.
+    (b) SCHEMA-REQUIRED. `bare` is in `schema_required`. The fold exists solely to
+        make the two REQUIRED sets compare equal; folding toward a label the
+        schema does not require could only rewrite one gap into another.
+    (c) THE REMAINDER IS THE WIDGET TALKING ABOUT ITSELF. Past the bare label, the
+        dom label may carry ONLY `_UPLOAD_LEGEND_TOKENS` and/or the uploaded
+        FILE's own name. This is the ANTI-GAMING bound and it is not optional: the
+        earlier unbounded `startswith(bare + " ")` prefix fold SILENCED any
+        foreign required control whose label merely began with the same words.
+        PROVEN on the live gitlab DOM: with a required control the schema lacks
+        ("Resume/CV Summary (250 words)") present on the page, uploading a CV made
+        its gap VANISH (3 gaps -> 0). A fold that can erase the gap of a control it
+        has nothing to do with is a silencer, whatever else it gets right.
+
+    The fold REWRITES a label rather than adding one, so a label it declines to
+    fold keeps its own gap: this function can never INVENT a `required_unfilled`
+    entry, and (c) is what stops it from DESTROYING one."""
     labels_by_key = {f.key: f.label for f in fieldmap.fields}
-    bare_labels = {base._normalize_name(labels_by_key[u["key"]])
-                  for u in uploads if u.get("key") in labels_by_key}
-    bare_labels.discard("")
-    if not bare_labels:
+    schema_bare = {base._normalize_name(name) for name in schema_required}
+    folds: list[tuple[str, frozenset[str]]] = []
+    for upload in uploads:                                    # (a)
+        bare = base._normalize_name(labels_by_key.get(upload.get("key"), ""))
+        if not bare or bare not in schema_bare:               # (b)
+            continue
+        folds.append((bare, _filename_tokens(upload.get("path"))))
+    if not folds:
         return dom_required
-    reconciled: set[str] = set()
-    for dom_label in dom_required:
-        folded = dom_label
-        for bare in bare_labels:
-            if dom_label == bare or dom_label.startswith(bare + " "):
-                folded = bare
-                break
-        reconciled.add(folded)
-    return reconciled
+    return {_fold_label(dom_label, folds) for dom_label in dom_required}
+
+
+def _fold_label(dom_label: str, folds: list[tuple[str, frozenset[str]]]) -> str:
+    """`dom_label` folded to a bare upload label when it IS that upload widget's
+    own legend (bound (c) above); otherwise returned untouched, gap intact."""
+    for bare, filename_tokens in folds:
+        if dom_label == bare:
+            return bare
+        if not dom_label.startswith(bare + " "):
+            continue
+        remainder = _legend_tokens(dom_label[len(bare) + 1:])
+        if remainder and remainder <= (_UPLOAD_LEGEND_TOKENS | filename_tokens):
+            return bare
+    return dom_label
+
+
+def _legend_tokens(text: str) -> frozenset[str]:
+    """The label's words, stripped of the punctuation the legend hangs on them
+    ("types:", "pdf,"), so each compares against the vocabulary as a bare word."""
+    return frozenset(word for word in (raw.strip(_LEGEND_PUNCT)
+                                       for raw in text.split()) if word)
+
+
+def _filename_tokens(path) -> frozenset[str]:
+    """The uploaded file's own name as a widget could render it: the basename, its
+    stem, and that stem's pieces. Greenhouse's post-upload confirmation shows the
+    chosen filename, and a theme that DOES append it to the label (the behaviour
+    the old docstring claimed) must still reconcile."""
+    if not path:
+        return frozenset()
+    name = Path(str(path)).name.lower()
+    stem = Path(name).stem
+    tokens = {name, stem}
+    tokens.update(re.split(r"[-_.\s]+", stem))
+    return frozenset(token for token in tokens if token)
 
 
 # -- per-field driving: text/email/phone via type_human, react-select via -----
 # select_react_combobox, everything else via a native locator action ----------
+
+
+def _control_rendered(page, fv) -> bool:
+    """True unless the field's own locator resolves to ZERO nodes on the page.
+
+    Guards the `_TEXT_UPLOAD_SIBLINGS` paste-textarea, whose control greenhouse
+    does not render at all in file-upload mode (live: `resume_text` resolves to 0
+    on the anthropic seal posting). BIASED TOWARD DRIVING: any page/locator that
+    cannot be counted, and any exception on the way, reads as RENDERED, so this can
+    only ever remove a hunt for a control that provably is not there. It must
+    never become a reason to skip a control that might exist."""
+    try:
+        counter = getattr(base._locate(page, fv), "count", None)
+        return counter() > 0 if callable(counter) else True
+    except Exception:
+        return True
 
 
 def _is_react_combobox(fv) -> bool:
@@ -337,13 +623,178 @@ def _is_react_combobox(fv) -> bool:
     return fv.locator.role == "combobox"
 
 
+# `EDUCATION_TYPEAHEAD_TYPE` (imported from capture, the producer that mints it)
+# is the synthetic field type a Greenhouse education control (School / Degree /
+# Discipline) carries when exposed as an ASYNC react-select typeahead -- a
+# debounced REMOTE search, not a static-option select. It is distinct from the
+# schema-API vocabulary in `contracts._ROLE_FOR_TYPE` (those education selects
+# are NOT served by `questions=true`; the top-level `education` toggle drives
+# them, rendered client-side -- see `capture._education_typeahead_fields`). A
+# PLAIN education field -- a free-text `input_text` "which degree" question, or a
+# static `multi_value_single_select` -- never carries this type, so it stays on
+# its existing path (no regression).
+
+
+def _is_education_typeahead(fv) -> bool:
+    """True for an async education typeahead (School / Degree / Discipline),
+    keyed on the `education_typeahead` type -- the structural signal, mirroring
+    how `_is_react_combobox` keys on a captured structural attribute rather than
+    guessing from a label. This branch must be consulted BEFORE
+    `_is_react_combobox` in `_fill_field`: the widget renders as a react-select
+    combobox too (`locator.role == "combobox"`), so the role check alone would
+    otherwise route it to the static driver, whose type-then-immediate-Enter
+    commits an empty menu before the debounced remote search has returned (the
+    mis-fire the module docstring warns about)."""
+    return fv.type == EDUCATION_TYPEAHEAD_TYPE
+
+
+def _is_react_multiselect(page, fv) -> bool:
+    """True for a `multi_value_multi_select` whose LIVE control is a react-select
+    MULTI rather than a native checkbox group.
+
+    Both shapes capture identically (role "checkbox" via `capture._ROLE_OVERRIDES`,
+    a list value from `kernel.resolve._render_select`), and the schema cannot tell
+    them apart, so the DOM is the authority: a remix react-select renders a
+    per-field `react-select-<id>-live-region` node (the same anchor the single
+    combobox driver uses), a native checkbox group does not. Probing it here keeps
+    the existing option-by-option checkbox path intact for a genuine group while
+    routing the live nationality control (`question_65106872[]`) to the multi
+    driver. BIASED TOWARD THE CHECKBOX PATH: any page that cannot be probed reads
+    as NOT a react-select, so an unprobeable page keeps its prior behaviour."""
+    if fv.type != "multi_value_multi_select" or fv.locator.role != "checkbox":
+        return False
+    try:
+        control = _combobox_control(page, fv.key)
+        counter = getattr(control, "count", None)
+        return counter() > 0 if callable(counter) else False
+    except Exception:
+        return False
+
+
+def _locate_option(page, role: str, option: str):
+    """The ONE checkbox, among every option checkbox of a group, whose
+    accessible name is this specific OPTION's wording -- the same role+name
+    convention `base._locate` uses for a whole field, applied to one option of a
+    group instead of the group's own question. Mirrors `lever.fill._locate_
+    option`, the proven shape for the identical DOM problem.
+
+    The option's own label is the ONLY name that resolves for a greenhouse
+    checkbox group: the QUESTION's label resolves to ZERO checkboxes, while each
+    OPTION resolves 1-to-1 by its own label (live probe, re-served in
+    `test_fill_hands_off_a_checkbox_group_before_building_any_locator`'s
+    docstring). The option strings are never guessed here: `kernel.resolve.
+    _match_option` returns the capture-time option label verbatim out of
+    `Field.options` (recorded by `capture._fields_from_question` from the
+    schema's own `values`), so every name this builds is a name greenhouse's own
+    schema published."""
+    return page.get_by_role(role, name=option, exact=True)
+
+
+def _drive_one_control(key: str, kind, locator, value: bool, name: str):
+    """One `drive_control` call for one physical checkbox/radio control.
+
+    `settle=None`: `.check()`/`.uncheck()` are already actionability-aware
+    (wait for visible/stable/able-to-receive-events -- see
+    `control_toolkit._drive_toggle`), and there is no multi-step drive within a
+    single control to need a between-step settle -- that need is DATE-picker-
+    only, and greenhouse's own schema has never exposed a picker-only date
+    widget (see the module docstring's DEFERRED section)."""
+    return drive_control(ControlSpec(
+        key=key, kind=kind, locator=locator, value=value, name=name,
+        settle=None))
+
+
+def _drive_click_control(page, fv) -> tuple[bool, str]:
+    """Drive one checkbox/radio-shaped field -- a single control or a whole
+    GROUP -- through the shared kernel mechanism (`control_toolkit.drive_
+    control`) instead of the pre-W5.1c human hand-off, and fold the per-control
+    outcome(s) into ONE verdict for this field's key.
+
+    Dispatches on the resolved value's SHAPE, mirroring `lever.fill._drive_
+    control_field` (the proven shape for the identical group problem, W5.1c):
+
+      * a `bool` is ONE physical control (a single checkbox, e.g. a certify
+        tick): located by the FIELD's own locator, `base._locate`, because the
+        field IS the control and its own label resolves;
+      * a `str` is one chosen option of a group: located by that OPTION's name;
+      * a `list` is a checkbox GROUP's selected options (`kernel.resolve.
+        _render_select` builds exactly this for a `multi_value_multi_select`,
+        one matched capture-time option label per element): EVERY option is
+        located by its OWN name and driven independently, because the group's
+        own QUESTION label resolves to no checkbox at all.
+
+    Returns `(confirmed, reason)`; `reason` is only meaningful when `confirmed`
+    is False (mirrors `_fill_field`'s own `(landed, actual)` return-tuple
+    convention). The field is confirmed ONLY when EVERY control it drove
+    confirmed: a partially-ticked group is a GAP, never a fill, and its reason
+    names each option that did not take. An option that cannot be located or
+    does not confirm is never guessed past -- it books its own named reason
+    through the same gate.
+
+    A `multi_value_multi_select` whose LIVE control is a react-select MULTI (not a
+    native checkbox group) is routed to `select_react_multiselect` instead: the
+    two share the same capture shape (checkbox role, list value), so the DOM
+    itself is probed (`_is_react_multiselect`) rather than guessed at capture
+    time. Live greenhouse `question_65106872[]` (nationality) is this shape.
+
+    `FillSafetyError` (submit-denylist name match) is never caught here: it
+    propagates and aborts the fill, exactly as it does from every other drive
+    path in this module."""
+    if _is_react_multiselect(page, fv):
+        options = fv.value if isinstance(fv.value, list) else [fv.value]
+        landed = select_react_multiselect(page, fv.key, [str(o) for o in options])
+        return landed, ("" if landed else
+                        "react-select multi readback did not confirm every value")
+    kind = _ROLE_TO_CONTROL_KIND.get(fv.locator.role)
+    if kind is None:
+        return False, (f"click-hazard field carries unexpected role "
+                       f"{fv.locator.role!r}, no drive path for it")
+    role = fv.locator.role
+    value = fv.value
+    if isinstance(value, bool):
+        outcomes = [_drive_one_control(fv.key, kind, base._locate(page, fv),
+                                       value, fv.locator.name or fv.label)]
+    elif isinstance(value, str):
+        outcomes = [_drive_one_control(fv.key, kind,
+                                       _locate_option(page, role, value),
+                                       True, value)]
+    elif isinstance(value, list):
+        outcomes = [_drive_one_control(fv.key, kind,
+                                       _locate_option(page, role, option),
+                                       True, option)
+                    for option in value]
+    else:
+        return False, (f"control value must be bool, str or list, got "
+                       f"{type(value).__name__}")
+
+    # An EMPTY list drove nothing, so it confirmed nothing: `all(())` is True and
+    # would count a group as filled without a single tick.
+    if outcomes and all(outcome.confirmed for outcome in outcomes):
+        return True, ""
+    reasons = "; ".join(outcome.reason for outcome in outcomes if outcome.reason)
+    return False, reasons or "control did not confirm (readback mismatch)"
+
+
 def _fill_field(page, fv) -> tuple[bool, Any]:
     """Drive one non-upload field; returns (landed, actual-or-None).
 
     `actual` is only meaningful on a text/native-locator path (it is what
-    `base._readback` read back); the react-select path reports its own
-    landed bool with no separate `actual` value to surface (the combobox
-    driver's readback is internal to `select_react_combobox`)."""
+    `base._readback` read back); the react-select and education-typeahead
+    paths report their own landed bool with no separate `actual` value to
+    surface (their readback is internal to the driver)."""
+    if _is_education_typeahead(fv):
+        # BEFORE the react-select check: an education typeahead is a combobox
+        # too, so `_is_react_combobox` would otherwise grab it for the static
+        # driver. `select_education_typeahead` is a module-local name (unlike
+        # `base.select_react_combobox`): the `base` re-export shim would need a
+        # new entry in `base._GREENHOUSE_WIDGET_NAMES`, which is out of this
+        # change's scope, so it is called directly here and patched on this
+        # module in tests. The driver anchors on the LIVE react-select id
+        # (`school--0` etc.), NOT the capture key (`education_school`); the two
+        # differ, so `_EDUCATION_DOM_FIELD_ID` maps between them here.
+        field_id = _EDUCATION_DOM_FIELD_ID.get(fv.key, fv.key)
+        landed = select_education_typeahead(page, field_id, str(fv.value))
+        return landed, None
     if _is_react_combobox(fv):
         landed = base.select_react_combobox(page, fv.key, str(fv.value))
         return landed, None
@@ -370,6 +821,14 @@ def _apply_native(locator, fv) -> None:
         base.type_human(locator, str(value))
 
 
+# `multi_value_multi_select` is NOT a native `<select multiple>` on the live
+# greenhouse DOM (it is a group of native checkboxes: see `capture._ROLE_OVERRIDES`),
+# and since it now captures with a checkbox role it is driven OPTION-BY-OPTION by
+# `_drive_click_control` in `fill()` before `_apply_native` is ever reached, so this
+# `select_option` path no longer runs for it. The set is kept because the action is
+# still the right one for a genuine native select (a resolved `list` value takes the
+# branch above it either way); what must not come back is a locator built from a role
+# the page does not carry.
 _NATIVE_SELECT_TYPES = frozenset({"multi_value_multi_select"})
 
 
@@ -540,12 +999,12 @@ def _drop_readback_mismatch(readback_mismatches: list[dict], key: str) -> None:
                               if m.get("key") != key]
 
 
-# -- DEFERRED (see module docstring): intl-tel-input + async school typeahead --
-# Both TODOs below are documentation-only markers (no dead branch is left in
-# the fill loop): the generic text/select path already handles these fields
-# today, just not with the widget-specific driving a live-DOM probe would
-# earn. `_TODO_PHONE_COUNTRY_WIDGET` / `_TODO_SCHOOL_TYPEAHEAD` name the
-# exact seam a later change lands in.
+# -- DEFERRED (see module docstring): intl-tel-input phone-country widget -------
+# `_TODO_PHONE_COUNTRY_WIDGET` is a documentation-only marker (no dead branch is
+# left in the fill loop): the generic text/select path already handles the phone
+# field today, just not with the widget-specific driving a live-DOM probe would
+# earn. (The async education typeahead this block once also deferred is now BUILT
+# -- see `_is_education_typeahead` / `select_education_typeahead`.)
 
 _TODO_PHONE_COUNTRY_WIDGET = (
     "A Greenhouse phone question rendered via intl-tel-input needs its "
@@ -554,15 +1013,6 @@ _TODO_PHONE_COUNTRY_WIDGET = (
     "live-DOM probe of the widget's markup. Seam: _fill_field's non-"
     "combobox branch, keyed on a phone norm_type once the widget's real "
     "selector is captured.")
-
-_TODO_SCHOOL_TYPEAHEAD = (
-    "A Greenhouse education question exposed as an async school/degree "
-    "typeahead (debounced remote search, not a plain select) is not "
-    "specially handled; it falls through to _apply_native's generic "
-    "type_human path, which will not wait for or select a suggestion. "
-    "Seam: _fill_field, a new branch keyed on the typeahead's structural "
-    "signal once captured live (mirrors the react-select branch's role-"
-    "based detection).")
 
 
 # ============================================================================
@@ -588,10 +1038,23 @@ _TODO_SCHOOL_TYPEAHEAD = (
 # `-live-region`); the control itself is `div.select__control` (a build-hashed
 # class suffix, e.g. `remix-css-13cymwt-control`, so never matched by a full
 # class-string equality), containing `div.select__value-container` >
-# `div.select__placeholder` (the confirmed `-placeholder` id) and
-# `div.select__input-container` > the control's own `<input>`. The driver below
-# anchors on the CONFIRMED placeholder id (via Playwright's `:has()` CSS
-# extension) to reach the control.
+# `div.select__placeholder` and `div.select__input-container` > the control's
+# own `<input>`. The driver below anchors on the `-live-region` id (via
+# Playwright's `:has()` CSS extension) to reach the control.
+#
+# DO NOT RE-ANCHOR THIS ON `-placeholder` (read-only live probe of the anthropic
+# seal posting, 2026-07-14; earlier revisions of THIS comment told you to, and
+# they were wrong). Two independent reasons, either one fatal:
+#   1. The placeholder node sits BELOW the control, not above it. Live ancestry:
+#      `div.select__placeholder < div.select__value-container < div.select__control`.
+#      So `div:has(> [id="...-placeholder"]) div.select__control` scopes to the
+#      VALUE-CONTAINER and then finds no `.select__control` DESCENDANT of it: it
+#      resolves to ZERO controls, on all 6 live dropdowns, even BEFORE anything is
+#      picked. The `-live-region` node IS a direct child of `div.select-shell`,
+#      which does contain the control, so it resolves 1-to-1 on all 6.
+#   2. The placeholder also UNMOUNTS the moment a value is picked, so even a
+#      correctly-shaped placeholder scope would stop matching post-commit.
+# Pinned by test_greenhouse_combobox_control_selector_anchors_on_live_region.
 #
 # LIVE-DOM FIX #2 (2026-07-06, same acceptance run, re-run after fix #1): even
 # with the control correctly reached, clicking the rendered `div.select__option`
@@ -626,7 +1089,9 @@ def select_react_combobox(page, field_id: str, option_text: str, *,
 
     Sequence (fresh locators at every step; react-select recycles nodes):
       1. Click the field's control (scoped via `_combobox_control_selector`,
-         anchored on the confirmed `-placeholder` id) to open the menu.
+         anchored on the `-live-region` id -- NEVER `-placeholder`, which
+         resolves to zero controls live; see the block comment above) to open
+         the menu.
       2. `type_human` the option text into the control's own input to filter
          the menu (never fill()) -- also the long-country-list path.
       3. Press `Enter` on that same input: react-select commits the
@@ -660,6 +1125,74 @@ def select_react_combobox(page, field_id: str, option_text: str, *,
     # Dismiss the still-open menu (a no-op after an Enter-commit) without a blur.
     _keyboard_press(page, combo_input, "Escape")
     return landed
+
+
+def select_react_multiselect(page, field_id: str, options: list[str], *,
+                             min_delay: float = 60, max_delay: float = 180,
+                             poll_ms: tuple[int, ...] = (200, 500)) -> bool:
+    """Drive one react-select MULTI: pick EVERY option, then confirm all landed.
+
+    Reuses the exact single-combobox primitives (live-region-anchored control,
+    `type_human` filter, focus-following keyboard Enter -- NOT a third pattern);
+    the only difference is the readback, which counts `.select__multi-value`
+    chips instead of the single `.select__single-value`. Per option, in order:
+    open the control, type-to-filter, commit the highlighted first-filtered row
+    with Enter (react-select appends it as a chip and clears the filter, so the
+    next option starts clean). After all options: poll the rendered chips and
+    return True ONLY when EVERY intended value is present -- a partial multi is a
+    gap, never a fill (mirrors `_drive_click_control`'s all-or-nothing group
+    verdict). Dismiss with Escape (never blur). Live greenhouse
+    `question_65106872[]` (nationality) resolves `['Italian']` through here."""
+    for option_text in options:
+        control = _combobox_control(page, field_id)
+        control.click()
+        combo_input = _combobox_input(page, field_id)
+        type_human(combo_input, option_text,
+                   min_delay=min_delay, max_delay=max_delay)
+        _keyboard_press(page, combo_input, "Enter")
+    landed = _poll_multi_values(page, field_id, options, poll_ms)
+    _keyboard_press(page, _combobox_input(page, field_id), "Escape")
+    return landed
+
+
+def _poll_multi_values(page, field_id: str, options: list[str],
+                       poll_ms: tuple[int, ...]) -> bool:
+    """Poll the rendered multi-value chips at the given cumulative offsets; True as
+    soon as EVERY intended option's text appears among the shown chips. An empty
+    option list confirms nothing (never a vacuous pass)."""
+    wanted = [_normalize_name(o) for o in options]
+    wanted = [w for w in wanted if w]
+    if not wanted:
+        return False
+    elapsed = 0
+    for mark in poll_ms:
+        _wait_timeout(page, mark - elapsed)
+        elapsed = mark
+        shown = [_normalize_name(text) for text in _multi_value_texts(page, field_id)]
+        if all(any(want in chip for chip in shown) for want in wanted):
+            return True
+    return False
+
+
+def _multi_value_texts(page, field_id: str) -> list[str]:
+    """The texts of the field's rendered `.select__multi-value__label` chips (one
+    per committed option), scoped to its own `-live-region`-anchored control.
+    Degrades to an empty list on any missing method / query failure -- never a
+    hang or a raise -- so the readback is biased toward "not landed yet"."""
+    locator_fn = getattr(page, "locator", None)
+    if locator_fn is None:
+        return []
+    try:
+        chips = _combobox_control(page, field_id).locator(
+            ".select__multi-value__label")
+        counter = getattr(chips, "count", None)
+        count = counter() if callable(counter) else 0
+        texts: list[str] = []
+        for i in range(count):
+            texts.append(_locator_text(chips.nth(i)))
+        return texts
+    except Exception:
+        return []
 
 
 def _keyboard_press(page, locator, key: str) -> None:
@@ -710,11 +1243,15 @@ def _poll_single_value(page, field_id: str, option_text: str,
 
 def _single_value_text(page, field_id: str) -> str:
     """The field's currently-shown `.select__single-value` text, scoped to
-    its own control. A control that no longer matches the `-placeholder`-
-    anchored scope (e.g. the placeholder unmounts once a value is selected --
-    UNVERIFIED live, flagged for the owner's live iteration) degrades to a
-    fast empty read via `.count()` rather than hanging on Playwright's
-    default actionability wait for a selector that will never resolve."""
+    its own control.
+
+    The scope is `_combobox_control_selector`'s `-live-region` anchor, which
+    resolves in BOTH the empty and the selected state (live-verified 2026-07-14:
+    1 control on each of the 6 anthropic dropdowns), so the post-commit readback
+    genuinely reads the committed value rather than an empty string. Should a
+    control nonetheless fail to match, this degrades to a fast empty read via
+    `.count()` rather than hanging on Playwright's default actionability wait for
+    a selector that will never resolve."""
     locator_fn = getattr(page, "locator", None)
     if locator_fn is None:
         return ""
@@ -737,6 +1274,135 @@ def _wait_timeout(page, ms: int) -> None:
         waiter(ms)
     else:
         time.sleep(ms / 1000.0)
+
+
+# -- async education typeahead driver (School / Degree / Discipline) ------------
+# Greenhouse renders the education section (driven by the posting's top-level
+# `education` toggle, NOT by the `questions=true` schema) as react-select
+# selects that search a REMOTE database with a DEBOUNCED query: the option list
+# is empty until the keystrokes settle and the fetch returns. So the static
+# `select_react_combobox` -- which types then presses Enter immediately -- would
+# commit an empty menu and the value would never land (the live 2026-07-18
+# canonical run left School/Degree/Discipline BLANK though the SSOT carried the
+# data). This driver is that driver's async-aware sibling: it reuses the SAME
+# proven primitives (live-region-anchored control, focus-following keyboard
+# Enter, `-live-region` `.select__single-value` readback -- NOT a third
+# react-select pattern) and adds exactly one step -- a BOUNDED wait for the
+# debounced option list to render before it commits.
+#
+# The debounce timing itself is UNPROVABLE offline (a fixture cannot reproduce a
+# real remote search's latency); this seam's SHAPE is what the offline suite
+# pins, and its live behaviour is a TB5-R2 toto-gate confirmation. The menu /
+# option selectors below are best-effort and UNVERIFIED against every Greenhouse
+# theme -- the same caveat `_single_value_text` / `poll_upload_confirmed` carry.
+
+# The bounded settle schedule (cumulative ms, mirroring `_poll_single_value`'s
+# offsets): a debounced remote search typically returns within a few hundred ms
+# of the last keystroke, so poll early and often, capped at ~1.8s total -- long
+# enough for a slow round-trip, bounded so a query that matches NOTHING can
+# never hang the fill (it falls through to the readback, which reports the empty
+# result honestly).
+_EDUCATION_SETTLE_MS: tuple[int, ...] = (200, 500, 1000, 1800)
+
+
+def select_education_typeahead(page, field_id: str, option_text: str, *,
+                               min_delay: float = 60, max_delay: float = 180,
+                               settle_ms: tuple[int, ...] = _EDUCATION_SETTLE_MS,
+                               poll_ms: tuple[int, ...] = (200, 500)) -> bool:
+    """Drive one Greenhouse async education typeahead: open, filter, WAIT for the
+    debounced remote options, commit, and confirm.
+
+    Identical to `select_react_combobox` except for step 3 (the bounded settle):
+
+      1. Click the field's control (live-region-anchored `_combobox_control_
+         selector`, NEVER `-placeholder`; see that function's block comment) to
+         open the menu.
+      2. `type_human` the query into the control's own input (never fill()) to
+         drive the debounced remote search.
+      3. `_await_typeahead_options`: BOUNDED wait for that search to render at
+         least one option, so the commit lands on a real (highlighted) row
+         rather than an empty/stale menu. Returns as soon as options appear;
+         falls through when the bound is exhausted, so a query matching nothing
+         still proceeds to an honest readback rather than hanging.
+      4. Commit via a FOCUS-FOLLOWING keyboard Enter (`_keyboard_press`), exactly
+         as the static driver does: react-select re-renders (detaches) the filter
+         input per keystroke, so the input's own `.press` would hang on a stale
+         node; the live input still holds focus, so the page keyboard commits the
+         highlighted first-filtered option reliably.
+      5. `_poll_single_value` readback via the persistent `-live-region`-anchored
+         `.select__single-value`: True ONLY when the committed value CONTAINS the
+         intended SSOT text (normalized). A value that did not take -- an empty
+         readback, OR a committed option that does not correspond to the SSOT
+         value (a foreign row react-select happened to highlight) -- returns
+         False, so `fill()` records a readback mismatch / honest gap and NEVER
+         counts it filled. Never guesses an option.
+      6. Dismiss with Escape (never blur).
+
+    Partial data across the three education fields is handled by the per-field
+    fill loop, not here: each of School / Degree / Discipline is a separate
+    FieldValue driven independently, so a school present in the SSOT fills while
+    a discipline the SSOT lacks is skipped-by-name upstream (the resolver) or
+    booked as a readback gap here -- what one field achieves never speaks for
+    another.
+
+    Returns True iff the readback confirms the intended value landed.
+    """
+    control = _combobox_control(page, field_id)
+    control.click()
+    combo_input = _combobox_input(page, field_id)
+    type_human(combo_input, option_text, min_delay=min_delay, max_delay=max_delay)
+    _await_typeahead_options(page, field_id, settle_ms)
+    _keyboard_press(page, combo_input, "Enter")
+    landed = _poll_single_value(page, field_id, option_text, poll_ms)
+    _keyboard_press(page, combo_input, "Escape")
+    return landed
+
+
+def _await_typeahead_options(page, field_id: str,
+                             settle_ms: tuple[int, ...]) -> bool:
+    """BOUNDED wait for a debounced typeahead's remote search to render at least
+    one option into the field's own menu.
+
+    Polls `_menu_option_count` at the given cumulative offsets (the same
+    bounded-offset shape as `_poll_single_value`): returns True the moment an
+    option is present, and False once the WHOLE bound is exhausted without one --
+    never an unbounded poll, so a query that matches nothing proceeds to the
+    readback (which reports the empty result honestly) rather than hanging.
+    Never raises: any DOM-query failure reads as "no options yet" (the
+    not-committed-yet bias, mirroring the readback's never-attached philosophy),
+    so the wait can only ever end early on a POSITIVE render, never manufacture
+    one."""
+    elapsed = 0
+    for mark in settle_ms:
+        _wait_timeout(page, mark - elapsed)
+        elapsed = mark
+        if _menu_option_count(page, field_id) > 0:
+            return True
+    return False
+
+
+def _menu_option_selector(field_id: str) -> str:
+    """CSS for the field's OPEN react-select menu options, scoped by the
+    per-field `-listbox` id so it counts only THIS field's options, never a
+    sibling education select's. Best-effort / live-unverified (see the block
+    comment above)."""
+    return f'[id="react-select-{field_id}-listbox"] div.select__option'
+
+
+def _menu_option_count(page, field_id: str) -> int:
+    """The number of rendered option rows in the field's react-select menu (0
+    while the debounced search is still in flight). Degrades to 0 on any missing
+    method / query failure -- never a hang or a raise -- so the settle wait is
+    biased toward "not ready yet"."""
+    locator_fn = getattr(page, "locator", None)
+    if locator_fn is None:
+        return 0
+    try:
+        options = locator_fn(_menu_option_selector(field_id))
+        counter = getattr(options, "count", None)
+        return counter() if callable(counter) else 0
+    except Exception:
+        return 0
 
 
 # -- upload rendered-confirmation poll (Greenhouse resume-upload false ---------

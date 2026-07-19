@@ -11,8 +11,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${JOBHUNT_PYTHON:-$HOME/automations/.venv/bin/python}"
 
+# --rescore is ON for the daily run (W5.1e): the discard channels are applied to
+# NET-NEW postings only, so without it the gates never reach the rows ALREADY in
+# the owner's digest and a posting he cannot legally take, discovered yesterday,
+# keeps being served every morning. It only touches rows still on the board today,
+# re-scoring each from the FRESH posting with its full JD text, and it never
+# deletes a row: one the gates now discard is demoted out of the visible list.
 exec "$PY" -m engine.run \
   --config "${JOBHUNT_CONFIG:-$HERE/instances/jobhunt/config.yaml}" \
   --ssot "${JOBHUNT_SSOT:-$HOME/automations/ssot/job.yaml}" \
   --store "${JOBHUNT_STORE:-$HOME/automations/jobhunt/store.db}" \
+  --rescore \
   "$@"

@@ -212,6 +212,34 @@ conduct.
 
 Consequence: **essays automated**.
 
+### Canonical
+
+| Axis | Verdict |
+|---|---|
+| AI-generated content | **FORBIDS** |
+
+Canonical's board is on Greenhouse. A live posting (canonical/4124053, accessed 2026-07-18) carries
+a REQUIRED attestation select whose exact text reads: "During this application process I agree to
+use only my own words. I understand that plagiarism, the use of AI or other generated content will
+disqualify my application." (options Yes/No). The attestation itself states that AI-generated
+content disqualifies the application, a FORBIDS verdict on the AI-generated-content axis.
+
+This posting is also the case that establishes the attestation-polarity class: an AI-policy
+attestation's Yes/No phrasing is not fixed across employers. This one is a "commit to NOT using AI"
+framing (Yes = compliant); another employer's attestation could just as easily ask "did you use AI?"
+with the opposite sense attached to the same option label. One seeded scalar answer cannot honestly
+cover every polarity, which is why the generator's `_route_by_tos` (`bin/generate_answers.py`) fails
+closed on every AI-policy attestation: it is always routed to `tos_forbidden` for human handoff, and
+it is never answered from a seeded scalar, even one that is present and would exact-match an option.
+A detected AI-forbid attestation additionally forces `forbid-essays` for that posting, so no
+free-text question on that application is sent to the model either.
+
+Consequence: **essays forbidden; attestation is human handoff**. Every free-text question on a
+Canonical application is listed `tos_forbidden`, and the AI-policy attestation itself is never
+auto-answered regardless of `--tos-mode`.
+
+- https://job-boards.greenhouse.io/canonical/jobs/4124053 (attestation text captured 2026-07-18)
+
 ## Summary
 
 | Target | Type | Automation | AI content | Consequence |
@@ -223,11 +251,13 @@ Consequence: **essays automated**.
 | Anthropic | Employer | not addressed | REQUIRES-DISCLOSURE | essays automated with disclosure text |
 | ElevenLabs | Employer | not addressed | SILENT/ALLOWS | essays automated |
 | Agicap | Employer | not addressed | SILENT/ALLOWS | essays automated |
+| Canonical | Employer | not addressed | FORBIDS | essays forbidden; attestation is human handoff |
 
-No target FORBIDS AI-generated application content outright, so no essay field is
-currently listed `tos_forbidden` on ToS grounds alone; the `forbid-essays` mode
-exists for the first employer that does. Anthropic is the one target whose
-guidance a fully model-authored answer would breach, and the disclose mode covers
-it. A new employer with no researched policy inherits its platform's verdict, and
-an employer whose policy cannot be established is recorded UNCLEAR here with
-"owner escalation pending" rather than assumed permissive.
+Canonical is the first employer that FORBIDS AI-generated application content
+outright, so the `forbid-essays` mode this document anticipated now has a live
+target: every essay field on a Canonical application is listed `tos_forbidden` on
+ToS grounds. Anthropic remains the one target whose guidance a fully
+model-authored answer would breach without disclosure, and the disclose mode
+covers it. A new employer with no researched policy inherits its platform's
+verdict, and an employer whose policy cannot be established is recorded UNCLEAR
+here with "owner escalation pending" rather than assumed permissive.

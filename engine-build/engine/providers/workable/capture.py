@@ -51,8 +51,13 @@ from engine.kernel.contracts import (
 
 # Workable native `type` -> ARIA role for the a11y locator hint. A `boolean`
 # renders as a yes/no radio fieldset (`fieldset[data-ui=QA_n]`), so its role is
-# "radio" -- which routes it to the fill()'s checkbox/radio HUMAN HAND-OFF, the
-# same Turnstile/hCaptcha defence Lever uses. An UNRECOGNISED type falls back
+# "radio". Since W5.1c that role is DRIVEN, not handed off: `fill()` dispatches
+# a `boolean` through the shared kernel mechanism, locating the ONE Yes/No
+# option matching the resolved intent (`_boolean_control_spec`), because the
+# generic field-level locator resolves BOTH options at once. This map is the
+# only site that assigns "radio" and only `boolean` assigns it, so a radio is
+# always type-dispatched and never reaches the hand-off check. An UNRECOGNISED
+# type falls back
 # to "combobox" -- a HAND-OFF role, NOT a text box -- because never-send bias
 # means an unrecognised control is safer handed to a human than blindly typed
 # as free text; this DIVERGES from `_role_for_type`'s textbox fallback, whose

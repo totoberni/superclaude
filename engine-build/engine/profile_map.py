@@ -21,6 +21,10 @@ Mapping (W4 spec 3.2):
 - excludes     <- preferences.excludes (as-is)
 - capabilities <- only real, affirmative work-auth facts the SSOT states (a
                   region marked "no" is NOT asserted; truthiness bug fixed)
+- sponsorship_required_by_region <- the owner's per-region right-to-work status,
+                  read from the SSOT and never re-derived (W5.1e; see
+                  `sponsorship_by_region` below). This is the fact the WORK-AUTH
+                  GATE runs on.
 """
 
 from __future__ import annotations
@@ -45,6 +49,76 @@ _REGION_CAPABILITIES = (("eu", "work_authorization_eu"),
                         ("uk", "work_authorization_uk"),
                         ("usa", "work_authorization_us"),
                         ("us", "work_authorization_us"))
+
+
+# W5.1e WORK-AUTH GATE. The owner's per-region right-to-work status is OWNER DATA:
+# it lives in the SSOT and is never hardcoded here (same firewall the commute
+# policy obeys). These are the region keys the SSOT states; a region it does not
+# state is simply absent from the map, and the gate decides what to do about that.
+_SPONSORSHIP_REGIONS = ("eu", "ch", "uk", "us", "ca", "other")
+# Leading words that settle a boolean-ish SSOT value. Longest-prefix wins is not
+# needed: no word here is a prefix of another with the opposite meaning.
+_SPONSORSHIP_WORDS = (("true", True), ("yes", True), ("required", True),
+                      ("false", False), ("no", False), ("none", False))
+
+
+def sponsorship_by_region(ssot: SSOT) -> dict[str, bool]:
+    """`region -> does the OWNER need visa sponsorship there` (True = needs it).
+
+    Read from the SSOT, NEVER re-derived. Two authoritative sources, cross-checked:
+
+    1. `work_authorization.<region>.sponsorship_required` -- the STRUCTURED fact
+       (a boolean, or a "true"/"false" string). Preferred: no prose to parse.
+    2. `canned_answers.sponsorship_answer_by_region.<region>` -- the owner's own
+       answer, whose leading yes/no carries the same fact. This is the field the
+       FORM FILLER already types into ATS sponsorship boxes (kernel/resolve.py),
+       so the scorer and the filler now decide from the same statement.
+
+    W5.1e RATIFICATION: the task-spec named source 2 as THE authoritative fact.
+    Source 1 is read FIRST because the live SSOT states it as an explicit
+    `sponsorship_required` boolean, which needs no natural-language reading at
+    all; source 2 remains the fallback and the cross-check. Both are the owner's
+    own data, so this honours the rule that matters (read the owner's answer,
+    never infer it from `work_authorization` prose via `_is_affirmative`, which
+    is what silently produced an EMPTY capabilities list). When the two sources
+    DISAGREE the conservative reading wins (assume sponsorship IS needed): a
+    false "needs sponsorship" costs one lead, a false "free to work" puts a job
+    the owner cannot legally take at the top of his digest.
+
+    A region the SSOT does not state is ABSENT from the map (never guessed). An
+    SSOT with no work-auth facts at all yields {}, which leaves the gate INACTIVE
+    (fail-open), exactly as a missing `location_policy` leaves the commute gate
+    inactive.
+    """
+    structured = ssot.get("work_authorization")
+    answers = ssot.get("canned_answers.sponsorship_answer_by_region")
+    out: dict[str, bool] = {}
+    for region in _SPONSORSHIP_REGIONS:
+        primary = None
+        if isinstance(structured, dict) and isinstance(structured.get(region), dict):
+            primary = _sponsorship_flag(
+                structured[region].get("sponsorship_required"))
+        fallback = None
+        if isinstance(answers, dict):
+            fallback = _sponsorship_flag(answers.get(region))
+        stated = [flag for flag in (primary, fallback) if flag is not None]
+        if stated:
+            out[region] = any(stated)  # conservative on disagreement
+    return out
+
+
+def _sponsorship_flag(value) -> bool | None:
+    """Boolean-ish SSOT value -> True/False, or None when it states nothing."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        low = value.strip().lower()
+        for word, flag in _SPONSORSHIP_WORDS:
+            if low.startswith(word):
+                return flag
+    return None
 
 
 def profile_from_real_ssot(ssot: SSOT) -> dict:
@@ -89,6 +163,10 @@ def profile_from_real_ssot(ssot: SSOT) -> dict:
     capabilities = _capabilities(ssot)
     if capabilities:
         profile["capabilities"] = capabilities
+
+    sponsorship = sponsorship_by_region(ssot)
+    if sponsorship:
+        profile["sponsorship_required_by_region"] = sponsorship
 
     return profile
 

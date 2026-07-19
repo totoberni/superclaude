@@ -2,11 +2,50 @@
 <html lang="en">
 <head><title>Apply - Staff Reliability Engineer - FauxCorp</title></head>
 <body>
-  <!-- A crafted, representative server-rendered Lever apply DOM (source
-       "lever_dom"). Lever exposes NO custom-question schema over its postings
+  <!-- A representative server-rendered Lever apply DOM (source "lever_dom"),
+       CORRECTED against the live jobs.lever.co markup (agicap, fetched
+       2026-07-13). Lever exposes NO custom-question schema over its postings
        API, so capture_lever/_parse_lever derives the field map straight from
        THIS rendered markup; the same markup is what the provider's fill() drives.
        Everything here is FAKE (no owner PII).
+
+       ROUND-5 CORRECTION, and the honest limit of this fixture. Every custom
+       question card below now NESTS its control in an `.application-field` div,
+       which is what Lever actually serves: re-derived 2026-07-13 over FIVE live
+       apply pages (agicap 11/11 containers, gopuff 29/29, swile 20/20, nium 12/12,
+       binance 17/17), EVERY `.application-field` on EVERY page is nested inside an
+       `.application-question` card. The cards here previously held their control
+       directly, which made the base pass blind to it, which meant no test ever
+       reproduced the base/custom key collision that mis-captured the live agicap
+       radio group as a textbox for three rounds.
+
+       What is NOT the live shape, stated plainly rather than implied: the six
+       standalone `li.application-field` base blocks above (name/email/phone/urls/
+       resume). The live page card-wraps those too, so on a real Lever posting
+       `_lever_base_fields` emits NOTHING. They are kept because they are this
+       fixture's only exercise of the base pass, which remains live code, and
+       because card-wrapping them would add no discriminating power (a card-owned
+       base field's label is recovered from `_LEVER_BASE_LABELS` either way). They
+       are a legacy/defensive template shape, NOT a claim about jobs.lever.co.
+
+       THREE live-markup facts this fixture reproduces, each load-bearing for
+       the kernel's DOM sweep (they were wrong before, and the wrong shape was the
+       only reason the sweep's asterisk arm emitted anything in these tests):
+         1. `.application-label` is a DIV, not a <label> element. The sweep's arm 2
+            selector is `label, legend`, so a div label is invisible to it.
+         2. the required marker is the HEAVY ASTERISK &#10033; (U+2731), not an
+            ASCII "*". Arm 2 filters on the ASCII "*", so it never fires on it.
+            Capture reads requiredness from the span's `required` CLASS instead,
+            so the field map is unaffected by which character is drawn.
+         => arm 2 emits NOTHING on a real Lever page. The name attribute (arm 1)
+            is the only channel through which the sweep names a required control.
+         3. the resume <input type=file> carries NO `required` attribute and is
+            CSS-hidden (Lever wires its own widget over it). So the REQUIRED
+            resume field has NO sweep token on EITHER arm, even though capture
+            marks it required (correctly: the container carries the marker span,
+            and Lever always requires a CV). A required field the sweep cannot
+            see must not become a phantom gap once it is filled, and must still
+            block when it is not.
 
        It exercises every shape the Lever provider must handle:
          - base text fields (name, email, phone) + urls[] link fields,
@@ -20,28 +59,30 @@
     <form class="application-form" method="POST" enctype="multipart/form-data">
       <ul class="application-fields">
         <li class="application-field">
-          <label class="application-label">Full name<span class="required">*</span></label>
+          <div class="application-label">Full name<span class="required">&#10033;</span></div>
           <input type="text" name="name" required>
         </li>
         <li class="application-field">
-          <label class="application-label">Email<span class="required">*</span></label>
+          <div class="application-label">Email<span class="required">&#10033;</span></div>
           <input type="text" name="email" required>
         </li>
         <li class="application-field">
-          <label class="application-label">Phone</label>
+          <div class="application-label">Phone</div>
           <input type="text" name="phone">
         </li>
         <li class="application-field">
-          <label class="application-label">LinkedIn URL</label>
+          <div class="application-label">LinkedIn URL</div>
           <input type="text" name="urls[LinkedIn]">
         </li>
         <li class="application-field">
-          <label class="application-label">GitHub URL</label>
+          <div class="application-label">GitHub URL</div>
           <input type="text" name="urls[GitHub]">
         </li>
         <li class="application-field application-field-resume">
-          <label class="application-label">Resume / CV<span class="required">*</span></label>
-          <input type="file" name="resume" required>
+          <div class="application-label">Resume / CV<span class="required">&#10033;</span></div>
+          <!-- live shape: no `required` attribute, and CSS-hidden behind Lever's
+               own upload widget. Required-ness comes from the marker span above. -->
+          <input type="file" name="resume" class="invisible-resume-upload" style="display:none">
         </li>
       </ul>
 
@@ -49,16 +90,30 @@
         <!-- Server-rendered NATIVE select: driven by select_option, never the
              react-select click/filter/pick dance. Its locator role is still
              "combobox" (fieldmap _role_for_type), so the provider must NOT infer
-             react-select from the role alone. -->
+             react-select from the role alone.
+
+             NESTED `.application-field` (round-5 correction, live shape): the
+             card's control sits in its OWN `.application-field` div, a SIBLING of
+             the `.application-label` that carries the question. Both parse passes
+             therefore see this control, and only `_card_owned_field_containers`
+             stops the base pass from emitting a phantom twin whose label is the
+             option wordings mashed together. This card is the SELECT case that the
+             `_dedup_by_key` richness tie-break CANNOT rescue on its own (both
+             parses agree on type, role AND options and differ only in the label,
+             so richness ties and document order would hand it to the phantom). -->
         <div class="application-question dropdown">
           <div class="application-label">
             <div class="text">Will you now or in the future require visa sponsorship for employment?<span class="required">&#10033;</span></div>
           </div>
-          <select name="cards[a1b2c3][field0]" required>
-            <option value="">Select...</option>
-            <option value="yes">Yes</option>
-            <option value="no">No</option>
-          </select>
+          <div class="application-field full-width required-field">
+            <div class="application-dropdown">
+              <select name="cards[a1b2c3][field0]" required>
+                <option value="">Select...</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+          </div>
         </div>
 
         <!-- EEO / demographic decline field: policy forbids auto-answering it,
@@ -67,34 +122,93 @@
           <div class="application-label">
             <div class="text">Gender</div>
           </div>
-          <select name="eeo[gender]">
-            <option value="">Select...</option>
-            <option value="male">Male</option>
-            <option value="female">Female</option>
-            <option value="nonbinary">Non-binary</option>
-            <option value="decline">Decline to self-identify</option>
-          </select>
+          <div class="application-field full-width">
+            <div class="application-dropdown">
+              <select name="eeo[gender]">
+                <option value="">Select...</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="nonbinary">Non-binary</option>
+                <option value="decline">Decline to self-identify</option>
+              </select>
+            </div>
+          </div>
         </div>
 
         <!-- OPTIONAL marketing checkbox: the safe path -- a marketing box is
-             left unticked, so no click is ever attempted and it never blocks. -->
-        <div class="application-question checkbox-question">
-          <label class="application-checkbox-label">
-            <input type="checkbox" name="consent[marketing]">
-            Subscribe me to the FauxCorp newsletter and product updates.
-          </label>
-        </div>
+             left unticked, so no click is ever attempted and it never blocks.
 
-        <!-- REQUIRED consent checkbox = the hCaptcha hazard. resolve_values wants
-             to tick it True, but fill() refuses to auto-click it (hCaptcha
-             intercepts programmatic checkbox clicks) and hands it to a human;
-             being required, the un-ticked hand-off forces NOT_COMPLETE. -->
+             Live consent shape (round-5 correction): the wording sits in a
+             `<p class="application-answer-alternative">` INSIDE the wrapping
+             <label> (no `.application-label` div anywhere in the card, which is
+             why the captured label comes from the enclosing text), and the
+             checkbox is preceded by a HIDDEN input of the same submission name
+             carrying the unticked value "0". That hidden twin is the reason the
+             base pass captured the live agicap consent box as a phantom TEXTBOX:
+             `_first(container, _is_form_control)` returns the hidden input, and
+             `_control_type` types any unrecognized input as `input_text`. -->
+             ONE CARD, TWO SUBMISSION NAMES (round-10 correction, live swile shape):
+             this single card holds BOTH consent checkboxes and they post under
+             DIFFERENT names -- the OPTIONAL marketing opt-in and the REQUIRED privacy
+             consent -- each in its own <label> with its own hidden `0` twin. The
+             `len(checkboxes) > 1` capture arm reads a multi-checkbox card as ONE
+             question whose options SHARE one submission name; on this live shape that
+             premise is false, and read as one group the card emits ONE field keyed by
+             the first checkbox while the second control is SUBTRACTED from the FieldMap
+             in silence. `capture._name_groups` splits it into one Field per submission
+             name.
+
+             The REQUIRED consent box is the hCaptcha hazard: resolve_values wants to
+             tick it True, but fill() refuses to auto-click it (hCaptcha intercepts
+             programmatic checkbox clicks) and hands it to a human; being required, the
+             un-ticked hand-off forces NOT_COMPLETE. -->
         <div class="application-question checkbox-question">
-          <label class="application-checkbox-label">
-            <input type="checkbox" name="consent[privacy]" required>
-            I agree to the privacy policy and consent to the processing of my data.
-          </label>
+          <div class="application-field full-width">
+            <ul>
+              <li>
+                <label>
+                  <input type="hidden" name="consent[marketing]" value="0">
+                  <input type="checkbox" name="consent[marketing]" value="1">
+                  <p class="application-answer-alternative">Subscribe me to the FauxCorp newsletter and product updates.</p>
+                </label>
+              </li>
+              <li>
+                <label>
+                  <input type="hidden" name="consent[privacy]" value="0">
+                  <input type="checkbox" name="consent[privacy]" value="1" required>
+                  <p class="application-answer-alternative">I agree to the privacy policy and consent to the processing of my data.</p>
+                </label>
+              </li>
+            </ul>
+          </div>
         </div>
+        <!-- FURNITURE 1: the "Apply with LinkedIn" OAuth widget (verbatim live shape,
+             nium + swile, 2026-07-14; the SVG guts of the button are elided, nothing
+             else is). An `.application-question` card carrying a LABEL and an
+             `.application-field` but NO form control at all: it offers an OAuth import,
+             it does not ask the applicant for a value. Until round 8 a control-less card
+             raised CaptureShapeError and killed the WHOLE capture -- on 3 of the 4 live
+             postings -- so no FieldMap was produced and the apply pipeline was dead
+             before the fill was ever reached. It is FURNITURE: `_lever_custom_fields`
+             skips it. -->
+        <li class="application-question awli-application-row">
+          <div class="application-label">LinkedIn profile</div>
+          <div class="application-field">
+            <div class="awli-button-container">
+              <button type="button" class="template-btn-utility awli-button awli-v3 state-ready button-masked">Apply with LinkedIn</button>
+            </div>
+          </div>
+        </li>
+
+        <!-- FURNITURE 2: the legitimate-interest privacy notice (verbatim live shape,
+             gopuff + swile, 2026-07-14). An `.application-question` card with NO label
+             and NO control: privacy COPY, not a question. The second control-less shape,
+             and the one the shipped parse died on for gopuff. -->
+        <li class="application-question">
+          <div class="application-field full-width">
+            <p data-qa="legitimate-interest-copy">By applying for this position, your data will be processed as per FauxCorp&nbsp;<span class="text-muted mt1 underline"><a href="https://example.invalid/privacy" target="_blank" data-qa="privacy-link">Privacy Policy</a></span>.</p>
+          </div>
+        </li>
       </div>
 
       <button type="submit">Submit application</button>

@@ -1,0 +1,262 @@
+{
+  "_provenance": "The LIVE apply-page DOM shape of workable movement-labs 0F5F662A46, read off https://apply.workable.com/movement-labs/j/0F5F662A46/apply/ from a FRESH, UNFILLED page: no owner data appears here, only structure. First read 2026-07-13 (W5B-WORKABLE first live contact), RE-DERIVED 2026-07-14 with the aria-hidden attribute this file originally omitted. These are every control matching the kernel sweep's required CSS ([required], [aria-required='true']), in DOM order, with EVERY attribute the sweep reads, recorded explicitly (an omitted attribute reads as absent, which is how the aria-hidden omission below went unnoticed for two rounds). RE-DERIVED AGAIN 2026-07-14 (round 4) under a RECORDED BROWSER LOCALE, with the live locator resolution of every field the capture emits (see locator_resolution). RULE THIS FILE NOW OBEYS: an attribute whose value depends on the BROWSER SESSION rather than on the page (the date placeholder is one) is recorded TOGETHER WITH the context it was observed under, never as a bare fact about the page. A fixture that records a session-dependent attribute without its observing context is a trap for the next wave, and this one sprang: see _locale_dependent_attributes.",
+  "_sweep_eligibility": "The sweep does NOT read all 24 of these controls. The kernel's _visible_locators (fill_toolkit.py:111-127) keeps a control only when it is CSS-visible AND NOT aria-hidden. Live: 24 match the required CSS, 24 are CSS-visible, 4 carry aria-hidden=true, so exactly 20 reach _control_key. The 4 dropped ones are ALL FOUR native input[type=radio][name=QA_n] -- Workable hides them from the accessibility tree and paints the visible div[role=radio][data-ui=option] wrappers on top. CONSEQUENCE, load-bearing for W5.1c: the `name` anchor is DEAD on this page for QA_11919111 and QA_11919112. Their ONLY live anchor is the option WRAPPER path (div[role=radio][data-ui=option] -> _is_option_wrapper -> _closest_radiogroup_key -> fieldset[data-ui=QA_n]). Anything that clicks or keys these two booleans must go through the wrapper, not the native input.",
+  "_what_it_pins": "Each control carries its SCHEMA KEY as its own anchor (name on the inputs and textareas, data-ui on the resume file input); a boolean's visible option WRAPPER carries neither, only role=radio and the marker data-ui=option, and reports its key through the enclosing fieldset[data-ui]; the date box's placeholder shadows its name under the kernel's accessible-name heuristic (the placeholder is LOCALE-DEPENDENT, observed 'DD/MM/YYYY' under navigator.language=en-GB: see _locale_dependent_attributes before you touch it), and the intl-tel phone box carries no data-ui at all. See engine/providers/workable/fill.py::_workable_dom_required.",
+  "_locale_dependent_attributes": "THE DATE BOX'S PLACEHOLDER IS NOT A PROPERTY OF THIS PAGE. Workable renders it from the BROWSER's locale, so it is a property of the SESSION. Observed live 2026-07-14 on the host the seal runs on, TWICE: a bare browser context AND a context pinned to locale=en-GB, timezone=Europe/Rome. Both resolve navigator.language='en-GB' and both serve placeholder='DD/MM/YYYY' on input[name=QA_11919121]. Under an en-US browser the SAME control serves 'MM/DD/YYYY'; under it-IT and en-GB it is day-first. DD/MM/YYYY is therefore CORRECT for this engine's host and must NOT be 'corrected' to month-first: a month-first date typed into a day-first control reaches the employer as a DIFFERENT DATE (01/09/2026 meaning 1 September is read as 9 January), types cleanly, reads back cleanly, books no gap and raises nothing. A round-3 reviewer probed this control under an en-US browser, generalised, and filed a blocker demanding exactly that flip. Whoever authors the start-date answer must DERIVE the format from the live placeholder at generation time, under the run's own locale, and never assume it or copy this recorded value as though it were locale-free. The engine has NO format protection at the fill boundary: base._readback is a string compare, so any value that round-trips is confirmed (pinned by test_date_field_is_driven_by_the_strict_readback_with_no_format_protection).",
+  "controls": [
+    {"tag": "input", "type": "text", "name": "firstname", "data_ui": "firstname", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "input", "type": "text", "name": "lastname", "data_ui": "lastname", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "input", "type": "email", "name": "email", "data_ui": "email", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "input", "type": "tel", "name": "phone", "data_ui": "", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true, "note": "intl-tel-input: absorbs the country calling code into its own country combobox, which fill() never drives"},
+    {"tag": "input", "type": "file", "name": "", "data_ui": "resume", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "", "aria_hidden": "", "visible": true, "note": "no name attribute: data-ui is its only anchor"},
+
+    {"tag": "div", "type": "", "name": "", "data_ui": "option", "role": "radio", "closest_fieldset_data_ui": "QA_11919111", "required": false, "aria_required": "true", "aria_hidden": "", "visible": true, "note": "option WRAPPER: data-ui is the shared marker 'option', never a field id. This is the ONLY live anchor for QA_11919111 (the native radio below it is aria-hidden, so the sweep never sees it)"},
+    {"tag": "input", "type": "radio", "name": "QA_11919111", "data_ui": "", "role": "", "closest_fieldset_data_ui": "QA_11919111", "required": true, "aria_required": "true", "aria_hidden": "true", "visible": true, "note": "aria-hidden: CSS-visible but DROPPED by the kernel sweep's _visible_locators, so its `name` anchor never reaches _control_key"},
+    {"tag": "div", "type": "", "name": "", "data_ui": "option", "role": "radio", "closest_fieldset_data_ui": "QA_11919111", "required": false, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "input", "type": "radio", "name": "QA_11919111", "data_ui": "", "role": "", "closest_fieldset_data_ui": "QA_11919111", "required": true, "aria_required": "true", "aria_hidden": "true", "visible": true},
+
+    {"tag": "div", "type": "", "name": "", "data_ui": "option", "role": "radio", "closest_fieldset_data_ui": "QA_11919112", "required": false, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "input", "type": "radio", "name": "QA_11919112", "data_ui": "", "role": "", "closest_fieldset_data_ui": "QA_11919112", "required": true, "aria_required": "true", "aria_hidden": "true", "visible": true},
+    {"tag": "div", "type": "", "name": "", "data_ui": "option", "role": "radio", "closest_fieldset_data_ui": "QA_11919112", "required": false, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "input", "type": "radio", "name": "QA_11919112", "data_ui": "", "role": "", "closest_fieldset_data_ui": "QA_11919112", "required": true, "aria_required": "true", "aria_hidden": "true", "visible": true},
+
+    {"tag": "input", "type": "text", "name": "QA_11919113", "data_ui": "QA_11919113", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "textarea", "type": "text", "name": "QA_11919114", "data_ui": "QA_11919114", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "textarea", "type": "text", "name": "QA_11919115", "data_ui": "QA_11919115", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "textarea", "type": "text", "name": "QA_11919116", "data_ui": "QA_11919116", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "textarea", "type": "text", "name": "QA_11919117", "data_ui": "QA_11919117", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "textarea", "type": "text", "name": "QA_11919118", "data_ui": "QA_11919118", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "textarea", "type": "text", "name": "QA_11919119", "data_ui": "QA_11919119", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "input", "type": "text", "name": "QA_12042640", "data_ui": "QA_12042640", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "textarea", "type": "text", "name": "QA_11919120", "data_ui": "QA_11919120", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true},
+    {"tag": "input", "type": "text", "name": "QA_11919121", "data_ui": "QA_11919121", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "", "aria_hidden": "", "visible": true, "placeholder": "DD/MM/YYYY", "placeholder_observed_under_browser_locale": "en-GB (navigator.language of the live probe, 2026-07-14; the SAME control serves MM/DD/YYYY to an en-US browser -- this attribute is a property of the SESSION, not of the page: see _locale_dependent_attributes)", "note": "the date box: its placeholder shadows its name under the kernel's accessible-name heuristic. NEVER DRIVEN LIVE to date (the resolve layer skips it: missing canned answer), so its live readback behaviour is unproven -- handed to W5.1d. Its FILL PATH is now pinned offline: it is DRIVEN (textbox role, not handed off) and its only gate is the strict string readback, which cannot police a date FORMAT"},
+    {"tag": "textarea", "type": "text", "name": "QA_11919122", "data_ui": "QA_11919122", "role": "", "closest_fieldset_data_ui": "", "required": true, "aria_required": "true", "aria_hidden": "", "visible": true}
+  ],
+  "kernel_accessible_name_sweep_aliases": {
+    "_note": "What base.sweep_required's accessible-name heuristic returned for these SAME controls on the live run: four naming schemes at once, none of which a schema LABEL can equal. This is the noise the key-space sweep removes.",
+    "name_attribute": ["firstname", "lastname", "qa_11919113", "qa_11919114", "qa_11919115", "qa_11919116", "qa_11919117", "qa_11919118", "qa_11919119", "qa_11919120", "qa_11919122", "qa_12042640"],
+    "_placeholder_is_locale_dependent": "base.sweep_required lowercases the placeholder, so this family is whatever the BROWSER made it. Under the seal host (navigator.language=en-GB, probed twice 2026-07-14) it is dd/mm/yyyy; under en-US the same control yields mm/dd/yyyy. BOTH are recorded so the sweep-alias assertions bite whatever locale a run resolves to.",
+    "placeholder": ["dd/mm/yyyy"],
+    "placeholder_under_an_en_us_browser": ["mm/dd/yyyy"],
+    "option_text": ["yes", "no"],
+    "asterisked_label_with_intl_tel_code": ["phone +39"]
+  },
+  "locator_resolution": {
+    "_observed_under": {
+      "date": "2026-07-14",
+      "host": "the machine the seal runs on (live probe, read-only; no form was submitted)",
+      "browser": "patchright chromium, headless, xvfb",
+      "navigator_language": "en-GB",
+      "contexts_probed": [
+        "bare default context",
+        "context pinned to locale=en-GB, timezone=Europe/Rome"
+      ],
+      "both_contexts_agreed": true
+    },
+    "_how": "For EVERY field the capture emits, the locator the PRODUCTION fill code builds was resolved against the live page. The construction is kernel.fill_toolkit._locate: page.get_by_role(field.locator.role, name=field.locator.name), where locator.name is the SCHEMA LABEL. `count` is how many elements that locator matched; `matched` is each matched element's own DOM anchor (its `name`, else its `data-ui`, else its tag).",
+    "_invariant": "EXACTLY ONE, for every field fill() DRIVES. Not 'at least one'. ZERO is a PHANTOM: the engine believes it filled a control that does not exist. MORE THAN ONE is an ambiguity: playwright strict mode raises, and a fill that did not raise could type into the wrong control. A locator is a PAIR (role, name) and a phantom can hide in EITHER half. The two `radio` rows and the `resume` row below each resolve to TWO elements, and neither is a live defect ONLY because fill() never resolves them: the radios are handed off before any locator is built, and the resume goes through _is_upload -> _locate_file_input, which reads the single input[type=file] recorded in _live_file_inputs. Those two hand-offs are therefore load-bearing, not merely cautious: remove either and the engine builds an AMBIGUOUS locator on the live seal target.",
+    "_labels_are_live": "`locator_name` is the label the schema GET served AT THE SAME INSTANT this DOM was read (2026-07-14), NOT the label in the 2026-07-06 capture fixture form-0F5F662A46.json. A fill-time locator invariant is only meaningful on a schema and a DOM read TOGETHER; pairing an 8-day-old capture with today's DOM tests the drift, not the locator construction. See _label_drift: the two have in fact drifted, on one required field.",
+    "_live_file_inputs": [
+      "resume"
+    ],
+    "_label_drift": {
+      "finding": "The committed capture fixture form-0F5F662A46.json (a schema GET of 2026-07-06) and the LIVE page have drifted on exactly ONE label, and it is a REQUIRED field. 17 of the 18 labels are byte-identical.",
+      "key": "QA_11919118",
+      "committed_label_2026_07_06": "Even you haven’t used any, what’s your preferred method to track outreach details?",
+      "live_label_2026_07_14": "Even if you haven’t used any, what’s your preferred method to track outreach details?",
+      "corroboration": "The LIVE schema GET and the LIVE DOM label agree with EACH OTHER (both read 2026-07-14: 'Even if you haven’t used any, ...'); only the 8-day-old capture fixture says 'Even you haven’t used any, ...'. The employer edited the question between capture and fill.",
+      "live_resolution_of_the_committed_label": {
+        "role": "textbox",
+        "count": 0,
+        "matched": []
+      },
+      "consequence": "base._locate builds get_by_role('textbox', name=<schema label>). Resolved live, the COMMITTED label matched ZERO elements: a PHANTOM. The engine cannot fill QA_11919118 from that capture. It fails LOUD, not silently (the locator resolves to nothing, type_human raises, fill() books a fill-error skip -> required_unfilled -> NOT_COMPLETE), so no wrong data is submitted; but a required field can never land. This is capture->fill DRIFT, not a defect in the fill code.",
+      "status": "form-0F5F662A46.json IS inside this wave's allowlist (tests/fixtures/providers/workable/.+ matches it, and this wave already writes this very directory) and COULD be re-captured here; it is deliberately NOT re-captured. It is KEPT AS-IS because it is a HISTORICAL RECORD, and refreshing it would DESTROY the only evidence that this drift occurred at all: overwrite the stale label with the current live one and there is nothing left to distinguish 'this class of drift can happen' from 'this class of drift never happened'. RUNTIME IMPACT IS NIL: production never fills from this 8-day-old capture. It re-fetches the schema fresh via a live GET at fill time, and that fresh schema's label agrees with the live DOM 1:1 (see corroboration above: both read 2026-07-14, both 'Even if you haven’t used any, ...'), so the stale committed label never reaches a real fill. The zero-match resolution above (live_resolution_of_the_committed_label) was reproduced 2026-07-14 under patchright chromium, headless, xvfb, navigator.language=en-GB, corroborated across both a bare default context and a context pinned to locale=en-GB/timezone=Europe/Rome (see locator_resolution._observed_under); the drift itself is an employer content edit, not a locale artifact, but is recorded under this observing context per this file's own rule that a live-DOM claim is stated together with the context it was read under. The hazard CLASS (a drifted label resolving to zero matches, never filling) is pinned by test_locator_resolution_a_drifted_label_resolves_to_zero_and_never_fills."
+    },
+    "fields": [
+      {
+        "key": "firstname",
+        "role": "textbox",
+        "locator_name": "First name",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "firstname"
+        ]
+      },
+      {
+        "key": "lastname",
+        "role": "textbox",
+        "locator_name": "Last name",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "lastname"
+        ]
+      },
+      {
+        "key": "email",
+        "role": "textbox",
+        "locator_name": "Email",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "email"
+        ]
+      },
+      {
+        "key": "phone",
+        "role": "textbox",
+        "locator_name": "Phone",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "phone"
+        ]
+      },
+      {
+        "key": "resume",
+        "role": "button",
+        "locator_name": "Resume",
+        "routing": "upload",
+        "count": 2,
+        "matched": [
+          "button",
+          "resume"
+        ]
+      },
+      {
+        "key": "QA_11919111",
+        "role": "radio",
+        "locator_name": "These questions replace the cover letter. Please note: AI-assisted submissions are acceptable if they are thoughtfully edited and reflect your real experience—generic responses may be excluded.",
+        "routing": "handed-off",
+        "count": 2,
+        "matched": [
+          "option",
+          "option"
+        ]
+      },
+      {
+        "key": "QA_11919112",
+        "role": "radio",
+        "locator_name": "Are you based in one of these cities: Detroit, Cleveland, Columbus, \nCincinnati, Atlanta (Georgia)?",
+        "routing": "handed-off",
+        "count": 2,
+        "matched": [
+          "option",
+          "option"
+        ]
+      },
+      {
+        "key": "QA_11919113",
+        "role": "textbox",
+        "locator_name": "Please specify your city",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919113"
+        ]
+      },
+      {
+        "key": "QA_11919114",
+        "role": "textbox",
+        "locator_name": "Why are you interested in this program and role?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919114"
+        ]
+      },
+      {
+        "key": "QA_11919115",
+        "role": "textbox",
+        "locator_name": "What does community organizing mean to you?\nWhat are your go-to organizing tools and/or tactics that you use and how have you used those in the past?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919115"
+        ]
+      },
+      {
+        "key": "QA_11919116",
+        "role": "textbox",
+        "locator_name": "How do you currently stay connected to your community? \nIn what ways are you connected and involved in your community beyond formal professional experience?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919116"
+        ]
+      },
+      {
+        "key": "QA_11919117",
+        "role": "textbox",
+        "locator_name": "Have you ever used any canvassing tools or field organizing software/platforms? Which have you used, if any?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919117"
+        ]
+      },
+      {
+        "key": "QA_11919118",
+        "role": "textbox",
+        "locator_name": "Even if you haven’t used any, what’s your preferred method to track outreach details?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919118"
+        ]
+      },
+      {
+        "key": "QA_11919119",
+        "role": "textbox",
+        "locator_name": "What aspects of voter outreach are most useful for you to track or have visualized in reaching your outreach goals?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919119"
+        ]
+      },
+      {
+        "key": "QA_12042640",
+        "role": "textbox",
+        "locator_name": "If you were referred to apply to this role, who were you referred by?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_12042640"
+        ]
+      },
+      {
+        "key": "QA_11919120",
+        "role": "textbox",
+        "locator_name": "This position runs from August through mid-November.  The hours are flexible, but the position requires up to 20 hours/week, frequently on evenings or weekends. Is that a schedule you can commit to, and what is your general availability?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919120"
+        ]
+      },
+      {
+        "key": "QA_11919121",
+        "role": "textbox",
+        "locator_name": "When can you start?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919121"
+        ]
+      },
+      {
+        "key": "QA_11919122",
+        "role": "textbox",
+        "locator_name": "Are you legally authorized to work in the US?",
+        "routing": "driven",
+        "count": 1,
+        "matched": [
+          "QA_11919122"
+        ]
+      }
+    ]
+  }
+}

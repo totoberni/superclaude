@@ -480,18 +480,18 @@ def test_generator_refuses_missing_ssot(tool, tmp_path, capsys) -> None:
     assert not (tmp_path / "out.yaml").exists()
 
 
-# -- AI-policy ATTESTATION SELECT (W5.1b live remediation, 2026-07-13) ---------
+# -- AI-policy ATTESTATION SELECT: fail closed always (W5.1-R2 FX3, 2026-07-18) --
 #
-# THE LIVE BUG THESE PIN. "AI Policy for Application" on the anthropic posting is
-# NOT an essay: it is a ['Yes','No'] select whose description reads "review our AI
-# partnership guidelines ... and confirm your understanding by selecting Yes". The
-# generator routed every AI-policy question down the essay path, so under
-# forbid-essays it was recorded "employer forbids AI-generated content" and the
-# required control was left permanently blank. SELECTING AN OPTION GENERATES
-# NOTHING, so no ToS verdict about generated content can reach it: an attestation
-# is answered from an exact-option scalar the OWNER seeds, in every mode, or it
-# fails closed and is recorded by name. The engine never attests on the owner's
-# behalf.
+# OWNER RULING. An AI-policy attestation (an AI-policy question that offers OPTIONS,
+# e.g. Canonical's "I agree to use only my own words ... AI ... will disqualify",
+# Yes/No) is NEVER answered from a seeded scalar, seeded or not, in any --tos-mode.
+# Its Yes/No polarity is not fixed across employers -- Yes = compliant on an
+# own-words framing, Yes = used-AI on a "did you use AI?" framing -- so one scalar
+# cannot answer both honestly. It fails closed to human handoff, recorded by name.
+# Its mere presence also forces forbid-essays for the WHOLE posting: every free-text
+# question routes to tos_forbidden instead of the model, so no essay is shipped to an
+# employer that signalled it forbids AI-authored content. See docs/vendor-tos.md
+# (Canonical) and bin/generate_answers.py `_route_by_tos` / `_posting_forbids_ai`.
 
 def _attestation_select(**over) -> dict:
     q = {"key": "question_9", "label": "AI Policy for Application",
@@ -505,30 +505,64 @@ def _never_called(prompt: str, model: str) -> str:
     raise AssertionError("the model was called for an attestation select")
 
 
-def test_generator_ai_policy_attestation_select_answered_from_seeded_option(
+def test_generator_ai_policy_attestation_fails_closed_both_polarities(
         tool, ssot: SSOT) -> None:
-    seeded = SSOT({"canned_answers": dict(
-        (ssot.get("canned_answers") or {}),
-        ai_policy_attestation="Yes")})
-    for mode in ("allow", "disclose", "forbid-essays"):
-        doc = tool.generate_answers(
-            dict(questions_doc(), questions=[_attestation_select()]), seeded,
-            company="Acme", tos_mode=mode, runner=_never_called)
-        assert doc["tos_forbidden"] == [], mode
-        assert [(a["key"], a["value"]) for a in doc["answers"]] == [
-            ("question_9", "Yes")], mode
+    # ANTI-GAMING (W5.1-R2 FX3). Neither polarity of an AI-policy attestation is ever
+    # answered from a scalar, seeded or NOT: an "own words / no AI" framing (Yes =
+    # compliant) and a "did you use AI?" framing (Yes = used AI) attach opposite
+    # senses to the same option, so one seeded scalar cannot answer both honestly.
+    # Both fail closed to human handoff in every mode, recorded by name -- the engine
+    # never attests on the owner's behalf.
+    own_words = ("I agree to use only my own words in this application; the use of AI "
+                 "will disqualify my application")
+    did_use_ai = "Did you use AI to write this application?"
+    assert tool.is_ai_policy_question(own_words)
+    assert tool.is_ai_policy_question(did_use_ai)
+
+    seeded_yes = SSOT({"canned_answers": dict(
+        (ssot.get("canned_answers") or {}), ai_policy_attestation="Yes")})
+    seeded_no = SSOT({"canned_answers": dict(
+        (ssot.get("canned_answers") or {}), ai_policy_attestation="No")})
+
+    for label in (own_words, did_use_ai):
+        for seed in (ssot, seeded_yes, seeded_no):
+            for mode in ("allow", "disclose", "forbid-essays"):
+                doc = tool.generate_answers(
+                    dict(questions_doc(),
+                         questions=[_attestation_select(label=label)]),
+                    seed, company="Acme", tos_mode=mode, runner=_never_called)
+                assert doc["answers"] == [], (label, mode)
+                assert [f["label"] for f in doc["tos_forbidden"]] == [label], \
+                    (label, mode)
 
 
-def test_generator_ai_policy_attestation_unseeded_fails_closed(
+def test_generator_ai_forbid_attestation_forces_forbid_essays(
         tool, ssot: SSOT) -> None:
-    # ANTI-GAMING. With no seeded scalar the engine must NOT pick an option for the
-    # owner (an attestation they never made), and must NOT hide the question: it is
-    # recorded by name so the acceptance gate subtracts it and the gap escalates.
+    # A detected AI-policy attestation on a posting forces forbid-essays for that
+    # posting: every free-text question routes to tos_forbidden instead of the model,
+    # so no essay is shipped to an employer that forbids AI-authored content -- even
+    # under --tos-mode=allow. `_never_called` proves the essay never reaches the model.
+    essay = {"key": "question_1", "label": "Why do you want to work here?",
+             "type": "textarea", "norm_type": "LONGTEXT", "required": True,
+             "options": [], "max_length": 800}
+    posting = dict(questions_doc(), questions=[essay, _attestation_select()])
+
     for mode in ("allow", "disclose", "forbid-essays"):
-        doc = tool.generate_answers(
-            dict(questions_doc(), questions=[_attestation_select()]), ssot,
-            company="Acme", tos_mode=mode, runner=_never_called)
+        doc = tool.generate_answers(posting, ssot, company="Acme",
+                                    tos_mode=mode, runner=_never_called)
         assert doc["answers"] == [], mode
-        assert [f["label"] for f in doc["tos_forbidden"]] == [
-            "AI Policy for Application"], mode
-        assert "not seeded" in doc["tos_forbidden"][0]["reason"], mode
+        forbidden = {f["label"]: f["reason"] for f in doc["tos_forbidden"]}
+        assert set(forbidden) == {"Why do you want to work here?",
+                                  "AI Policy for Application"}, mode
+        assert forbidden["Why do you want to work here?"] == (
+            "employer forbids AI-generated content"), mode
+
+    # CONTRAST: the SAME essay on a posting with NO attestation is answered by the
+    # model under `allow` -- proving it is the detected attestation, not the essay,
+    # that forces the forbid.
+    answered = tool.generate_answers(
+        dict(questions_doc(), questions=[essay]), ssot, company="Acme",
+        tos_mode="allow", runner=lambda prompt, model: "An essay.")
+    assert [(a["key"], a["value"]) for a in answered["answers"]] == [
+        ("question_1", "An essay.")]
+    assert answered["tos_forbidden"] == []

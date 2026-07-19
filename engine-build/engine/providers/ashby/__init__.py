@@ -9,7 +9,8 @@ engine.providers.protocol.Provider)` still holds.
 The vendor's other concern is split into a sibling submodule (reachable by its
 canonical dotted path, `engine.providers.ashby.capture`):
   - `.fill`     -- fill() orchestration (own controlled-component select driver,
-                   Turnstile checkbox/radio HUMAN HAND-OFF)
+                   geo-autocomplete Location driver, schema/DOM required-set
+                   reconciliation, Turnstile checkbox/radio HUMAN HAND-OFF)
   - `.capture`  -- graphql schema capture/parse (moved out of the former
                    `engine.browse` shim)
 

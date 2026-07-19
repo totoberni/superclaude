@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from engine.content import (
+    HOW_HEARD_NO_OPTION,
     NO_OPTION_MATCH,
     OVER_MAX_LENGTH,
     ContentSchemaError,
@@ -24,6 +25,7 @@ from engine.content import (
     load_generated_answers,
 )
 from engine.kernel.contracts import Field, FieldMap, FieldValue, Locator, ResolvedValues
+from engine.kernel.resolve import TOS_FORBIDDEN_SKIP_PREFIX
 from engine.kernel.ssot import SSOT
 
 FIXTURES = Path(__file__).parent / "fixtures" / "content"
@@ -124,6 +126,86 @@ def test_overlay_option_match_ambiguous_stays_skipped(ssot: SSOT) -> None:
     assert resolved.skipped == [("q_reloc", NO_OPTION_MATCH)]
     assert report.applied == []
     assert report.unresolved == [("q_reloc", NO_OPTION_MATCH)]
+
+
+# -- RS-c: deterministic how-did-you-hear option mapping ----------------------
+# Live defect (ashby elevenlabs, 2026-07): the canned value matched no ashby radio
+# option and the required field stayed blank; lever's own select carried the value
+# directly. The mapper resolves the canned default onto the vendor's option list:
+# exact -> unambiguous containment -> Other (with the specify seed) -> honest park.
+
+_ASHBY_HEAR_OPTIONS = ["I'm a user", "News article", "Job board", "Social media",
+                       "In person event", "Referral", "I was reached out to",
+                       "Other"]
+
+
+def test_how_heard_exact_option_match() -> None:
+    ssot = SSOT({"canned_answers": {"how_did_you_hear_default": "Job board"}})
+    fld = make_field("q_hear", "How did you hear about ElevenLabs?",
+                     type_="multi_value_single_select", required=True,
+                     options=_ASHBY_HEAR_OPTIONS)
+    resolved, report = overlay_one(fld, ssot)
+    assert resolved.values == {"q_hear": "Job board"}
+    assert report.applied == [
+        ("q_hear", "canned:canned_answers.how_did_you_hear_default")]
+    assert resolved.skipped == []
+
+
+def test_how_heard_ambiguous_containment_parks() -> None:
+    # "board" is contained by TWO options: ambiguity is never guessed away, and
+    # with no "Other" option there is no fallback, so the field parks honestly.
+    ssot = SSOT({"canned_answers": {"how_did_you_hear_default": "board"}})
+    fld = make_field("q_hear", "How did you hear about us?",
+                     type_="multi_value_single_select", required=True,
+                     options=["Job board", "Message board", "Referral"])
+    resolved, report = overlay_one(fld, ssot)
+    assert resolved.values == {}
+    assert resolved.skipped == [("q_hear", HOW_HEARD_NO_OPTION)]
+    assert report.unresolved == [("q_hear", HOW_HEARD_NO_OPTION)]
+    assert report.applied == []
+
+
+def test_how_heard_other_fallback_selects_other() -> None:
+    # The canned value matches no option, but an "Other" option exists AND the
+    # specify answer is seeded -> select Other. The sibling specify field carries
+    # canned_answers.if_other_please_specify_below through the kernel's exact slug.
+    ssot = SSOT({"canned_answers": {
+        "how_did_you_hear_default": "A former colleague",
+        "if_other_please_specify_below": "LinkedIn"}})
+    fld = make_field("q_hear", "How did you hear about ElevenLabs?",
+                     type_="multi_value_single_select", required=True,
+                     options=_ASHBY_HEAR_OPTIONS)
+    resolved, report = overlay_one(fld, ssot)
+    assert resolved.values == {"q_hear": "Other"}
+    assert report.applied == [
+        ("q_hear", "canned:canned_answers.how_did_you_hear_default:other")]
+    assert resolved.skipped == []
+
+
+def test_how_heard_other_fallback_needs_the_specify_seed() -> None:
+    # Same no-match case, but the specify answer is NOT seeded: Other is never
+    # volunteered on its own (both conditions are required), so the field parks.
+    ssot = SSOT({"canned_answers": {
+        "how_did_you_hear_default": "A former colleague"}})
+    fld = make_field("q_hear", "How did you hear about ElevenLabs?",
+                     type_="multi_value_single_select", required=True,
+                     options=_ASHBY_HEAR_OPTIONS)
+    resolved, report = overlay_one(fld, ssot)
+    assert resolved.values == {}
+    assert resolved.skipped == [("q_hear", HOW_HEARD_NO_OPTION)]
+
+
+def test_how_heard_lever_style_direct_match() -> None:
+    # A lever-style select whose list carries the value directly maps it straight
+    # through (the case that already worked live, still working through the mapper).
+    ssot = SSOT({"canned_answers": {"how_did_you_hear_default": "LinkedIn"}})
+    fld = make_field("q_hear", "How did you hear about this role?",
+                     type_="multi_value_single_select", required=True,
+                     options=["LinkedIn", "Indeed", "Company website", "Other"])
+    resolved, report = overlay_one(fld, ssot)
+    assert resolved.values == {"q_hear": "LinkedIn"}
+    assert report.applied == [
+        ("q_hear", "canned:canned_answers.how_did_you_hear_default")]
 
 
 def test_overlay_relocation_verbose_dropdown_end_to_end(ssot: SSOT) -> None:
@@ -324,20 +406,25 @@ def test_overlay_essay_missing_generation_pending(ssot: SSOT) -> None:
 
 
 def test_overlay_tos_forbidden_justified_skip(ssot: SSOT) -> None:
-    """A ToS-forbidden question is never filled, and never hidden either. Neither
-    is a field policy never auto-answers (COMPLIANCE_EEOC / DEMOGRAPHIC /
-    VOLUNTARY, or `decline_allowed`): a stale generation carrying an answer for
-    one is ignored, and the field keeps its ORIGINAL skip reason (its own
-    justified-skip route through the gate), so it can never land in `fields` and
-    inflate the completeness numerator. That guard sits at step 0, ahead of the
-    canned ladder, so a canned SSOT route that DOES hit the label of a
-    policy-declined field still fills nothing."""
+    """A ToS-forbidden question is never filled, and never hidden either. It is
+    RELABELED to the class-ii documented-ToS verdict (`TOS_FORBIDDEN_SKIP_PREFIX`
+    plus the generator's own per-entry reason), so the completeness census
+    (`kernel.resolve._completeness`, which reads the FillReport skips) subtracts it
+    as a documented handoff instead of counting the kernel's stale
+    "missing:canned_answers.*" as a data gap (F-1/F-10). A field policy never
+    auto-answers (COMPLIANCE_EEOC / DEMOGRAPHIC / VOLUNTARY, or `decline_allowed`)
+    is different: a stale generation carrying an answer for one is ignored and it
+    keeps its ORIGINAL skip reason (its own justified-skip route through the gate).
+    That guard sits at step 0, ahead of the canned ladder, so a canned SSOT route
+    that DOES hit the label of a policy-declined field still fills nothing."""
     fld = make_field("q_ai", "AI Policy for Application", type_="textarea",
                      required=True)
     generated = load_generated_answers(FIXTURES / "generated-sample.yaml")
     resolved, report = overlay_one(fld, ssot, generated=generated)
     assert resolved.fields == []
-    assert resolved.skipped == [("q_ai", "missing:canned_answers.unknown")]
+    assert resolved.skipped == [
+        ("q_ai", f"{TOS_FORBIDDEN_SKIP_PREFIX}: "
+                 "employer requires human-authored response")]
     assert report.tos_forbidden == ["q_ai"]
     assert report.applied == []
 

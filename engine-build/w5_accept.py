@@ -55,6 +55,16 @@ try:
                 "~/automations/documents/transcript-ib.pdf")),
         },
     ).verified()
+    # The generated document carries the posting's location; load it BEFORE
+    # resolving so the kernel's posting-aware resolvers (RS-b work authorization
+    # by country, RS-d in-office commitment) read the same posting_location the
+    # content overlay's nearest-city policy uses. Absent -> they park honestly.
+    from engine import content
+    gen_path = Path(os.path.expanduser(
+        f"~/automations/ssot/generated/{VENDOR}-{SLUG}-{JOB_ID}.yaml"))
+    generated = content.load_generated_answers(gen_path) if gen_path.is_file() else None
+    if generated is not None:
+        profile["posting_location"] = generated.posting_location
     values = PROV.resolve_values(fieldmap, ssot, profile, assets=assets)
 
     # Content overlay (W5.1b): canned-answer routing + option-match + generated
@@ -64,10 +74,6 @@ try:
     # bug cannot inflate the report. A malformed generated file raises and fails
     # the run loudly (error+trace path) rather than being skipped silently.
     result["stage"] = "overlay"
-    from engine import content
-    gen_path = Path(os.path.expanduser(
-        f"~/automations/ssot/generated/{VENDOR}-{SLUG}-{JOB_ID}.yaml"))
-    generated = content.load_generated_answers(gen_path) if gen_path.is_file() else None
     overlay = content.apply_content_overlay(
         values, fieldmap, ssot, generated=generated,
         posting_lang=(generated.posting_lang if generated else "en"))
