@@ -37,8 +37,13 @@ from engine.kernel.fill_toolkit import (
 )
 from engine.kernel.resolve import (
     _DECLINE_SECTIONS,
+    _IN_OFFICE_RE,
+    _SPONSOR_NEEDED_ASSERT_RE,
+    _classify_checkbox,
+    _detect_onsite_cadence,
     _is_cover_letter_field,
     _is_photo_field,
+    _sponsorship_assertion_polarity,
     resolve_values,
 )
 from engine.providers.greenhouse.capture import _SECTION_FOR_SOURCE
@@ -1763,6 +1768,149 @@ def test_assertion_checkbox_true_claim_is_ticked():
     assert resolved.values["q_euauth"] is True
 
 
+# --- (2b) sponsorship assertion checkboxes: the INVERTED polarity -------------
+# P2-2. Right-to-work and sponsorship-required are OPPOSITE claims: the owner's
+# EU rights answer Yes to "authorized to work" and No to "require sponsorship".
+# The yes/no SELECT path has always split them (`_select_intent` tests
+# `_SPONSOR_INTENT_RE` first); the CHECKBOX classifier did not, so a
+# sponsorship-phrased box (live workable rokt CA_12080) matched no consent class
+# at all and parked with the generic non-consent reason. Routing it through the
+# right-to-work truth INSTEAD would be far worse than the park it replaced: it
+# would tick a box asserting the OPPOSITE of the truth on a legally significant
+# question, which is the exact false fill this engine exists to prevent.
+
+# The live workable rokt CA_12080 label, verbatim from the r7 census.
+_LIVE_SPONSORSHIP_LABEL = (
+    "Will you now or in the future require sponsorship to work for Rokt?")
+
+
+def _sponsorship_assertion_ssot():
+    """The consent-policy SSOT plus the SSOT facts a sponsorship assertion is
+    checked against. `work_authorization` is deliberately the REGION-KEYED dict
+    shape, which is the shape `_assertion_proven_true`'s right-to-work lookup
+    actually consumes: seeded as prose it returns None for any label and the
+    trap this section guards would be invisible. eu -> True is the owner's real
+    position, so a sponsorship box misrouted to that truth WOULD be ticked.
+    `canned_answers.visa_sponsorship_required` is the sponsorship truth, the
+    same datum the sponsorship SELECT resolves from; `extra` REPLACES
+    `canned_answers` wholesale, so the consent key is restated."""
+    return _consent_policy_ssot(extra={
+        "work_authorization": {"eu": True,
+                               "us": {"sponsorship_required": True}},
+        "canned_answers": {"optional_consents": "yes, consents",
+                           "visa_sponsorship_required": "no"},
+    })
+
+
+def test_sponsorship_checkbox_is_never_ticked_on_eu_work_rights():
+    # THE regression guard for P2-2's trap, built so that a naive fix REALLY
+    # ticks: the label names the EU, and the region-keyed work_authorization
+    # says eu -> authorized. Route this box through the RIGHT-TO-WORK truth (what
+    # widening `_WORK_AUTH_INTENT_RE` would do) and it resolves True and gets
+    # TICKED -- asserting the owner REQUIRES sponsorship, the opposite of the
+    # truth, on a legally significant question. It must stay unticked. Asserted
+    # as an explicit NEGATIVE.
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field(
+        "q_spon_eu",
+        "Will you now or in the future require visa sponsorship to work in the "
+        "European Union?",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {"posting_location": "Milan, Italy"})
+    assert "q_spon_eu" not in resolved.values
+    assert resolved.values.get("q_spon_eu") is not True
+    assert "never falsely checked" in dict(resolved.skipped)["q_spon_eu"]
+
+
+def test_live_sponsorship_checkbox_is_attributed_to_its_real_class():
+    # The live workable rokt CA_12080 symptom: it used to match no consent class
+    # at all and park with the generic non-consent reason, so an answerable class
+    # read as a policy hand-off. It is now sorted and dispositioned as the
+    # assertion it is -- and, being a FALSE claim, still not ticked.
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field("CA_12080", _LIVE_SPONSORSHIP_LABEL,
+                          type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "CA_12080" not in resolved.values
+    reason = dict(resolved.skipped)["CA_12080"]
+    assert "never falsely checked" in reason
+    assert reason != "non-consent checkbox not auto-checked in dry run"
+
+
+def test_sponsorship_checkbox_ticks_only_the_truthful_polarity():
+    # The mirror: a box asserting the owner does NOT require sponsorship is TRUE
+    # under the same facts, so it ticks. The two phrasings differ only in
+    # polarity and must resolve to opposite dispositions.
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field(
+        "q_nospon",
+        "I do not now or in the future require visa sponsorship to work in the "
+        "European Union.",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert resolved.values["q_nospon"] is True
+
+
+def test_sponsorship_checkbox_with_no_readable_polarity_parks():
+    # Fail closed: a sponsorship-intent label stating no requirement polarity is
+    # not guessed in either direction.
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field("q_spon", "Visa sponsorship",
+                          type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_spon" not in resolved.values
+    assert "never falsely checked" in dict(resolved.skipped)["q_spon"]
+
+
+def test_sponsorship_checkbox_region_outside_the_ssot_still_parks():
+    # The region gate, kept identical to the SELECT path's: the owner's EU facts
+    # say nothing about US sponsorship, so even the polarity that WOULD tick on
+    # EU facts stays honestly unfilled. The checkbox path must never be more
+    # permissive than the select path.
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field(
+        "q_us", "I do not require sponsorship to work in the United States.",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_us" not in resolved.values
+    assert "never falsely checked" in dict(resolved.skipped)["q_us"]
+
+
+def test_sponsorship_checkbox_parks_when_the_ssot_states_no_requirement():
+    # No sponsorship datum in the SSOT: the claim is unproven either way, so the
+    # box parks rather than borrowing the right-to-work answer.
+    ssot = _consent_policy_ssot(extra={
+        "work_authorization": "EU citizen; full EU work rights"})
+    fm = _fieldmap(_field("CA_12080", _LIVE_SPONSORSHIP_LABEL,
+                          type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "CA_12080" not in resolved.values
+    assert "never falsely checked" in dict(resolved.skipped)["CA_12080"]
+
+
+def test_multi_sentence_negated_clause_does_not_flip_sponsorship_polarity():
+    # THE hard case the polarity regex must survive: a multi-sentence sponsorship
+    # checkbox whose FIRST clause is a negated statement about something ELSE.
+    # "I do not need any relocation assistance" contains a negated require/need
+    # verb, and if the negated-polarity regex is not anchored to the sponsorship
+    # noun it reads that as "sponsorship NOT required" and TICKS the box -- which
+    # asserts the owner REQUIRES sponsorship, the exact false legal fill this fix
+    # prevents. Ticking must never happen here: the requirement verb governs
+    # "relocation assistance", not sponsorship, so the sponsorship polarity is
+    # affirmative ("Will you require visa sponsorship") and, being FALSE on EU
+    # facts, the box stays unticked. Asserted as an explicit NEGATIVE.
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field(
+        "q_multi",
+        "I do not need any relocation assistance. Will you require visa "
+        "sponsorship to work in the European Union?",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {"posting_location": "Milan, Italy"})
+    assert resolved.values.get("q_multi") is not True
+    assert "q_multi" not in resolved.values
+    assert "never falsely checked" in dict(resolved.skipped)["q_multi"]
+
+
 def test_consent_select_single_affirmative_option_is_picked():
     # (e) The live greenhouse question_37455721: a privacy-notice SELECT whose
     # sole option is a non-yes/no affirmative ("Acknowledge/Confirm") failed
@@ -2395,3 +2543,209 @@ def test_in_office_boolean_parks_when_no_policy():
                               {"posting_location": "New York, US"})
     assert "q_office" not in resolved.values
     assert "location policy" in dict(resolved.skipped)["q_office"]
+
+
+# P2-2, second half: the MULTIPLIER cadence "4x/week". The live workable rokt
+# CA_9781 label below parked as a generic non-consent checkbox because neither
+# half of the gate reached it: `_detect_onsite_cadence` had no `Nx/week` pattern,
+# AND `_IN_OFFICE_RE` matched "come into the office" but not the gerund
+# "coming into the office" the posting actually uses.
+
+# The live workable rokt CA_9781 label, verbatim from the r7 census.
+_LIVE_CADENCE_LABEL = (
+    "Rokt is a hybrid company. If this role is the right fit, would you commit "
+    "to coming into the office 4x/week? Please note this is subject to change "
+    "based on the needs of the business.")
+
+
+def test_in_office_multiplier_cadence_derives_from_the_live_label():
+    # 4x/week ~= 17 days/month, over the 4 days/month rest-of-world cap -> No,
+    # the same derivation r6's "4 days/week" phrasing already reached.
+    fm = _fieldmap(_field("CA_9781", _LIVE_CADENCE_LABEL,
+                          type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, _commute_ssot(),
+                              {"posting_location": "New York, US"})
+    assert resolved.values["CA_9781"] is False
+    assert resolved.skipped == []
+
+
+def test_in_office_multiplier_cadence_per_month_parses():
+    # The month variant of the same multiplier form: 2x/month is under the
+    # 4 days/month rest-of-world cap -> Yes.
+    fm = _fieldmap(_field(
+        "q_office", "Would you come into the office 2x/month?",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, _commute_ssot(),
+                              {"posting_location": "New York, US"})
+    assert resolved.values["q_office"] is True
+
+
+def test_a_digit_and_an_x_are_not_a_cadence():
+    # The negative control on the multiplier pattern. The label is built to be
+    # the HARD case: it carries a digit, an x and the word "week", and only the
+    # REQUIRED per|a|/ separator keeps "2x your week" from reading as a cadence
+    # of 2 days per week. Drop that separator requirement and this box silently
+    # derives an attendance answer from a sentence about time off.
+    fm = _fieldmap(_field(
+        "q_office",
+        "We 2x your week off in year two. Are you happy to be in the office?",
+        type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, _commute_ssot(),
+                              {"posting_location": "New York, US"})
+    assert "q_office" not in resolved.values
+
+
+# --- P2-2 independent coverage -----------------------------------------------
+# The pins the fix's own tests do not carry: the polarity ORDERING at unit level,
+# the affirmative sponsorship shape, the work-auth non-regression, the separator
+# and gerund halves of the cadence gate, and the documented side effect of
+# routing `_classify_checkbox` through `_select_intent` (see the visa test).
+
+
+def test_sponsorship_polarity_ordering_is_load_bearing():
+    # WHY the negated form must be tested FIRST, asserted as the trap itself:
+    # "will not require sponsorship" ALSO matches the affirmative requirement
+    # regex, because it literally contains "require". The affirmative matcher
+    # therefore cannot tell the two polarities apart on its own -- only the ORDER
+    # defuses it. Both halves are pinned: that the affirmative regex really does
+    # match the negated label, and that the polarity still comes out NOT-required.
+    # A future edit that reorders the two branches turns every one of these into
+    # its opposite, which is the false legal assertion this fix exists to prevent.
+    for label in ("I will not require visa sponsorship.",
+                  "Will you not require sponsorship?",
+                  "I do not require sponsorship."):
+        assert _SPONSOR_NEEDED_ASSERT_RE.search(label.lower()), label
+        assert _sponsorship_assertion_polarity(label) is False, label
+    # The affirmative shape is unambiguous in the other direction.
+    assert _sponsorship_assertion_polarity(
+        "I will require visa sponsorship.") is True
+
+
+def test_affirmative_sponsorship_checkbox_is_never_ticked_on_eu_work_rights():
+    # The first-person affirmative shape of the trap, alongside the live
+    # interrogative one: the owner's EU rights make "authorized to work" TRUE,
+    # and a fix that reached this box through the right-to-work truth would tick
+    # it from that Yes. The box asserts sponsorship IS required, which is FALSE.
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field("q_reqspon", "I will require visa sponsorship.",
+                          type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_reqspon" not in resolved.values
+    assert resolved.values.get("q_reqspon") is not True
+    assert "never falsely checked" in dict(resolved.skipped)["q_reqspon"]
+
+
+def test_work_auth_checkbox_is_not_captured_by_sponsorship_intent():
+    # The non-regression on the currently-correct path. `_select_intent` tests
+    # `_SPONSOR_INTENT_RE` BEFORE right-to-work, so the guard that matters is
+    # that a pure work-auth label is not swallowed by the sponsorship branch and
+    # sent through the inverted polarity. Pinned at both levels: the classifier
+    # still sorts it as an assertion, and the true EU claim still ticks while the
+    # false US claim still parks -- exactly as before the fix.
+    assert _classify_checkbox(
+        "Are you legally authorized to work in the United States?") == "assertion"
+    ssot = _consent_policy_ssot(extra={
+        "work_authorization": {"us": {"sponsorship_required": True},
+                               "eu": True}})
+    eu = resolve_values(_fieldmap(_field(
+        "q_eu", "Are you legally authorized to work in the European Union?",
+        type_="boolean", role="checkbox")), ssot, {})
+    us = resolve_values(_fieldmap(_field(
+        "q_us", "Are you legally authorized to work in the United States?",
+        type_="boolean", role="checkbox")), ssot, {})
+    assert eu.values["q_eu"] is True
+    assert "q_us" not in us.values
+
+
+def test_visa_mentioning_consent_checkbox_fails_closed():
+    """The documented SIDE EFFECT of routing `_classify_checkbox` through
+    `_select_intent`, pinned in BOTH directions so the trade reads precisely and
+    is auditable by a reviewer WITHOUT re-running anything.
+
+    `_SPONSOR_INTENT_RE` matches the bare word "visa" (as well as "sponsor"), and
+    `_classify_checkbox` now consults `_select_intent` BEFORE every consent
+    branch, so ANY checkbox whose text merely contains "visa" is sorted as a
+    sponsorship `assertion`. The SAME mechanism buys a protection and pays a cost,
+    and BOTH labels below contain "visa" so requirement-polarity readability is
+    the only discriminator between them:
+
+    (a) BENEFIT -- a genuine visa/sponsorship claim, label "I will require visa
+        sponsorship.", takes the assertion slot and gets the inverted-polarity
+        protection: on the owner's no-sponsorship-needed truth the claim is
+        FALSE, so the box PARKS instead of being ticked. This is the trap guard,
+        and it is exactly what routing through `_select_intent` delivers.
+
+    (b) COST -- a genuine consent box that merely MENTIONS visa, label "I agree to
+        the processing of my visa documentation for this application", is now
+        ALSO sorted as an assertion; it states no readable requirement polarity,
+        so it parks. MEASURED PRE-fix (HEAD, under this exact `_sponsorship_
+        assertion_ssot`): this label resolved to `value=True` with `reason=None`,
+        i.e. correctly auto-ticked under the `application_privacy` consent policy
+        -- it IS a consent question, not a sponsorship claim. Post-fix it is
+        UNFILLED (`value=<UNSET>`, assertion reason). That is a real fill-rate
+        regression: a REQUIRED such box would force NOT_COMPLETE. The direction is
+        fail-closed (never a false assertion), so this test documents ACTUAL
+        behaviour; whether the trade is acceptable is an owner call, not one this
+        test settles.
+
+    Control: the same privacy box WITHOUT "visa", label "I have read and agree to
+    the Privacy Notice.", still auto-ticks (`value=True`), so (b)'s park is
+    attributable to the visa mention alone and nothing else."""
+    ssot = _sponsorship_assertion_ssot()
+
+    # (a) BENEFIT: a genuine visa/sponsorship claim is the assertion it is, and
+    # the polarity protection parks the FALSE claim rather than ticking it.
+    benefit = _fieldmap(_field(
+        "q_reqvisa", "I will require visa sponsorship.",
+        type_="boolean", role="checkbox"))
+    r_benefit = resolve_values(benefit, ssot, {})
+    assert _classify_checkbox(benefit.fields[0].label) == "assertion"
+    assert "q_reqvisa" not in r_benefit.values
+    assert "never falsely checked" in dict(r_benefit.skipped)["q_reqvisa"]
+
+    # (b) COST: a genuine consent box merely mentioning visa now parks where it
+    # previously auto-ticked (measured pre-fix value=True, see docstring).
+    cost = _fieldmap(_field(
+        "q_visadoc",
+        "I agree to the processing of my visa documentation for this application",
+        type_="boolean", role="checkbox"))
+    r_cost = resolve_values(cost, ssot, {})
+    assert _classify_checkbox(cost.fields[0].label) == "assertion"
+    assert "q_visadoc" not in r_cost.values
+    assert "never falsely checked" in dict(r_cost.skipped)["q_visadoc"]
+
+    # Control: the same box WITHOUT "visa" still ticks -> (b) is attributable to
+    # the visa mention alone.
+    plain = resolve_values(_fieldmap(_field(
+        "q_priv", "I have read and agree to the Privacy Notice.",
+        type_="boolean", role="checkbox")), ssot, {})
+    assert plain.values["q_priv"] is True
+
+
+def test_multiplier_cadence_parses_every_separator_form():
+    # The three live separator spellings of the multiplier form, at unit level:
+    # the end-to-end tests above only exercise "/" .
+    assert _detect_onsite_cadence("4x/week") == (4.0, "week")
+    assert _detect_onsite_cadence("4x per week") == (4.0, "week")
+    assert _detect_onsite_cadence("4x a month") == (4.0, "month")
+
+
+def test_bare_multiplier_is_not_a_cadence():
+    # The separator (per|a|/) is REQUIRED. A bare "2x", and a "2x" bound to any
+    # non-cadence noun, must not be read as an attendance frequency -- otherwise
+    # a compensation sentence would silently drive an in-office answer.
+    assert _detect_onsite_cadence("2x") == (None, None)
+    assert _detect_onsite_cadence("2x your base salary") == (None, None)
+
+
+def test_in_office_re_matches_the_live_gerund_and_the_prior_forms():
+    # Without this half of the gate the cadence fix alone would never fire: the
+    # live CA_9781 question would not be recognised as an in-office question at
+    # all. "coming into the office" is reachable ONLY through the widened
+    # alternative -- the plain "in the office" alternative does not match it,
+    # because the text reads "into the office".
+    assert _IN_OFFICE_RE.search("coming into the office")
+    # The pre-existing forms must keep matching (no regression from the widening).
+    for form in ("come into the office", "in the office", "in-office",
+                 "on-site", "in-person", "3 days in office"):
+        assert _IN_OFFICE_RE.search(form), form

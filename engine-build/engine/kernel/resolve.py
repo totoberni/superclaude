@@ -485,6 +485,33 @@ _WORK_AUTH_INTENT_RE = re.compile(
     r"eligible to work|legally (authori[sz]ed|entitled|permitted|able)|"
     r"work permit|work authori[sz]ation|permitted to work|able to work in|"
     r"do you have the right to work", re.I)
+# What a SPONSORSHIP-intent CHECKBOX asserts about the candidate: that
+# sponsorship IS required (`_SPONSOR_NEEDED_ASSERT_RE`) or that it is NOT
+# (`_SPONSOR_NOT_NEEDED_ASSERT_RE`). The two have OPPOSITE polarity and the
+# negated form is tested FIRST, since "will not require sponsorship" also
+# contains the affirmative verb. A label matching NEITHER states no polarity
+# this code can read, so the checkbox parks rather than guessing -- ticking a
+# sponsorship box from EU right-to-work facts would assert the OPPOSITE of the
+# truth on a legally significant question.
+#
+# Both forms are ANCHORED to the sponsorship noun (`_SPONSOR_NEED_TAIL`): the
+# requirement verb must actually govern sponsorship or a visa, so a negated
+# clause about something ELSE in a multi-sentence label ("I do not need
+# relocation assistance. Will you require visa sponsorship?") cannot flip the
+# polarity of the sponsorship claim and produce a false tick. Without this
+# anchor that exact label reads "do not need" as "sponsorship not required" and
+# ticks a box asserting the OPPOSITE of the truth. The negator window is
+# likewise bounded, sized to the live "will you now or in the future require
+# sponsorship" shape. Pinned by
+# `test_multi_sentence_negated_clause_does_not_flip_sponsorship_polarity`.
+_SPONSOR_NEED_TAIL = (r"(?:requir\w*|need\w*|request\w*)\s+"
+                      r"(?:\w+\s+){0,3}?(?:visa|sponsor\w*)\b")
+_SPONSOR_NOT_NEEDED_ASSERT_RE = re.compile(
+    r"\b(?:do not|don'?t|does not|doesn'?t|did not|will not|won'?t|"
+    r"would not|wouldn'?t|never|no|not)\s+(?:\w+\s+){0,5}?" + _SPONSOR_NEED_TAIL
+    + r"|\bwithout\s+(?:\w+\s+){0,2}?sponsorship\b"
+    + r"|\bno\s+(?:visa\s+)?sponsorship\b", re.I)
+_SPONSOR_NEEDED_ASSERT_RE = re.compile(r"\b" + _SPONSOR_NEED_TAIL, re.I)
 _COVERED_REGION_RE = re.compile(
     r"\beu\b|\be\.u\.\b|european union|\beurope\b|\beea\b|ital", re.I)
 _UNCOVERED_REGION_RE = re.compile(
@@ -800,11 +827,16 @@ def _classify_checkbox(label: str) -> str | None:
     ASSERTION and an ASSESSMENT-participation ask are sorted before the generic
     consent/marketing patterns, and marketing before application_privacy, so a
     box that also says "I agree" is never mis-sorted into legal privacy consent.
-    `_WORK_AUTH_INTENT_RE` is the same right-to-work matcher the yes/no select
-    path uses, reused here per the owner ruling to route the assertion truth
-    lookup through the RS-b work-authorization machinery."""
+    A SPONSORSHIP assertion ("will you require sponsorship") is the same class of
+    factual claim about the candidate, so it takes that same leading slot; it is
+    recognised through `_select_intent`, the SAME classifier the yes/no select
+    path uses (sponsorship tested before right-to-work), so the checkbox and
+    select paths can never drift into two disagreeing notions of intent. Which
+    TRUTH the assertion is checked against, and with which polarity, is
+    `_assertion_proven_true`'s job -- the two intents are NOT interchangeable:
+    EU rights answer Yes to authorization and No to sponsorship-required."""
     low = (label or "").lower()
-    if _WORK_AUTH_INTENT_RE.search(low):
+    if _select_intent(low) is not None:
         return "assertion"
     if _ASSESSMENT_RE.search(low):
         return "assessment"
@@ -865,13 +897,21 @@ def _assertion_proven_true(fld, ssot: SSOT, profile: dict):
     """RS-g/W2: is the factual claim an assertion checkbox makes PROVABLY true?
     True / False / None.
 
-    Routes through the RS-b work-authorization machinery (never a duplicate): the
-    region is read from the assertion LABEL (which names the country, e.g. "...
-    authorized to work in the United States"), falling back to the posting
-    location; the region-keyed `work_authorization` mapping then yields the
-    authorized verdict (`_authorized_verdict`). None when the SSOT carries no
-    region-keyed mapping, the region cannot be placed, or the entry states no
-    usable answer -- the checkbox then stays unchecked (never a false check)."""
+    A SPONSORSHIP-intent label is checked against the sponsorship truth with its
+    OWN (opposite) polarity and never against right-to-work facts; every other
+    assertion is a right-to-work claim. The split is `_select_intent`'s, the same
+    one the yes/no select path applies.
+
+    Right-to-work routes through the RS-b work-authorization machinery (never a
+    duplicate): the region is read from the assertion LABEL (which names the
+    country, e.g. "... authorized to work in the United States"), falling back to
+    the posting location; the region-keyed `work_authorization` mapping then
+    yields the authorized verdict (`_authorized_verdict`). None when the SSOT
+    carries no region-keyed mapping, the region cannot be placed, or the entry
+    states no usable answer -- the checkbox then stays unchecked (never a false
+    check)."""
+    if _select_intent(fld.label) == "sponsorship":
+        return _sponsorship_assertion_proven_true(fld, ssot)
     raw = ssot.get("work_authorization")
     if raw is MISSING:
         raw = ssot.get("canned_answers.work_authorization")
@@ -887,6 +927,42 @@ def _assertion_proven_true(fld, ssot: SSOT, profile: dict):
     if entry is MISSING:
         return None
     return _authorized_verdict(entry)
+
+
+def _sponsorship_assertion_proven_true(fld, ssot: SSOT):
+    """Is the SPONSORSHIP claim a checkbox makes PROVABLY true? True/False/None.
+
+    The polarity is the INVERSE of right-to-work's and is never derived from it:
+    the owner's EU rights mean Yes to "authorized to work" but No to "require
+    sponsorship", so a box asserting that sponsorship IS required is true only
+    when the SSOT says sponsorship is needed. The truth comes from
+    `_sponsorship_needed`, the same source the sponsorship SELECT answers from.
+
+    Parks (None) on three ambiguities, each of which would otherwise be a guess
+    on a legally significant question: a region the SSOT does not cover (the same
+    `_region_ambiguous` gate the select path applies, so the checkbox path is
+    never the more permissive of the two), a label whose requirement polarity
+    this code cannot read, and an SSOT that does not establish the requirement."""
+    if _region_ambiguous(fld.label):
+        return None
+    asserted = _sponsorship_assertion_polarity(fld.label)
+    if asserted is None:
+        return None
+    needed = _sponsorship_needed(ssot)
+    if needed is None:
+        return None
+    return asserted is needed
+
+
+def _sponsorship_assertion_polarity(label: str):
+    """Does the label assert that sponsorship IS required (True), that it is NOT
+    (False), or state no readable polarity (None -> the caller parks)?"""
+    low = (label or "").lower()
+    if _SPONSOR_NOT_NEEDED_ASSERT_RE.search(low):
+        return False
+    if _SPONSOR_NEEDED_ASSERT_RE.search(low):
+        return True
+    return None
 
 
 def _consent_ratified(ssot: SSOT) -> bool:
@@ -1314,11 +1390,19 @@ _ONSITE_CADENCE_PATTERNS = (
     (re.compile(r"(\d+)\s*times?\s*(?:per|a|/)\s*month", re.I), "month"),
     (re.compile(r"(\d+)\s*times?\s*(?:per|a|/)\s*week", re.I), "week"),
     (re.compile(r"(\d+)\s*days?\s*in\s*(?:the\s*)?office", re.I), "week"),
+    # The MULTIPLIER form ("4x/week", "4x per month"), live on workable's
+    # CA_9781. The per|a|/ separator is REQUIRED, matching the shapes above, so a
+    # bare "2x" or a "2x your week" phrase is not read as a cadence.
+    (re.compile(r"(\d+)\s*x\s*(?:per|a|/)\s*month", re.I), "month"),
+    (re.compile(r"(\d+)\s*x\s*(?:per|a|/)\s*week", re.I), "week"),
 )
 
+# The gerund "coming into the office" is the live CA_9781 wording; the bare
+# "come into the office" alternative this pattern shipped with did not reach it.
 _IN_OFFICE_RE = re.compile(
     r"in[\s-]*office|in the office|on[\s-]*site|in[\s-]*person|"
-    r"come\s+in(?:to)?\s+the\s+office|days?\s+in\s+(?:the\s+)?office", re.I)
+    r"com(?:e|ing)\s+in(?:to)?\s+the\s+office|days?\s+in\s+(?:the\s+)?office",
+    re.I)
 
 # The work_authorization candidate paths (mirrors the work-auth `_ANSWER_MATCHERS`
 # row): a dict resolved via one of these is region-keyed and routed to the
