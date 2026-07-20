@@ -17,10 +17,10 @@ Two jobs, both DETERMINISTIC and OFFLINE:
    write-your-answer field) that `bin/generate_answers.py` produced OFFLINE, on
    toto, from the SSOT. Generation is a separate tool the engine NEVER imports.
 
-STATUS: staged plumbing. Nothing in the engine calls `apply_content_overlay` yet;
-the vendor loops and the acceptance gate are wired to it in a later stage. Every
-statement below about what the gate or a vendor loop DOES with the overlay's
-report describes the intended contract of that wiring, not code that runs today.
+STATUS: live. `w5_accept.py` wires `apply_content_overlay` into the fill path: it
+calls `resolve_values`, then this overlay (which ADDS resolved values), then the
+browser fill consumes the mutated values. The overlay's report is built and read
+by that same acceptance harness.
 
 Hard invariants (gate-enforced):
 
@@ -72,7 +72,11 @@ import yaml
 
 from engine.kernel.contracts import Field, FieldMap, FieldValue, ResolvedValues
 from engine.kernel.fill_toolkit import _is_upload_field
-from engine.kernel.resolve import _DECLINE_SECTIONS, TOS_FORBIDDEN_SKIP_PREFIX
+from engine.kernel.resolve import (
+    _DECLINE_SECTIONS,
+    _missing_path_guess,
+    TOS_FORBIDDEN_SKIP_PREFIX,
+)
 from engine.kernel.ssot import MISSING, SSOT
 
 CONTENT_VERSION = "1"
@@ -440,6 +444,13 @@ NO_DISCOVERY_SOURCE = "discovery source absent"
 HOW_HEARD_NO_DEFAULT = "how-did-you-hear: no canned default seeded"
 HOW_HEARD_NO_OPTION = ("how-did-you-hear: canned value matches no option and no "
                        "Other fallback is available")
+# H.2 (owner ruling 2026-07-20): the paired "if other, please specify" free-text
+# box is only a truthful fill WHEN the how-heard primary actually resolved to its
+# Other option. When the primary landed on a real option ("Job board") or no
+# primary is on the form, a seeded specify value is CLEARED with this reason, not
+# left to orphan an "Other" note beside a non-Other answer.
+SPECIFY_CLEARED_NOT_OTHER = ("specify text cleared: how-heard primary did not "
+                             "resolve to Other (owner ruling H.2 2026-07-20)")
 # The referral box the form did not ask for. OWNED and left EMPTY: owning it is
 # what stops the generic ladder behind the policy from volunteering an LLM-written
 # "a member of your team referred me" into a box nobody asked (see
@@ -1185,6 +1196,50 @@ class OverlayReport:
     misrouted: list[tuple[str, str]] = field(default_factory=list)
 
 
+def _how_heard_primary_is_other(fieldmap: FieldMap,
+                                resolved: ResolvedValues) -> bool:
+    """True iff a how-did-you-hear PRIMARY field resolved to its own "Other"
+    option (owner ruling H.2, 2026-07-20).
+
+    The `FieldValue` carries no policy source tag, so Other-ness is RE-DERIVED
+    from the resolved VALUE: a how-heard field (label in `_HOW_HEARD_KEYWORDS`)
+    picked Other exactly when its resolved value equals `_other_option` of its own
+    option list. False when no how-heard primary is on the form, or none resolved
+    to Other (conservative: with no Other context the paired specify box has
+    nothing to specify)."""
+    values = resolved.values
+    for fld in fieldmap.fields:
+        label = _normalize(fld.label)
+        if not any(word in label for word in _HOW_HEARD_KEYWORDS):
+            continue
+        other = _other_option(fld.options)
+        if other is not None and values.get(fld.key) == other:
+            return True
+    return False
+
+
+def _clear_specify_when_primary_not_other(resolved: ResolvedValues,
+                                          fieldmap: FieldMap) -> None:
+    """H.2 cross-field post-pass: the "if other, please specify" box is a truthful
+    fill ONLY when the how-heard primary resolved to Other. When it did not (or
+    there is no primary), MOVE any seeded specify value from the filled fields to
+    `skipped` with an honest reason, so a real answer like "Job board" never drags
+    an orphan "Other" note onto the form. Mutates `resolved` in place.
+
+    The specify field is identified the same way the kernel resolver FILLED it: its
+    exact-slug guess is `OTHER_SPECIFY_PATH`. NOT-REQUIRED branch only (the specify
+    box is optional); no conditional-display probing, no REQUIRED-case seeding."""
+    if _how_heard_primary_is_other(fieldmap, resolved):
+        return
+    kept: list[FieldValue] = []
+    for fv in resolved.fields:
+        if _missing_path_guess(fv.label) == OTHER_SPECIFY_PATH:
+            resolved.skipped.append((fv.key, SPECIFY_CLEARED_NOT_OTHER))
+            continue
+        kept.append(fv)
+    resolved.fields[:] = kept
+
+
 def apply_content_overlay(resolved: ResolvedValues, fieldmap: FieldMap, ssot: SSOT,
                           *, generated: GeneratedAnswers | None = None,
                           posting_lang: str = "en") -> OverlayReport:
@@ -1298,6 +1353,10 @@ def apply_content_overlay(resolved: ResolvedValues, fieldmap: FieldMap, ssot: SS
         report.applied.append((key, source))
 
     resolved.skipped[:] = still_skipped
+    # H.2: the how-heard primary now carries its FINAL resolved option (the loop
+    # above ran `_how_heard_verdict`), so the paired specify box can be cleared
+    # when that primary did not land on Other.
+    _clear_specify_when_primary_not_other(resolved, fieldmap)
     return report
 
 

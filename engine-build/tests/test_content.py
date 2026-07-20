@@ -20,12 +20,13 @@ from engine.content import (
     ContentSchemaError,
     GeneratedAnswer,
     GeneratedAnswers,
+    SPECIFY_CLEARED_NOT_OTHER,
     TosForbidden,
     apply_content_overlay,
     load_generated_answers,
 )
 from engine.kernel.contracts import Field, FieldMap, FieldValue, Locator, ResolvedValues
-from engine.kernel.resolve import TOS_FORBIDDEN_SKIP_PREFIX
+from engine.kernel.resolve import TOS_FORBIDDEN_SKIP_PREFIX, resolve_values
 from engine.kernel.ssot import SSOT
 
 FIXTURES = Path(__file__).parent / "fixtures" / "content"
@@ -206,6 +207,85 @@ def test_how_heard_lever_style_direct_match() -> None:
     assert resolved.values == {"q_hear": "LinkedIn"}
     assert report.applied == [
         ("q_hear", "canned:canned_answers.how_did_you_hear_default")]
+
+
+# -- H.2: clear the "if other, please specify" box when the primary is NOT Other -
+# Live defect (ashby, 2026-07): the specify box is a SEPARATE field, filled by the
+# kernel's exact-slug route whenever `if_other_please_specify_below` is seeded,
+# with no awareness of the primary. On a form whose primary how-heard resolved to a
+# real option ("Job board") the specify box still got the seed, orphaning an
+# "Other" note beside a non-Other answer. Owner ruling H.2: when the primary is NOT
+# Other, CLEAR the specify text. These exercise the REAL pipeline (kernel
+# `resolve_values` then the content overlay), because the primary's Other/not-Other
+# value is only known AFTER the overlay's `_how_heard_verdict` runs.
+
+def _hear_and_specify_map(options: list[str]):
+    primary = make_field("q_hear", "How did you hear about ElevenLabs?",
+                         type_="multi_value_single_select", required=True,
+                         options=options)
+    specify = make_field("q_specify", "If other, please specify below")
+    return primary, specify, make_map(primary, specify)
+
+
+def _resolve_then_overlay(fmap: FieldMap, ssot: SSOT):
+    """The production order: the kernel resolver first (fills the specify from its
+    exact slug, skips the primary), then the content overlay (resolves the primary
+    and runs the H.2 specify post-pass)."""
+    resolved = resolve_values(fmap, ssot, {})
+    report = apply_content_overlay(resolved, fmap, ssot)
+    return resolved, report
+
+
+def test_how_heard_specify_cleared_when_primary_is_real_option() -> None:
+    # Acceptance 1 (the "waste of time" bug): primary resolves to a REAL option and
+    # the specify seed is present -> the specify box is CLEARED.
+    ssot = SSOT({"canned_answers": {
+        "how_did_you_hear_default": "Job board",
+        "if_other_please_specify_below": "LinkedIn"}})
+    _, specify, fmap = _hear_and_specify_map(_ASHBY_HEAR_OPTIONS)
+    resolved, _report = _resolve_then_overlay(fmap, ssot)
+    assert resolved.values["q_hear"] == "Job board"
+    assert "q_specify" not in resolved.values
+    assert (specify.key, SPECIFY_CLEARED_NOT_OTHER) in resolved.skipped
+
+
+def test_how_heard_specify_kept_when_primary_is_other() -> None:
+    # Acceptance 2: primary resolves to Other (default matches no option, seed
+    # present) -> the specify box IS filled with the seed value.
+    ssot = SSOT({"canned_answers": {
+        "how_did_you_hear_default": "A former colleague",
+        "if_other_please_specify_below": "LinkedIn"}})
+    _, specify, fmap = _hear_and_specify_map(_ASHBY_HEAR_OPTIONS)
+    resolved, _report = _resolve_then_overlay(fmap, ssot)
+    assert resolved.values["q_hear"] == "Other"
+    assert resolved.values["q_specify"] == "LinkedIn"
+    assert (specify.key, SPECIFY_CLEARED_NOT_OTHER) not in resolved.skipped
+
+
+def test_how_heard_specify_cleared_when_no_primary_field() -> None:
+    # Acceptance 3: the specify box is seeded but NO how-heard primary is on the
+    # form -> clear it conservatively (no Other context to justify it).
+    ssot = SSOT({"canned_answers": {"if_other_please_specify_below": "LinkedIn"}})
+    specify = make_field("q_specify", "If other, please specify below")
+    fmap = make_map(specify)
+    resolved = resolve_values(fmap, ssot, {})
+    apply_content_overlay(resolved, fmap, ssot)
+    assert "q_specify" not in resolved.values
+    assert (specify.key, SPECIFY_CLEARED_NOT_OTHER) in resolved.skipped
+
+
+def test_how_heard_post_pass_leaves_primary_untouched() -> None:
+    # Acceptance 4: the H.2 post-pass only ever clears the specify box; the
+    # primary's own resolved option is identical with or without a specify sibling.
+    canned = {"how_did_you_hear_default": "Job board",
+              "if_other_please_specify_below": "LinkedIn"}
+    primary, _specify, fmap = _hear_and_specify_map(_ASHBY_HEAR_OPTIONS)
+    resolved, _ = _resolve_then_overlay(fmap, SSOT({"canned_answers": canned}))
+    assert resolved.values["q_hear"] == "Job board"
+
+    lone_ssot = SSOT({"canned_answers": {"how_did_you_hear_default": "Job board"}})
+    lone, _ = _resolve_then_overlay(make_map(primary), lone_ssot)
+    assert lone.values["q_hear"] == "Job board"
 
 
 def test_overlay_relocation_verbose_dropdown_end_to_end(ssot: SSOT) -> None:
