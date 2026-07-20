@@ -45,6 +45,22 @@ from engine.kernel import capture_toolkit
 # walk below also reaches `w5_accept.py` (the live fill entrypoint) and `bin/`.
 ENGINE_DIR = Path(capture_toolkit.__file__).parents[2]
 
+# Directory names that mark a subtree as NOT first-party source: a nested
+# dev virtualenv, a vendored dependency cache, or VCS/bytecode metadata. A
+# third-party library (e.g. Playwright's own `_impl/_browser.py`, reachable
+# under a `.venv-dev` inside the repo root the walk below starts from) is
+# free to create its own unpinned browser contexts; scanning it produces a
+# false failure that would mask a REAL first-party omission under the noise.
+_NON_FIRST_PARTY_DIR_NAMES = frozenset({
+    ".venv-dev", ".venv", "venv", "site-packages", "node_modules",
+    "__pycache__", ".git",
+})
+
+
+def _is_first_party_source(pyfile: Path) -> bool:
+    """True iff no path component of `pyfile` names a dependency directory."""
+    return _NON_FIRST_PARTY_DIR_NAMES.isdisjoint(pyfile.parts)
+
 # The calls that unconditionally hand back a NEW live BrowserContext. Every
 # one of them, anywhere in the engine-build tree, must carry the pin.
 _CONTEXT_CREATORS = frozenset({"new_context", "launch_persistent_context"})
@@ -318,6 +334,8 @@ def test_every_kernel_context_creation_carries_the_pin():
     """
     checked = 0
     for pyfile in sorted(ENGINE_DIR.rglob("*.py")):
+        if not _is_first_party_source(pyfile):
+            continue
         tree = ast.parse(pyfile.read_text(), filename=str(pyfile))
         consts = _module_string_constants(tree)
         owners = _scope_owners(tree)
