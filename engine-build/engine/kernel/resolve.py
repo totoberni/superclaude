@@ -512,6 +512,58 @@ _SPONSOR_NOT_NEEDED_ASSERT_RE = re.compile(
     + r"|\bwithout\s+(?:\w+\s+){0,2}?sponsorship\b"
     + r"|\bno\s+(?:visa\s+)?sponsorship\b", re.I)
 _SPONSOR_NEEDED_ASSERT_RE = re.compile(r"\b" + _SPONSOR_NEED_TAIL, re.I)
+# H.1 (owner ruling 2026-07-20): two MORE grammatical shapes, so the detector
+# reads requirement polarity BIDIRECTIONALLY rather than only the verb-then-noun
+# requirement form above. Each stays anchored to the sponsorship/visa noun, so a
+# requirement verb elsewhere in a multi-sentence label cannot flip the polarity.
+#
+# Noun-then-verb requirement ("sponsorship is required", "a visa is needed"): the
+# noun is the SUBJECT a copula plus a requirement verb governs. The noun-to-copula
+# gap is bounded and negator-free (a period ends it, and a "not"/"no" token fails
+# it), so a negated or cross-sentence requirement reads None, never a false
+# REQUIRED. A "not"/"no" BETWEEN the copula and the verb ("is not needed") also
+# fails to match, since the copula must be followed directly by the requirement
+# verb.
+_SPONSOR_NEED_HEAD_RE = re.compile(
+    r"\b(?:visa|sponsor\w*)\s+"
+    r"(?:(?!\bnot\b|\bno\b|\bnever\b|\bwithout\b)\w+\s+){0,3}?"
+    r"(?:is|are|was|were|be|been|being|will\s+be|would\s+be)\s+"
+    r"(?:requir\w*|need\w*)\b", re.I)
+# Noun-then-verb NEGATED requirement ("No visa is required.", "No work visa is
+# required for this role."): a leading negator (no|not|never|without) governs the
+# SAME visa/sponsorship noun the copula plus requirement verb governs, so the
+# label asserts sponsorship is NOT required. Tested FIRST, before the affirmative
+# `_SPONSOR_NEED_HEAD_RE`, which would otherwise match the bare "visa is required"
+# tail and read the leading negator as REQUIRED -- the exact false-legal fill this
+# shape prevents. Anchored like the affirmative head: the negator-to-noun and
+# noun-to-copula windows are bounded and cannot cross a period, so a negator about
+# a DIFFERENT clause ("No relocation is required. Will visa sponsorship be
+# required?") never reaches the sponsorship noun and the genuine requirement still
+# reads REQUIRED.
+_SPONSOR_NOT_NEEDED_HEAD_RE = re.compile(
+    r"\b(?:no|not|never|without)\s+"
+    r"(?:\w+\s+){0,3}?(?:visa|sponsor\w*)\s+"
+    r"(?:(?!\bnot\b|\bno\b|\bnever\b|\bwithout\b)\w+\s+){0,3}?"
+    r"(?:is|are|was|were|be|been|being|will\s+be|would\s+be)\s+"
+    r"(?:requir\w*|need\w*)\b", re.I)
+# Possession/negation NOT-required. Affirmative possession of a work visa / permit
+# / authorization is a NOT-required claim (the candidate already holds the right).
+# The verb-to-object gap admits only determiners/adjectives, so an in-progress
+# verb phrase like "have applied for a visa" (an unproven claim) does NOT read as
+# possession.
+_SPONSOR_HAVE_RE = re.compile(
+    r"\b(?:i\s+)?(?:already\s+|currently\s+)?(?:have|hold|possess|carry)\s+"
+    r"(?:(?:a|an|my|the|valid|current|full|permanent|existing|eu)\s+){0,3}?"
+    r"(?:work\s+visa|work\s+permit|residence\s+permit|"
+    r"work\s+authori[sz]ation|visa|permit)\b", re.I)
+# A NEGATED possession ("do not have a visa", "without a work permit") SUPPRESSES
+# the possession read: the candidate LACKS the right, which does not establish
+# that no sponsorship is needed, so it fails closed to None rather than inverting.
+_SPONSOR_NEG_POSSESS_RE = re.compile(
+    r"\b(?:do not|don'?t|does not|doesn'?t|did not|will not|won'?t|never|"
+    r"no longer|not|without|lack\w*)\s+"
+    r"(?:\w+\s+){0,3}?(?:have|hold|possess|carry|visa|work\s+permit|"
+    r"residence\s+permit|permit)\b", re.I)
 _COVERED_REGION_RE = re.compile(
     r"\beu\b|\be\.u\.\b|european union|\beurope\b|\beea\b|ital", re.I)
 _UNCOVERED_REGION_RE = re.compile(
@@ -834,10 +886,34 @@ def _classify_checkbox(label: str) -> str | None:
     select paths can never drift into two disagreeing notions of intent. Which
     TRUTH the assertion is checked against, and with which polarity, is
     `_assertion_proven_true`'s job -- the two intents are NOT interchangeable:
-    EU rights answer Yes to authorization and No to sponsorship-required."""
+    EU rights answer Yes to authorization and No to sponsorship-required.
+
+    H.1 (owner ruling 2026-07-20): the sponsorship-intent gate is RELAXED. A
+    work-auth assertion always takes the assertion slot, and a SPONSORSHIP-intent
+    label takes it only when `_sponsorship_assertion_polarity` reads a requirement
+    polarity. A sponsorship-intent label with NO readable polarity is not a legal
+    claim, so a genuine consent box that merely MENTIONS "visa" falls through to
+    the consent branches and auto-ticks again. The fall-through is SCOPED: a bare
+    sponsorship mention matching NO consent class stays a (parked) assertion, so a
+    naked sponsorship mention is still never auto-ticked."""
     low = (label or "").lower()
-    if _select_intent(low) is not None:
+    intent = _select_intent(low)
+    if intent == "work_auth":
         return "assertion"
+    if intent == "sponsorship":
+        if _sponsorship_assertion_polarity(low) is not None:
+            return "assertion"
+        consent = _consent_class_of(low)
+        return consent if consent is not None else "assertion"
+    return _consent_class_of(low)
+
+
+def _consent_class_of(low: str) -> str | None:
+    """The non-assertion consent class of an already-lowercased label, or None.
+
+    Order is load-bearing: an ASSESSMENT-participation ask, then a talent-pool
+    opt-in, then marketing, then application_privacy, so a box that also says "I
+    agree" is never mis-sorted into legal privacy consent."""
     if _ASSESSMENT_RE.search(low):
         return "assessment"
     if _TALENT_POOL_RE.search(low):
@@ -956,11 +1032,32 @@ def _sponsorship_assertion_proven_true(fld, ssot: SSOT):
 
 def _sponsorship_assertion_polarity(label: str):
     """Does the label assert that sponsorship IS required (True), that it is NOT
-    (False), or state no readable polarity (None -> the caller parks)?"""
-    low = (label or "").lower()
+    (False), or state no readable polarity (None -> the caller parks)?
+
+    H.1 (owner ruling 2026-07-20): reads polarity from THREE grammatical shapes,
+    each anchored to the sponsorship/visa noun so a requirement verb elsewhere in
+    a multi-sentence label cannot flip it:
+      - verb-then-noun requirement ("require visa sponsorship") -> REQUIRED
+      - noun-then-verb requirement ("sponsorship is required")  -> REQUIRED
+      - possession / negated requirement, verb-then-noun OR noun-then-verb
+        ("I have a work visa", "do not require sponsorship",
+        "No visa is required") -> NOT-REQUIRED
+    NOT-required forms are tested FIRST: a negated requirement also contains the
+    affirmative verb (so order defuses it), and a possession claim is
+    unambiguously not-required. A "/" is normalised to a space so a slash-joined
+    verb ("require/ask for visa sponsorship") still reads as a requirement. An
+    in-progress or negated possession ("have applied for a visa", "do not have a
+    visa") reads None rather than a false NOT-required."""
+    low = re.sub(r"/", " ", (label or "").lower())
     if _SPONSOR_NOT_NEEDED_ASSERT_RE.search(low):
         return False
+    if _SPONSOR_HAVE_RE.search(low) and not _SPONSOR_NEG_POSSESS_RE.search(low):
+        return False
+    if _SPONSOR_NOT_NEEDED_HEAD_RE.search(low):
+        return False
     if _SPONSOR_NEEDED_ASSERT_RE.search(low):
+        return True
+    if _SPONSOR_NEED_HEAD_RE.search(low):
         return True
     return None
 

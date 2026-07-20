@@ -2657,44 +2657,39 @@ def test_work_auth_checkbox_is_not_captured_by_sponsorship_intent():
     assert "q_us" not in us.values
 
 
-def test_visa_mentioning_consent_checkbox_fails_closed():
-    """The documented SIDE EFFECT of routing `_classify_checkbox` through
-    `_select_intent`, pinned in BOTH directions so the trade reads precisely and
-    is auditable by a reviewer WITHOUT re-running anything.
+def test_visa_mentioning_consent_checkbox_auto_ticks():
+    """H.1 (owner ruling 2026-07-20): relaxing the gate for no-polarity visa
+    mentions restores consent auto-tick.
 
-    `_SPONSOR_INTENT_RE` matches the bare word "visa" (as well as "sponsor"), and
-    `_classify_checkbox` now consults `_select_intent` BEFORE every consent
-    branch, so ANY checkbox whose text merely contains "visa" is sorted as a
-    sponsorship `assertion`. The SAME mechanism buys a protection and pays a cost,
-    and BOTH labels below contain "visa" so requirement-polarity readability is
-    the only discriminator between them:
+    This test FLIPS the former `test_visa_mentioning_consent_checkbox_fails_closed`
+    pin. Before H.1, `_classify_checkbox` consulted `_select_intent` before every
+    consent branch, so ANY checkbox merely containing "visa" was sorted as a
+    sponsorship `assertion`; a genuine consent box that only MENTIONED visa then
+    parked (a real fill-rate cost). H.1 splits the two directions cleanly by
+    requirement-polarity readability, and BOTH labels below contain "visa" so that
+    readability is the only discriminator between them:
 
-    (a) BENEFIT -- a genuine visa/sponsorship claim, label "I will require visa
-        sponsorship.", takes the assertion slot and gets the inverted-polarity
-        protection: on the owner's no-sponsorship-needed truth the claim is
-        FALSE, so the box PARKS instead of being ticked. This is the trap guard,
-        and it is exactly what routing through `_select_intent` delivers.
+    (a) BENEFIT (UNCHANGED) -- a genuine visa/sponsorship claim, label "I will
+        require visa sponsorship.", reads REQUIRED polarity, keeps the assertion
+        slot, and on the owner's no-sponsorship-needed truth the claim is FALSE,
+        so the box still PARKS instead of being ticked. The trap guard is intact.
 
-    (b) COST -- a genuine consent box that merely MENTIONS visa, label "I agree to
-        the processing of my visa documentation for this application", is now
-        ALSO sorted as an assertion; it states no readable requirement polarity,
-        so it parks. MEASURED PRE-fix (HEAD, under this exact `_sponsorship_
-        assertion_ssot`): this label resolved to `value=True` with `reason=None`,
-        i.e. correctly auto-ticked under the `application_privacy` consent policy
-        -- it IS a consent question, not a sponsorship claim. Post-fix it is
-        UNFILLED (`value=<UNSET>`, assertion reason). That is a real fill-rate
-        regression: a REQUIRED such box would force NOT_COMPLETE. The direction is
-        fail-closed (never a false assertion), so this test documents ACTUAL
-        behaviour; whether the trade is acceptable is an owner call, not one this
-        test settles.
+    (b) RESTORED -- a genuine consent box that merely MENTIONS visa, label "I agree
+        to the processing of my visa documentation for this application", states
+        NO readable requirement polarity, so step 2 lets it fall through to the
+        consent branches: it is classified `application_privacy` and AUTO-TICKS
+        under the consent policy again (its pre-`_select_intent`-routing
+        behaviour). The former assertion-park assertion is DELIBERATELY converted
+        to an auto-tick assertion here; the fail-open hole is NOT reopened, because
+        a label that DOES assert a requirement still parks (see (a)).
 
     Control: the same privacy box WITHOUT "visa", label "I have read and agree to
-    the Privacy Notice.", still auto-ticks (`value=True`), so (b)'s park is
-    attributable to the visa mention alone and nothing else."""
+    the Privacy Notice.", also auto-ticks, so (b)'s tick is the consent policy at
+    work and not an accident of the visa mention."""
     ssot = _sponsorship_assertion_ssot()
 
-    # (a) BENEFIT: a genuine visa/sponsorship claim is the assertion it is, and
-    # the polarity protection parks the FALSE claim rather than ticking it.
+    # (a) BENEFIT (unchanged): a genuine visa/sponsorship claim is the assertion it
+    # is, and the polarity protection parks the FALSE claim rather than ticking it.
     benefit = _fieldmap(_field(
         "q_reqvisa", "I will require visa sponsorship.",
         type_="boolean", role="checkbox"))
@@ -2703,23 +2698,203 @@ def test_visa_mentioning_consent_checkbox_fails_closed():
     assert "q_reqvisa" not in r_benefit.values
     assert "never falsely checked" in dict(r_benefit.skipped)["q_reqvisa"]
 
-    # (b) COST: a genuine consent box merely mentioning visa now parks where it
-    # previously auto-ticked (measured pre-fix value=True, see docstring).
+    # (b) RESTORED: a genuine consent box merely mentioning visa now AUTO-TICKS
+    # where the pre-H.1 pin asserted it parked. The former assertions were
+    # `_classify_checkbox(...) == "assertion"`, `"q_visadoc" not in r_cost.values`
+    # and `"never falsely checked" in ...skipped`; they are converted below.
     cost = _fieldmap(_field(
         "q_visadoc",
         "I agree to the processing of my visa documentation for this application",
         type_="boolean", role="checkbox"))
     r_cost = resolve_values(cost, ssot, {})
-    assert _classify_checkbox(cost.fields[0].label) == "assertion"
-    assert "q_visadoc" not in r_cost.values
-    assert "never falsely checked" in dict(r_cost.skipped)["q_visadoc"]
+    assert _classify_checkbox(cost.fields[0].label) == "application_privacy"
+    assert r_cost.values["q_visadoc"] is True
 
-    # Control: the same box WITHOUT "visa" still ticks -> (b) is attributable to
-    # the visa mention alone.
+    # Control: the same box WITHOUT "visa" also ticks -> (b) is the consent policy,
+    # not an accident of the visa mention.
     plain = resolve_values(_fieldmap(_field(
         "q_priv", "I have read and agree to the Privacy Notice.",
         type_="boolean", role="checkbox")), ssot, {})
     assert plain.values["q_priv"] is True
+
+
+# --- H.1 bidirectional sponsorship polarity + consent-mention relaxation ------
+# H.1 (owner ruling 2026-07-20). Step 1 teaches `_sponsorship_assertion_polarity`
+# THREE grammatical shapes (verb-then-noun, noun-then-verb, possession/negation);
+# step 2 then lets a no-polarity visa MENTION fall through `_classify_checkbox` to
+# the consent branches. The ORDER is load-bearing: without step 1 a noun-then-verb
+# requirement box ("... sponsorship is needed ...") would read no polarity and be
+# auto-ticked by the step-2 relaxation, asserting a FALSE legal requirement.
+
+
+def test_h1_noun_then_verb_requirement_reads_required_polarity():
+    # NEW shape: the visa/sponsorship noun is the SUBJECT a copula plus a
+    # requirement verb governs. Every form step 2 depends on to STAY an assertion
+    # (and never fall through to a consent tick).
+    for label in ("I acknowledge sponsorship is needed for this role.",
+                  "Sponsorship is required.",
+                  "A visa is required to work here.",
+                  "Visa sponsorship will be required for this position."):
+        assert _sponsorship_assertion_polarity(label) is True, label
+
+
+def test_h1_possession_reads_not_required_polarity():
+    # NEW shape: possessing a work visa / permit / authorization is a NOT-required
+    # claim (the candidate already holds the right).
+    for label in ("I have a work visa.",
+                  "I hold a valid work permit.",
+                  "I currently possess a residence permit."):
+        assert _sponsorship_assertion_polarity(label) is False, label
+    # The existing verb-then-noun negation still reads NOT-required.
+    assert _sponsorship_assertion_polarity("I do not require sponsorship.") is False
+
+
+def test_h1_in_progress_and_negated_possession_stay_fail_closed_none():
+    # The guards the possession shape needs, both fail-closed to None rather than
+    # inverting polarity: an IN-PROGRESS claim ("have applied for a visa", the
+    # candidate does NOT yet hold it) and a NEGATED possession ("do not have a
+    # work visa", the candidate LACKS it) must not read NOT-required.
+    assert _sponsorship_assertion_polarity("I have applied for a visa.") is None
+    assert _sponsorship_assertion_polarity("I do not have a work visa.") is None
+    assert _sponsorship_assertion_polarity("I have no visa or work permit.") is None
+
+
+def test_h1_noun_then_verb_survives_multi_sentence_negated_clause():
+    # The anchor discipline carried to the NEW noun-then-verb shape: a negated
+    # requirement about something ELSE in a prior sentence must not flip the
+    # sponsorship polarity. "Sponsorship is required" reads REQUIRED despite the
+    # leading "do not need relocation" (the period ends the negator's window).
+    label = ("I do not need any relocation assistance. Sponsorship is required "
+             "to work in the EU.")
+    assert _sponsorship_assertion_polarity(label) is True
+
+
+def test_h1_slash_joined_requirement_verb_reads_required():
+    # Acceptance C at unit level: a slash-joined verb ("require/ask") must still
+    # read the requirement it governs (a "/" is a word separator in real labels).
+    assert _sponsorship_assertion_polarity(
+        "Will you require/ask for visa sponsorship to work in the EU?") is True
+
+
+def test_h1_acknowledge_sponsorship_needed_classifies_assertion_and_never_ticks():
+    # ACCEPTANCE A: a noun-then-verb requirement box is an ASSERTION with REQUIRED
+    # polarity, and on the owner's no-sponsorship-needed EU truth the claim is
+    # FALSE, so it resolves CORRECTLY to NOT ticked (not merely parked): it goes
+    # through the assertion truth machinery and declines the false check. This is
+    # the label that, WITHOUT step 1, would read no polarity and be auto-ticked by
+    # the step-2 relaxation -- the exact fail-open hole the ordering prevents.
+    label = "I acknowledge sponsorship is needed for this role."
+    assert _classify_checkbox(label) == "assertion"
+    assert _sponsorship_assertion_polarity(label) is True
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field("q_ack", label, type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_ack" not in resolved.values
+    assert "never falsely checked" in dict(resolved.skipped)["q_ack"]
+
+
+def test_h1_interrogative_visa_requirement_never_ticks_on_eu_facts():
+    # ACCEPTANCE C: an interrogative required-claim (slash-joined verb) reads
+    # REQUIRED and, being FALSE on the owner's EU facts, is never ticked.
+    label = "Will you require/ask for visa sponsorship to work in the EU?"
+    assert _classify_checkbox(label) == "assertion"
+    assert _sponsorship_assertion_polarity(label) is True
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field("q_reqeu", label, type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_reqeu" not in resolved.values
+    assert "never falsely checked" in dict(resolved.skipped)["q_reqeu"]
+
+
+def test_h1_possession_visa_claim_ticks_true_on_eu_facts():
+    # ACCEPTANCE D: a NOT-required claim (possession, or negated requirement) is
+    # TRUE on the owner's EU facts (no sponsorship needed), so it ticks. Both a
+    # possession shape and the existing negated-requirement shape are exercised.
+    ssot = _sponsorship_assertion_ssot()
+    for key, label in (("q_have", "I have a work visa."),
+                       ("q_nospon2", "I do not require sponsorship.")):
+        assert _classify_checkbox(label) == "assertion", label
+        assert _sponsorship_assertion_polarity(label) is False, label
+        fm = _fieldmap(_field(key, label, type_="boolean", role="checkbox"))
+        resolved = resolve_values(fm, ssot, {})
+        assert resolved.values[key] is True, label
+
+
+def test_h1_bare_sponsorship_mention_without_consent_class_still_parks():
+    # The relaxation is SCOPED: a sponsorship-intent label with no readable
+    # polarity that matches NO consent class stays a (parked) assertion, so a naked
+    # sponsorship mention is never auto-ticked. Guards the narrow fall-through so
+    # `test_sponsorship_checkbox_with_no_readable_polarity_parks` stays honest.
+    assert _classify_checkbox("Visa sponsorship") == "assertion"
+    ssot = _sponsorship_assertion_ssot()
+    fm = _fieldmap(_field("q_bare", "Visa sponsorship",
+                          type_="boolean", role="checkbox"))
+    resolved = resolve_values(fm, ssot, {})
+    assert "q_bare" not in resolved.values
+    assert "never falsely checked" in dict(resolved.skipped)["q_bare"]
+
+
+# --- RV2 NIT-1: noun-then-verb NEGATED requirement reads NOT-required ----------
+# RV2 NIT-1 (owner ruling 2026-07-20): a leading negator that governs the
+# visa/sponsorship noun in a noun-then-verb requirement ("No visa is required.")
+# reads NOT-required (False), not REQUIRED. Before the fix the affirmative
+# `_SPONSOR_NEED_HEAD_RE` matched the bare "visa is required" tail and read the
+# leading "No" as REQUIRED, ticking a legally significant box with the OPPOSITE of
+# the truth. The new `_SPONSOR_NOT_NEEDED_HEAD_RE` is anchored to the sponsorship
+# noun exactly like the affirmative shapes.
+
+
+def test_nit1_negated_noun_then_verb_requirement_reads_not_required_polarity():
+    # THE fix: a leading negator governing the visa/sponsorship noun in a
+    # noun-then-verb requirement is NOT-required (False). "No visa is required."
+    # and "No work visa is required for this role." read True (REQUIRED) before the
+    # fix -- the exact polarity inversion RV2 NIT-1 flags.
+    for label in ("No visa is required.",
+                  "No sponsorship is needed.",
+                  "No work visa is required for this role."):
+        assert _sponsorship_assertion_polarity(label) is False, label
+
+
+def test_nit1_negated_noun_then_verb_ticks_true_on_eu_facts():
+    # End to end: a NOT-required claim is TRUE on the owner's EU facts (no
+    # sponsorship needed), so it ticks. Mirrors the possession / negated-verb
+    # acceptance, now via the noun-then-verb NEGATED shape: it classifies as an
+    # assertion and, asserted-False == needed-False, resolves to a truthful tick.
+    ssot = _sponsorship_assertion_ssot()
+    for key, label in (("q_novisa", "No visa is required."),
+                       ("q_nospon3", "No sponsorship is needed.")):
+        assert _classify_checkbox(label) == "assertion", label
+        assert _sponsorship_assertion_polarity(label) is False, label
+        fm = _fieldmap(_field(key, label, type_="boolean", role="checkbox"))
+        resolved = resolve_values(fm, ssot, {})
+        assert resolved.values[key] is True, label
+
+
+def test_nit1_affirmative_and_possession_shapes_stay_unchanged():
+    # REGRESSION: the new negated-head detector must not disturb the affirmative
+    # requirement (True), the possession / negated-verb NOT-required (False), or
+    # the in-progress / negated-possession fail-closed (None) shapes.
+    for label in ("Visa is required.",
+                  "Sponsorship is needed.",
+                  "I acknowledge sponsorship is needed for this role."):
+        assert _sponsorship_assertion_polarity(label) is True, label
+    for label in ("I have a work visa.",
+                  "I do not require sponsorship."):
+        assert _sponsorship_assertion_polarity(label) is False, label
+    for label in ("I have applied for a work visa.",
+                  "I do not have a work visa."):
+        assert _sponsorship_assertion_polarity(label) is None, label
+
+
+def test_nit1_negated_head_anchor_survives_multi_sentence_prior_clause():
+    # ANCHOR for the NEW negated-head shape: a negator governing a DIFFERENT clause
+    # must not flip a genuine requirement. "No relocation is required" ends at the
+    # period, so the negated-head detector never reaches the visa/sponsorship noun
+    # of the second sentence, and the real requirement still reads REQUIRED. The
+    # minimum guarantee (must NOT read False) is asserted explicitly.
+    label = "No relocation is required. Will visa sponsorship be required?"
+    assert _sponsorship_assertion_polarity(label) is True
+    assert _sponsorship_assertion_polarity(label) is not False
 
 
 def test_multiplier_cadence_parses_every_separator_form():
