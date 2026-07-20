@@ -3,11 +3,20 @@
 The subprocess is faked via an injected runner, so no `claude` process ever
 starts and the no-network fixture stays satisfied. The canned JSON mirrors the
 real `claude -p --output-format json` schema captured in spec section 2.
+
+Exception: the decode-policy tests at the bottom DO spawn a real local process,
+because decoding is precisely what an injected fake cannot exercise. They run a
+throwaway script that writes fixed bytes and exits; no `claude` binary and no
+socket is involved.
 """
 
 import json
+import logging
 import subprocess
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 from engine.draft import (
     GROUNDING_CONTRACT,
@@ -319,3 +328,108 @@ def test_failed_draft_is_not_touched_by_validation(real_ssot_path):
     assert result.ok is False
     assert result.validation_ok is True
     assert result.validation_violations == []
+
+
+# --------------------------------------------------------------------------- #
+# DECODE POLICY: the model process is a foreign program and can emit bytes that
+# are not valid UTF-8. Under a strict decode ONE such byte raised
+# UnicodeDecodeError out of subprocess, past every fail-soft handler in draft(),
+# and aborted the whole daily run (production, 2026-07-20). These tests pin the
+# non-strict policy AND the signal that keeps a degraded body attributable.
+# --------------------------------------------------------------------------- #
+
+def _invalid_utf8_success_json() -> bytes:
+    """The canned success JSON with a raw 0x88 byte inside the letter body."""
+    return _SUCCESS_JSON.encode("utf-8").replace(b"keen", b"keen\x88")
+
+
+def _fake_claude_bin(tmp_path, payload: bytes, returncode: int = 0) -> str:
+    """An executable stand-in for `claude` that ignores its arguments and writes
+    `payload` to stdout as raw bytes, so the REAL subprocess.run decodes it."""
+    script = tmp_path / "fake_claude"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        f"sys.stdout.buffer.write({payload!r})\n"
+        f"sys.exit({returncode})\n"
+    )
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_strict_decode_would_raise_on_invalid_byte(tmp_path):
+    """Teeth for the regression below: the kwargs draft() used to pass DO raise
+    on this exact input, so the passing tests that follow are not vacuous."""
+    cmd = [_fake_claude_bin(tmp_path, _invalid_utf8_success_json())]
+    with pytest.raises(UnicodeDecodeError):
+        subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+
+def test_real_subprocess_with_invalid_utf8_byte_does_not_raise(tmp_path,
+                                                              real_ssot_path):
+    """End-to-end through the DEFAULT runner (real subprocess.run), the way
+    production runs: an undecodable byte degrades one character instead of
+    aborting the run."""
+    drafter = ClaudeCliDrafter(
+        claude_bin=_fake_claude_bin(tmp_path, _invalid_utf8_success_json()))
+    result = drafter.draft(_POSTING, _BREAKDOWN, _ssot(real_ssot_path))
+    assert result.ok is True
+    assert result.error is None
+    # the body survived apart from the one undecodable byte
+    assert "Dear Hiring Manager," in result.material
+    assert "FIELD DATA" in result.material
+    assert "�" in result.material
+
+
+def test_invalid_utf8_byte_is_recorded_not_silent(tmp_path, real_ssot_path):
+    """The substitution must be attributable: a corrupted draft is never handed
+    back looking identical to a clean one."""
+    drafter = ClaudeCliDrafter(
+        claude_bin=_fake_claude_bin(tmp_path, _invalid_utf8_success_json()))
+    result = drafter.draft(_POSTING, _BREAKDOWN, _ssot(real_ssot_path))
+    assert result.decode_replacements == 1
+    # a clean draft over the same path records nothing, so the signal
+    # discriminates rather than always firing
+    clean = ClaudeCliDrafter(
+        claude_bin=_fake_claude_bin(tmp_path, _SUCCESS_JSON.encode("utf-8")))
+    assert clean.draft(_POSTING, _BREAKDOWN,
+                       _ssot(real_ssot_path)).decode_replacements == 0
+
+
+def test_invalid_utf8_byte_is_logged(tmp_path, real_ssot_path, caplog):
+    drafter = ClaudeCliDrafter(
+        claude_bin=_fake_claude_bin(tmp_path, _invalid_utf8_success_json()))
+    with caplog.at_level(logging.WARNING, logger="engine.draft"):
+        drafter.draft(_POSTING, _BREAKDOWN, _ssot(real_ssot_path))
+    assert any(record.levelno == logging.WARNING and "undecodable" in
+               record.getMessage() for record in caplog.records)
+
+
+def test_runner_is_called_with_non_strict_decode(real_ssot_path):
+    """The injected-runner contract still gets text mode, but never the strict
+    default: this kwarg pair is what stops the crash from coming back."""
+    runner = FakeRunner(_SUCCESS_JSON)
+    ClaudeCliDrafter(runner=runner).draft(_POSTING, _BREAKDOWN,
+                                          _ssot(real_ssot_path))
+    kwargs = runner.calls[0][1]
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "replace"
+
+
+def test_undecodable_stderr_on_failure_is_also_recorded(tmp_path,
+                                                        real_ssot_path):
+    """A non-zero exit whose stderr carries bad bytes must fail soft with the
+    signal attached, not raise."""
+    script = tmp_path / "fake_claude_err"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "sys.stderr.buffer.write(b'boom\\x88boom')\n"
+        "sys.exit(1)\n"
+    )
+    script.chmod(0o755)
+    result = ClaudeCliDrafter(claude_bin=str(script)).draft(
+        _POSTING, _BREAKDOWN, _ssot(real_ssot_path))
+    assert result.ok is False
+    assert "claude exited 1" in result.error
+    assert result.decode_replacements == 1

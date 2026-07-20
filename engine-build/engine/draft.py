@@ -22,11 +22,20 @@ documents `--tools <tools...>` with "Use \"\" to disable all tools", so passing
 `--tools ""` as an explicit empty argument denies every built-in tool. This is
 cleaner and more future-proof than enumerating a `--disallowedTools` deny list,
 and satisfies the spec's intent (b): tool use is not possible.
+
+Decode policy: the CLI's captured output is decoded with an explicit UTF-8
+codec and `errors="replace"`, never the strict default. A single malformed byte
+anywhere in a ~170KB response used to raise `UnicodeDecodeError` out of
+`subprocess`, past the fail-soft handlers below, and abort the whole daily run
+(observed in production 2026-07-20). Replacement keeps that blast radius at one
+character. The substitution is never silent: `DraftResult.decode_replacements`
+counts it and a WARNING names it, so a degraded body is attributable.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -37,6 +46,21 @@ from engine.validate import validate
 from engine.validate.judge import Judge
 
 _DESCRIPTION_CAP = 4000
+
+_LOG = logging.getLogger(__name__)
+
+# Passed to the injected runner in place of a bare `text=True`. Either kwarg puts
+# `subprocess` in text mode, but `text=True` alone decodes strictly and raises on
+# the first invalid byte; these keep the same str-returning contract while
+# degrading a malformed byte to U+FFFD. Kept as a constant so the decode policy
+# has one definition and the regression tests can exercise the real thing.
+_TEXT_DECODE = {"encoding": "utf-8", "errors": "replace"}
+
+# What `errors="replace"` substitutes. Counting it is a deliberate slight
+# over-report: a genuine U+FFFD emitted by the model is indistinguishable from a
+# substituted one, so the signal errs toward flagging a clean body rather than
+# missing a corrupted one.
+_REPLACEMENT_CHAR = "�"
 
 GROUNDING_CONTRACT = (
     "You draft the BODY of a job-application cover letter. Ground EVERY factual "
@@ -134,6 +158,12 @@ class DraftResult:
     # poisoned draft, and callers must gate on `validation_ok`, never on `ok`.
     validation_ok: bool = True
     validation_violations: list = field(default_factory=list)
+    # Number of U+FFFD characters in the CLI's captured output (see the module
+    # docstring's decode policy). Non-zero means the model process emitted bytes
+    # that are not valid UTF-8 and `material` is missing those characters. The
+    # draft is still usable, so this does NOT flip `ok`; it exists so a degraded
+    # body is attributable instead of passing as clean.
+    decode_replacements: int = 0
 
 
 class Drafter(Protocol):
@@ -184,16 +214,24 @@ class ClaudeCliDrafter:
             "--effort", self.effort,
         ]
         try:
-            completed = self.runner(cmd, capture_output=True, text=True,
-                                    timeout=self.timeout_s)
+            completed = self.runner(cmd, capture_output=True,
+                                    timeout=self.timeout_s, **_TEXT_DECODE)
         except subprocess.TimeoutExpired:
             return _fail(f"draft timed out after {self.timeout_s}s")
         except (OSError, ValueError) as exc:
             return _fail(f"draft process error: {exc}")
+        replacements = _count_replacements(completed)
+        if replacements:
+            _LOG.warning(
+                "draft model output carried %d undecodable byte(s); each became "
+                "U+FFFD, so those characters are lost from this draft "
+                "(model=%s)", replacements, self.model)
         if completed.returncode != 0:
             stderr = (completed.stderr or "").strip()[:200]
-            return _fail(f"claude exited {completed.returncode}: {stderr}")
-        result = _parse_cli_json(completed.stdout, self.model)
+            result = _fail(f"claude exited {completed.returncode}: {stderr}")
+        else:
+            result = _parse_cli_json(completed.stdout, self.model)
+        result.decode_replacements = replacements
         return _validate_material(result, ssot, self.judge)
 
 
@@ -364,6 +402,14 @@ def _model_of(data: dict, fallback: str) -> str:
     if isinstance(model_usage, dict) and model_usage:
         return next(iter(model_usage))
     return fallback
+
+
+def _count_replacements(completed) -> int:
+    """Count substituted characters across both captured streams: stdout feeds
+    the letter body, stderr feeds the failure message, and the decode policy
+    applies to both."""
+    return sum((getattr(completed, name, "") or "").count(_REPLACEMENT_CHAR)
+               for name in ("stdout", "stderr"))
 
 
 def _fail(message: str) -> DraftResult:
