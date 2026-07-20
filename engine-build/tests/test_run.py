@@ -118,13 +118,15 @@ class PartiallyPoisonedDrafter:
                 validation_ok=False,
                 validation_violations=[Violation(
                     code="disallowed_url", field=None,
-                    detail="evil-exfil.com/steal")])
+                    detail="evil-exfil.com/steal")],
+                decode_replacements=2)
         return DraftResult(
             material="COVER LETTER\n\nFIELD DATA\nnotice_period: 1 month",
             usage={"input_tokens": 10, "output_tokens": 5, "cache_read": 1,
                    "cache_creation": 0},
             cost_usd=0.002, model="claude-sonnet-4-5", ok=True,
-            validation_ok=True, validation_violations=[])
+            validation_ok=True, validation_violations=[],
+            decode_replacements=3)
 
 
 def _sources():
@@ -185,6 +187,9 @@ def test_run_end_to_end_one_push_and_telemetry(tmp_path, jobhunt_config,
     assert drafted >= 1
     assert drafted == ready == len(drafter.calls)
     assert record["usage_totals"]["input_tokens"] == 10 * drafted
+    # NEW-3: the decode-replacement counter is recorded even when zero, not
+    # only on a nonzero warning (draft.py:166, DraftResult.decode_replacements)
+    assert record["draft_decode_replacements"] == 0
 
     # per_item: TWO PDFs rendered (cover letter + report) and TWO attachments
     # published per drafted item, as separate messages (W4 4c criterion 4)
@@ -279,6 +284,7 @@ def test_no_draft_skips_drafting(tmp_path, jobhunt_config, real_ssot_path,
     store.close()
     assert drafter.calls == []
     assert record["counts"]["drafted"] == 0
+    assert record["draft_decode_replacements"] == 0
     # no drafts -> no artifacts rendered or published
     assert record["artifacts"] == {"letter_pdf": 0, "letter_txt": 0,
                                    "report_pdf": 0, "report_txt": 0,
@@ -321,6 +327,9 @@ def test_validation_failed_draft_is_held_not_surfaced_ready(
     # ran (and spent real tokens) for both calls, not just the clean one
     assert record["cost_usd_total"] == round(0.002 * 2, 6)
     assert record["usage_totals"]["input_tokens"] == 10 * 2
+    # decode_replacements sums across BOTH calls, held draft included, the
+    # same accumulation shape as cost/usage above (run.py's _draft_top_items)
+    assert record["draft_decode_replacements"] == 2 + 3
 
     # only the CLEAN item's artifacts were rendered and published; the
     # poisoned draft never reaches artifact rendering

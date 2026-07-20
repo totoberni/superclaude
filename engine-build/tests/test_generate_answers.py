@@ -7,10 +7,15 @@ seam, and `subprocess.run` is monkeypatched to explode if anything reaches for i
 
 from __future__ import annotations
 
+import ast
 import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from engine.content import load_generated_answers
 from engine.kernel.contracts import Field, FieldMap, Locator
@@ -18,6 +23,7 @@ from engine.kernel.ssot import SSOT
 
 FIXTURES = Path(__file__).parent / "fixtures" / "content"
 TOOL_PATH = Path(__file__).parent.parent / "bin" / "generate_answers.py"
+HARNESS_PATH = Path(__file__).parent.parent / "w5_accept.py"
 
 
 @pytest.fixture(scope="module")
@@ -566,3 +572,328 @@ def test_generator_ai_forbid_attestation_forces_forbid_essays(
     assert [(a["key"], a["value"]) for a in answered["answers"]] == [
         ("question_1", "An essay.")]
     assert answered["tos_forbidden"] == []
+
+
+# --------------------------------------------------------------------------- #
+# DECODE POLICY (P1-4). A runner drives a foreign program, and a foreign program
+# can emit bytes that are not valid UTF-8. Under the strict decode a bare
+# `text=True` gives, ONE such byte raised UnicodeDecodeError out of subprocess and
+# aborted the whole generation (the identical defect cost a 13-minute production
+# run on 2026-07-20 through a 170KB model response). These tests drive REAL bytes
+# through the REAL subprocess: a test that only inspected the kwargs would still
+# pass if the decode raised.
+# --------------------------------------------------------------------------- #
+
+def _fake_bin(tmp_path, name: str, payload: bytes, *, returncode: int = 0,
+              stream: str = "stdout") -> Path:
+    """An executable stand-in that ignores its arguments and writes `payload` as
+    RAW BYTES, so the real `subprocess.run` is the thing that decodes them."""
+    script = tmp_path / name
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        f"sys.{stream}.buffer.write({payload!r})\n"
+        f"sys.exit({returncode})\n"
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_strict_decode_would_raise_on_the_same_bytes(tmp_path) -> None:
+    """Teeth for the regressions below: the kwargs the runners USED to pass do
+    raise on this exact input, so the passing tests that follow are not vacuous."""
+    script = _fake_bin(tmp_path, "bad_utf8", b"an answ\x88er")
+    with pytest.raises(UnicodeDecodeError):
+        subprocess.run([str(script)], capture_output=True, text=True, timeout=30)
+
+
+def test_command_runner_survives_invalid_utf8_byte(tool, tmp_path,
+                                                   capsys) -> None:
+    """`--runner-cmd` through the real shell: an undecodable byte costs ONE
+    character, not the run, and it is NAMED on stderr rather than swallowed."""
+    script = _fake_bin(tmp_path, "bad_utf8", b"an answ\x88er")
+    assert tool._command_runner(str(script))("prompt", "sonnet") == "an answ�er"
+    assert "1 undecodable byte(s)" in capsys.readouterr().err
+
+
+def test_claude_runner_survives_invalid_utf8_byte(tool, tmp_path, monkeypatch,
+                                                  capsys) -> None:
+    """The PRODUCTION runner, resolved off PATH exactly as it is in production:
+    the same byte that used to abort the generation now degrades one character."""
+    _fake_bin(tmp_path, "claude", b"an answ\x88er")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert tool._claude_runner("prompt", "sonnet") == "an answ�er"
+    assert "1 undecodable byte(s)" in capsys.readouterr().err
+
+
+def test_decode_replacement_count_is_recorded_and_discriminates(
+        tool, tmp_path, monkeypatch, capsys) -> None:
+    """The count must be attributable AND it must discriminate: a clean run over
+    the same path says nothing, so the warning is a signal and not noise."""
+    _fake_bin(tmp_path, "claude", b"tw\x88o b\x88ad")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    tool._claude_runner("prompt", "sonnet")
+    assert "2 undecodable byte(s)" in capsys.readouterr().err
+
+    _fake_bin(tmp_path, "claude", "a clean answer".encode("utf-8"))
+    assert tool._claude_runner("prompt", "sonnet") == "a clean answer"
+    assert capsys.readouterr().err == ""
+
+
+def test_undecodable_stderr_on_a_failing_runner_is_still_named(tool, tmp_path,
+                                                               capsys) -> None:
+    """A non-zero exit whose STDERR carries bad bytes: the count is taken BEFORE
+    the exit-code branch, so a lossy diagnosis says it is lossy. The failure
+    contract itself is unchanged -- it still raises."""
+    script = _fake_bin(tmp_path, "bad_utf8", b"boom\x88boom", returncode=1,
+                       stream="stderr")
+    with pytest.raises(RuntimeError, match="runner exited 1"):
+        tool._command_runner(str(script))("prompt", "sonnet")
+    assert "1 undecodable byte(s)" in capsys.readouterr().err
+
+
+def test_runners_never_pass_the_strict_default(tool, monkeypatch) -> None:
+    """The kwarg pair itself, pinned on BOTH runners. Not a substitute for the
+    byte-level tests above (it would pass even if the decode raised); it exists so
+    a future edit that re-introduces `text=True` names itself."""
+    module = tool
+    seen: list[dict] = []
+
+    def fake_run(*args, **kwargs):
+        seen.append(kwargs)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="ok",
+                                           stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    module._claude_runner("prompt", "sonnet")
+    module._command_runner("some-command")("prompt", "sonnet")
+    assert len(seen) == 2
+    for kwargs in seen:
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "replace"
+        assert "text" not in kwargs
+
+
+# --------------------------------------------------------------------------- #
+# FRESHNESS CONTRACT (NEW-1). The answers file lives at a path derived from the
+# posting, so a regeneration that CRASHES leaves the previous run's file exactly
+# where the next fill looks for it. Guarding on `is_file()` alone loaded that stale
+# prose and reported it as applied: the only silent-degradation path in the engine.
+# The document must now PROVE it belongs to the posting, the question set and the
+# SSOT grounding in front of the reader.
+# --------------------------------------------------------------------------- #
+
+def _provenance_fieldmap(**over) -> FieldMap:
+    """The posting these answers are written for: one essay and the AI-use
+    question, the shape `questions_from_fieldmap` keeps."""
+    fields = over.pop("fields", None) or [
+        make_field("question_1", "Why do you want to work here?",
+                   type_="textarea", max_length=800),
+        make_field("question_2", "AI Policy for Application",
+                   type_="textarea", max_length=400),
+    ]
+    return FieldMap(vendor="greenhouse", posting_id="12345",
+                    captured_at="2026-07-13T00:00:00Z", fields=fields, **over)
+
+
+def _write_answers(tool, ssot: SSOT, tmp_path, fieldmap=None, **over) -> Path:
+    """A generated-answers document written the PRODUCTION way: the questions go
+    through a JSON round-trip first, because `capture` writes them to a JSON file
+    and `generate` reads them back, and a fingerprint that survives only in-memory
+    dicts would fail on every real run."""
+    questions = json.loads(json.dumps(
+        tool.questions_from_fieldmap(fieldmap or _provenance_fieldmap())))
+    doc = tool.generate_answers(dict(questions_doc(), questions=questions, **over),
+                                ssot, company="Acme", tos_mode="allow",
+                                runner=lambda prompt, model: "A grounded answer.")
+    return tool.write_yaml(doc, tmp_path / "greenhouse-acme-12345.yaml")
+
+
+def test_provenance_is_stamped_without_breaking_the_frozen_schema(
+        tool, ssot: SSOT, tmp_path) -> None:
+    """The block is written, and the engine's own loader still reads the document:
+    `schema_version` stays "1" and an unknown key is ignored, so no existing reader
+    is disturbed by the stamp."""
+    path = _write_answers(tool, ssot, tmp_path)
+    raw = yaml.safe_load(path.read_text())
+    assert raw["schema_version"] == "1"
+    assert set(raw["provenance"]) == {"contract_version", "questions_fingerprint",
+                                      "grounding_fingerprint"}
+    assert raw["provenance"]["contract_version"] == tool.PROVENANCE_VERSION
+    assert load_generated_answers(path).vendor == "greenhouse"
+
+
+def test_fresh_document_is_accepted(tool, ssot: SSOT, tmp_path) -> None:
+    """The accept path: the same posting, the same questions, the same SSOT."""
+    path = _write_answers(tool, ssot, tmp_path)
+    assert tool.stale_answers_reason(
+        path, vendor="greenhouse", slug="acme", job_id="12345",
+        fieldmap=_provenance_fieldmap(), ssot=ssot) is None
+
+
+def test_stale_document_is_refused_when_the_questions_changed(
+        tool, ssot: SSOT, tmp_path) -> None:
+    """THE DEFECT ITSELF. Answers were written, the posting's questions then
+    changed, the regeneration crashed, and the old file stayed on disk. It must be
+    refused, by a named reason, so the essays surface UNFILLED."""
+    path = _write_answers(tool, ssot, tmp_path)
+    moved_on = _provenance_fieldmap(fields=[
+        make_field("question_1", "Why do you want to work here?",
+                   type_="textarea", max_length=200),   # the cap shrank
+        make_field("question_2", "AI Policy for Application",
+                   type_="textarea", max_length=400),
+    ])
+    reason = tool.stale_answers_reason(
+        path, vendor="greenhouse", slug="acme", job_id="12345",
+        fieldmap=moved_on, ssot=ssot)
+    assert reason is not None
+    assert "question set has changed" in reason
+
+    # A NEW question the answers never covered is the same refusal: an answers
+    # file that is merely INCOMPLETE for this form is not a file to trust either.
+    added = _provenance_fieldmap(fields=[
+        *_provenance_fieldmap().fields,
+        make_field("question_3", "Describe a hard problem you solved",
+                   type_="textarea", max_length=600),
+    ])
+    assert "question set has changed" in tool.stale_answers_reason(
+        path, vendor="greenhouse", slug="acme", job_id="12345",
+        fieldmap=added, ssot=ssot)
+
+
+def test_stale_document_is_refused_when_the_ssot_grounding_changed(
+        tool, ssot: SSOT, tmp_path) -> None:
+    """Prose built from facts the SSOT no longer states is stale prose, even when
+    the form did not move."""
+    path = _write_answers(tool, ssot, tmp_path)
+    edited = SSOT({**yaml.safe_load((FIXTURES / "ssot-fake.yaml").read_text()),
+                   "experience_years": 9})
+    reason = tool.stale_answers_reason(
+        path, vendor="greenhouse", slug="acme", job_id="12345",
+        fieldmap=_provenance_fieldmap(), ssot=edited)
+    assert reason is not None and "SSOT grounding has changed" in reason
+
+    # An SSOT edit OUTSIDE the grounding block does NOT invalidate the answers: no
+    # prompt ever saw that field, so nothing the model was told has changed.
+    untold = SSOT({**yaml.safe_load((FIXTURES / "ssot-fake.yaml").read_text()),
+                   "notify": {"ntfy_topic": "somewhere-else"}})
+    assert tool.stale_answers_reason(
+        path, vendor="greenhouse", slug="acme", job_id="12345",
+        fieldmap=_provenance_fieldmap(), ssot=untold) is None
+
+
+def test_document_for_another_posting_is_refused(tool, ssot: SSOT,
+                                                 tmp_path) -> None:
+    """Identity is checked before the fingerprints, so a file that landed under the
+    wrong name reports the plain reason rather than a digest mismatch."""
+    path = _write_answers(tool, ssot, tmp_path)
+    for field, value in (("vendor", "lever"), ("slug", "other-co"),
+                         ("job_id", "99999")):
+        posting = {"vendor": "greenhouse", "slug": "acme", "job_id": "12345"}
+        posting[field] = value
+        reason = tool.stale_answers_reason(
+            path, **posting, fieldmap=_provenance_fieldmap(), ssot=ssot)
+        assert reason is not None and f"this posting is {field}=" in reason
+
+
+def test_document_with_no_provenance_is_refused(tool, ssot: SSOT,
+                                                tmp_path) -> None:
+    """BACKWARD COMPATIBILITY, decided deliberately: a legacy file carries nothing
+    that separates a fresh one from a stale one, so it is REFUSED rather than
+    accepted with a warning. Accepting it would leave the hole open for exactly the
+    population the defect was found in. The reason names the fix."""
+    path = _write_answers(tool, ssot, tmp_path)
+    legacy = yaml.safe_load(path.read_text())
+    legacy.pop("provenance")
+    path.write_text(yaml.safe_dump(legacy, sort_keys=False, allow_unicode=True))
+    # it is a perfectly VALID document to the engine's loader: only provenance
+    # is missing, which is precisely why existence was never proof of freshness.
+    assert load_generated_answers(path).answers
+    reason = tool.stale_answers_reason(
+        path, vendor="greenhouse", slug="acme", job_id="12345",
+        fieldmap=_provenance_fieldmap(), ssot=ssot)
+    assert reason is not None
+    assert "no provenance block" in reason and "Re-run" in reason
+
+
+def test_unverifiable_documents_fail_closed(tool, ssot: SSOT, tmp_path) -> None:
+    """Every uncertainty is a refusal: there is no input that returns None on
+    something the reader could not positively verify."""
+    posting = dict(vendor="greenhouse", slug="acme", job_id="12345",
+                   fieldmap=_provenance_fieldmap(), ssot=ssot)
+
+    missing = tmp_path / "gone.yaml"
+    assert tool.stale_answers_reason(missing, **posting) is not None
+
+    not_yaml = tmp_path / "broken.yaml"
+    not_yaml.write_text("{unclosed: [")
+    assert tool.stale_answers_reason(not_yaml, **posting) is not None
+
+    not_mapping = tmp_path / "list.yaml"
+    not_mapping.write_text("- just\n- a list\n")
+    assert "not a mapping" in tool.stale_answers_reason(not_mapping, **posting)
+
+    path = _write_answers(tool, ssot, tmp_path)
+    for bad in ("0", "", None, {"contract_version": "1"}):
+        doc = yaml.safe_load(path.read_text())
+        doc["provenance"] = bad
+        wrong = tmp_path / "wrong-version.yaml"
+        wrong.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True))
+        assert tool.stale_answers_reason(wrong, **posting) is not None, bad
+
+
+def test_fingerprints_ignore_question_order_but_not_content(tool,
+                                                            ssot: SSOT) -> None:
+    """Order is the vendor's to change and a reordered form is not a changed
+    question; anything the answer DEPENDS on is."""
+    questions = tool.questions_from_fieldmap(_provenance_fieldmap())
+    assert tool.questions_fingerprint(questions) == tool.questions_fingerprint(
+        list(reversed(questions)))
+    assert questions[0]["required"] is False  # so the flip below really flips
+    for change in ({"label": "Why us?"}, {"max_length": 100}, {"key": "q9"},
+                   {"options": ["Yes", "No"]}, {"required": True},
+                   {"type": "input_text"}, {"norm_type": "LONGTEXT"}):
+        mutated = [dict(questions[0], **change), questions[1]]
+        assert tool.questions_fingerprint(mutated) != tool.questions_fingerprint(
+            questions), change
+
+
+# --------------------------------------------------------------------------- #
+# The READER half of the contract lives in `w5_accept.py`, a top-level script that
+# needs a live browser and cannot be imported. Its GUARD is pinned structurally
+# instead: the loader call must sit inside the branch the freshness check opens, so
+# no edit can restore the unguarded read without this test going red.
+# --------------------------------------------------------------------------- #
+
+def _harness_tree() -> ast.Module:
+    return ast.parse(HARNESS_PATH.read_text())
+
+
+def _calls_named(tree, name: str) -> list[ast.Call]:
+    return [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and getattr(node.func, "attr", getattr(node.func, "id", None)) == name]
+
+
+def test_harness_loads_generated_answers_only_behind_the_freshness_check() -> None:
+    tree = _harness_tree()
+    assert len(_calls_named(tree, "stale_answers_reason")) == 1
+
+    loads = _calls_named(tree, "load_generated_answers")
+    assert len(loads) == 1, "one read site, so one guard covers it"
+
+    guarded = [call for node in ast.walk(tree) if isinstance(node, ast.If)
+               and any(isinstance(sub, ast.Name) and sub.id == "stale"
+                       for sub in ast.walk(node.test))
+               for stmt in node.body
+               for call in ast.walk(stmt) if isinstance(call, ast.Call)]
+    assert loads[0] in guarded, (
+        "the generated-answers read must sit inside the `stale is None` branch")
+
+
+def test_harness_records_the_refusal_rather_than_dropping_it() -> None:
+    """A refused file must be visible in the machine-readable result, not only on
+    stderr: the census is what the operator reads."""
+    tree = _harness_tree()
+    constants = {node.value for node in ast.walk(tree)
+                 if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+    assert "generated_rejected" in constants

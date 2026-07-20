@@ -22,6 +22,24 @@ PROV = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby,
         "workable": workable}[VENDOR]
 SSOT_PATH = os.path.expanduser("~/automations/ssot/job.yaml")
 
+
+def _generator():
+    """The answer generator (`bin/generate_answers.py`), loaded by path.
+
+    It is a bin/ script and not an engine module, so there is no package to import
+    it from (the tests load it the same way). The harness needs exactly one thing
+    from it: the FRESHNESS CONTRACT deciding whether an on-disk answers document
+    belongs to the posting in front of us. That contract lives in the tool that
+    WRITES the document, so the stamp and the check can never drift into two
+    different ideas of what freshness means.
+    """
+    import importlib.util
+    path = Path(__file__).resolve().parent / "bin" / "generate_answers.py"
+    spec = importlib.util.spec_from_file_location("generate_answers_tool", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 result = {"vendor": VENDOR, "slug": SLUG, "job_id": JOB_ID, "stage": "start"}
 try:
     ssot = SSOT.load(SSOT_PATH)
@@ -62,7 +80,26 @@ try:
     from engine import content
     gen_path = Path(os.path.expanduser(
         f"~/automations/ssot/generated/{VENDOR}-{SLUG}-{JOB_ID}.yaml"))
-    generated = content.load_generated_answers(gen_path) if gen_path.is_file() else None
+    # FRESHNESS, not mere existence. The answers file sits at a path derived from
+    # the posting, so a regeneration that CRASHED leaves the previous run's file
+    # exactly where this line looks for it; `is_file()` alone would load that stale
+    # prose and the census would report it as applied. The document must PROVE it
+    # was written for this posting, this question set and this SSOT grounding
+    # (`stale_answers_reason`, whose stamp side wrote the block). Anything it cannot
+    # prove is refused, and refused LOUDLY: the reason goes to stderr AND into the
+    # result JSON, so the essays surface UNFILLED with a named cause. Under-reporting
+    # is honest; reporting stale prose as applied is the defect being closed.
+    generated = None
+    if gen_path.is_file():
+        stale = _generator().stale_answers_reason(
+            gen_path, vendor=VENDOR, slug=SLUG, job_id=JOB_ID,
+            fieldmap=fieldmap, ssot=ssot)
+        if stale is None:
+            generated = content.load_generated_answers(gen_path)
+        else:
+            result["generated_rejected"] = {"path": str(gen_path), "reason": stale}
+            print(f"warning: generated answers REFUSED ({gen_path}): {stale}",
+                  file=sys.stderr)
     if generated is not None:
         profile["posting_location"] = generated.posting_location
     values = PROV.resolve_values(fieldmap, ssot, profile, assets=assets)

@@ -97,11 +97,27 @@ truncate mid-sentence.
 
 PII discipline: stdout carries COUNTS ONLY, never answer text. The prompts and
 the answers exist on disk in the 0600 output file and nowhere else.
+
+Decode policy: a runner's captured output is decoded with an explicit UTF-8 codec
+and `errors="replace"`, never the strict default. A single malformed byte anywhere
+in a ~170KB model response used to raise `UnicodeDecodeError` out of `subprocess`
+and abort the whole run (observed in production 2026-07-20, a 13-minute run lost to
+one byte). Replacement keeps that blast radius at one character. The substitution is
+never silent: the count is warned on stderr, so a degraded answer is attributable
+rather than passing as clean.
+
+Freshness contract: the document carries a `provenance` block binding it to the
+posting, the QUESTION SET and the SSOT GROUNDING it was written from. Its reader
+(`w5_accept.py`) refuses a document whose provenance does not match the posting in
+front of it, so a stale file left behind by a CRASHED regeneration can never be
+reported as applied. Written and verified by the same functions in this module, so
+the two halves cannot drift (`build_provenance` / `stale_answers_reason`).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -173,13 +189,54 @@ _GROUNDING_PATHS = (
 )
 
 
+# Passed to `subprocess.run` in place of a bare `text=True`. Either kwarg puts
+# `subprocess` in text mode, but `text=True` alone decodes strictly and raises on
+# the first invalid byte; these keep the same str-returning contract while
+# degrading a malformed byte to U+FFFD. Explicit `encoding` also removes the
+# locale-dependent default codec as a second hazard. Kept as a constant so the
+# decode policy has one definition and the regression tests exercise the real thing.
+_TEXT_DECODE = {"encoding": "utf-8", "errors": "replace"}
+
+# What `errors="replace"` substitutes. Counting it is a deliberate slight
+# over-report: a genuine U+FFFD emitted by the model is indistinguishable from a
+# substituted one, so the signal errs toward flagging a clean answer rather than
+# missing a corrupted one.
+_REPLACEMENT_CHAR = "�"
+
+
+def _count_replacements(completed) -> int:
+    """Count substituted characters across both captured streams: stdout feeds the
+    answer, stderr feeds the failure message, and the decode policy applies to both."""
+    return sum((getattr(completed, name, "") or "").count(_REPLACEMENT_CHAR)
+               for name in ("stdout", "stderr"))
+
+
+def _warn_replacements(completed, what: str) -> int:
+    """Name on stderr how many characters the decode substituted, and return the
+    count. Silence here would hand back a corrupted answer looking identical to a
+    clean one, which is the whole reason the strict decode was not simply relaxed.
+
+    Warned on stderr rather than through `logging`, because stderr IS this tool's
+    diagnostic channel (see `probe_date_controls` and `posting_location`); it has
+    no logger to attach a handler to."""
+    replacements = _count_replacements(completed)
+    if replacements:
+        print(f"warning: {what} output carried {replacements} undecodable "
+              "byte(s); each became U+FFFD, so those characters are lost from "
+              "this answer", file=sys.stderr)
+    return replacements
+
+
 def _claude_runner(prompt: str, model: str) -> str:
     """The production runner: one single-shot `claude -p` call, no tools, no
     session. Replaced wholesale in tests (see `_RUNNER`), which NEVER spawn a
     real subprocess."""
     proc = subprocess.run(
         ["claude", "-p", prompt, "--model", model, "--tools", ""],
-        capture_output=True, text=True, timeout=300, check=False)
+        capture_output=True, timeout=300, check=False, **_TEXT_DECODE)
+    # Counted BEFORE the exit-code branch: a FAILING call's stderr is the
+    # diagnosis, and a lossy diagnosis must say so too.
+    _warn_replacements(proc, f"model ({model})")
     if proc.returncode != 0:
         raise RuntimeError(f"claude exited {proc.returncode}")
     return proc.stdout.strip()
@@ -194,8 +251,9 @@ def _command_runner(command: str):
     """A runner that pipes the prompt to `command` on stdin and reads stdout."""
     def run(prompt: str, model: str) -> str:
         proc = subprocess.run(command, shell=True, input=prompt,
-                              capture_output=True, text=True, timeout=300,
-                              check=False)
+                              capture_output=True, timeout=300, check=False,
+                              **_TEXT_DECODE)
+        _warn_replacements(proc, f"runner ({command})")
         if proc.returncode != 0:
             raise RuntimeError(f"runner exited {proc.returncode}")
         return proc.stdout.strip()
@@ -557,6 +615,174 @@ def build_prompt(question: dict, ssot: SSOT, *, company: str,
     return "\n".join(parts)
 
 
+# -- provenance (NEW-1) -------------------------------------------------------
+#
+# WHY THIS EXISTS. The answers document lives at a path derived from the posting
+# (`<vendor>-<slug>-<job_id>.yaml`), so a REGENERATION that crashes leaves the
+# PREVIOUS run's file exactly where the next fill expects to find it. Its reader
+# used to guard on `is_file()` alone, so that stale prose was loaded, applied and
+# reported as filled -- truthful-but-outdated text presented as current. It is the
+# only path in this engine where a failure produces a QUIET wrong answer instead of
+# a loud stop, and quiet wrong answers are the one thing the engine may not do.
+#
+# THE CONTRACT. `build_provenance` stamps the document with a digest of the two
+# things the answers actually depend on:
+#
+#   questions_fingerprint  the QUESTION SET the answers were written for (every
+#                          question's key, label, shape, options and length cap).
+#   grounding_fingerprint  the SSOT GROUNDING BLOCK (`ssot_excerpt`) the prompts
+#                          were built from -- the literal text the model saw.
+#
+# `stale_answers_reason` recomputes both from the LIVE posting in front of the
+# reader and refuses on any difference. Both halves live here, in the tool that
+# WRITES the document, because a fingerprint recipe split across two files is a
+# fingerprint recipe that drifts, and a drifted recipe fails OPEN by agreeing with
+# nothing.
+#
+# FAIL CLOSED, AND SAY SO. Every refusal path returns a REASON string, never a
+# bare False and never a silent skip: the caller records it, and an answers file
+# that was not used is visible as an UNFILLED essay plus a named reason. Refusing a
+# good file costs a regeneration; accepting a bad one costs a lie.
+
+PROVENANCE_VERSION = "1"
+
+
+def _digest(payload) -> str:
+    """A stable digest of any JSON-serialisable payload. `sort_keys` makes the
+    encoding independent of dict ordering, so the same content digests the same
+    on both sides of the contract."""
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _canonical_question(question: dict) -> dict:
+    """One question reduced to the facts an ANSWER depends on.
+
+    Everything here can invalidate prose already written: the label IS the question
+    the model answered, `max_length` is the budget it wrote to, and `options` /
+    `type` / `norm_type` decide whether the field is an essay at all (a question
+    that grew options is an attestation now, and `_route_by_tos` would refuse it).
+    `required` rides along because a field the vendor made optional is a different
+    field on the form even when its text did not change.
+
+    Normalised through `str()` / `bool()` because the two sides reach this from
+    different places -- a JSON round-trip on the write side, live `Field` objects on
+    the read side -- and an int-versus-string difference in a digest would read as a
+    changed posting. A zero or absent cap is one state (`None`), matching how the
+    rest of this module reads `max_length` (`int(... or 0)`).
+    """
+    cap = question.get("max_length")
+    return {
+        "key": str(question.get("key") or ""),
+        "label": str(question.get("label") or ""),
+        "type": str(question.get("type") or ""),
+        "norm_type": str(question.get("norm_type") or ""),
+        "required": bool(question.get("required")),
+        "options": [str(option) for option in (question.get("options") or [])],
+        "max_length": int(cap) if cap else None,
+    }
+
+
+def questions_fingerprint(questions: list[dict]) -> str:
+    """A digest of the question SET, order-independent.
+
+    Sorted by the canonical encoding of each entry rather than compared in place:
+    the two sides capture the same posting through the same provider, but ordering
+    is the vendor's to change and a reordered form is not a changed question.
+    Sorting on the encoded string (never on the dicts themselves) keeps the sort
+    total, so two questions sharing a key can never raise a comparison error.
+    """
+    entries = [_canonical_question(question) for question in questions]
+    entries.sort(key=lambda entry: json.dumps(entry, sort_keys=True,
+                                              ensure_ascii=False))
+    return _digest(entries)
+
+
+def grounding_fingerprint(ssot: SSOT) -> str:
+    """A digest of the EXACT grounding block the prompts carried (`ssot_excerpt`).
+
+    Not of the whole SSOT: a change to a field no prompt ever saw does not make an
+    answer stale, and treating it as if it did would discard good work on every
+    unrelated SSOT edit. What the model was TOLD is what the answers depend on.
+    """
+    return _digest(ssot_excerpt(ssot))
+
+
+def build_provenance(questions: list[dict], ssot: SSOT) -> dict:
+    """The provenance block stamped into the answers document.
+
+    Carries no vendor/slug/job_id of its own: the document already states those at
+    top level and `stale_answers_reason` checks them there. A second copy would be
+    a second truth to keep in step.
+    """
+    return {
+        "contract_version": PROVENANCE_VERSION,
+        "questions_fingerprint": questions_fingerprint(questions),
+        "grounding_fingerprint": grounding_fingerprint(ssot),
+    }
+
+
+def stale_answers_reason(path: str | Path, *, vendor: str, slug: str, job_id: str,
+                         fieldmap, ssot: SSOT) -> str | None:
+    """Why the answers document at `path` must NOT be used for the posting in front
+    of the caller, or None when it provably belongs to it.
+
+    The reason is a sentence an operator can act on, because acting on it is the
+    whole point: every refusal means an essay goes UNFILLED, and an unexplained
+    unfilled essay is only marginally better than a silently stale one.
+
+    Fail-closed on EVERY uncertainty -- unreadable file, wrong shape, missing
+    provenance, unknown contract version, mismatched identity, mismatched
+    fingerprint. There is no path through this function that returns None on
+    anything it could not positively verify.
+
+    A document with NO provenance block is REFUSED, not accepted with a warning.
+    It is exactly the population the defect was found in (every file written before
+    this contract existed), and there is nothing in such a file to distinguish the
+    fresh ones from the stale ones: accepting them would leave the hole open for
+    precisely the files that fall through it. The cost is that a legacy file is
+    regenerated once; the alternative cost is a stale answer reported as applied.
+    """
+    try:
+        document = yaml.safe_load(Path(path).read_text())
+    except (OSError, yaml.YAMLError) as exc:
+        return (f"unreadable ({type(exc).__name__}: {exc}), so nothing about it "
+                "can be verified")
+    if not isinstance(document, dict):
+        return "top level is not a mapping, so it carries no provenance to verify"
+
+    provenance = document.get("provenance")
+    if not isinstance(provenance, dict):
+        return ("no provenance block: it was written before the freshness contract "
+                "existed, so it cannot be shown to belong to this posting rather "
+                "than to an earlier state of it. Re-run `generate_answers.py "
+                "capture` + `generate` for this posting")
+    found_version = str(provenance.get("contract_version") or "")
+    if found_version != PROVENANCE_VERSION:
+        return (f"provenance contract_version is {found_version!r}, this reader "
+                f"verifies {PROVENANCE_VERSION!r}: the recipe that built its "
+                "fingerprints is not the one checking them")
+
+    for name, expected in (("vendor", vendor), ("slug", slug),
+                           ("job_id", str(job_id))):
+        found = str(document.get(name) or "")
+        if found != str(expected):
+            return (f"it was written for {name}={found!r}, this posting is "
+                    f"{name}={str(expected)!r}")
+
+    current = build_provenance(questions_from_fieldmap(fieldmap), ssot)
+    if provenance.get("questions_fingerprint") != current["questions_fingerprint"]:
+        return ("the posting's question set has changed since these answers were "
+                "written (labels, shapes, options or length caps), so they answer "
+                "questions this form no longer asks. Re-run `generate_answers.py "
+                "capture` + `generate`")
+    if provenance.get("grounding_fingerprint") != current["grounding_fingerprint"]:
+        return ("the SSOT grounding has changed since these answers were written, "
+                "so they were built from facts the SSOT no longer states. Re-run "
+                "`generate_answers.py generate`")
+    return None
+
+
 # -- generation ---------------------------------------------------------------
 
 def generate_answers(questions_doc: dict, ssot: SSOT, *, company: str,
@@ -617,6 +843,13 @@ def generate_answers(questions_doc: dict, ssot: SSOT, *, company: str,
         "posting_location": str(questions_doc.get("posting_location") or ""),
         "discovery_source": str(questions_doc.get("discovery_source") or ""),
         "date_controls": list(questions_doc.get("date_controls") or []),
+        # What these answers were written FOR (NEW-1). Stamped from the SAME
+        # `questions` list the answers above were generated from and the SAME SSOT
+        # the prompts were grounded on, so the block describes this run and not the
+        # arguments it was called with. `engine.content.load_generated_answers`
+        # ignores keys it does not name, so `schema_version` stays "1" and every
+        # existing reader is unaffected.
+        "provenance": build_provenance(questions, ssot),
         "answers": answers,
         "tos_forbidden": forbidden,
     }

@@ -129,8 +129,9 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
         config, queue, store, discovered_index, ssot, profile, options,
         capture_opener)
 
-    usage_totals, cost_total, drafted_items, validation_held = _draft_top_items(
-        config, queue, ssot, discovered_index, store, options, drafter)
+    usage_totals, cost_total, drafted_items, validation_held, decode_replacements = (
+        _draft_top_items(config, queue, ssot, discovered_index, store, options,
+                         drafter))
 
     live = _live_transport(options, transport)
     push_sent = _publish_one_digest(config, queue, rerank, live)
@@ -157,6 +158,12 @@ def run_pipeline(config: Config, sources: list[Source], ssot: SSOT, store,
         "fieldmaps": fieldmap_counts,
         "usage_totals": usage_totals,
         "cost_usd_total": round(cost_total, 6),
+        # Drafter-side count only (draft.py:234); the L2 judge's own count
+        # (judge.py:139) is not reachable here, see engine/validate/__init__.py:82-94
+        # where the JudgeVerdict is discarded after `validate()` reads
+        # passed/error/reasons off it. The key names the scope explicitly so a
+        # reader of the shipped run record never mistakes it for an all-sites total.
+        "draft_decode_replacements": decode_replacements,
         "duration_s": round(time.monotonic() - started, 3),
         "push_sent": push_sent,
         "artifacts": artifacts,
@@ -406,10 +413,10 @@ def _build_capture_opener():
 
 
 def _draft_top_items(config, queue, ssot, discovered_index, store, options,
-                     drafter) -> tuple[dict, float, list[dict], int]:
+                     drafter) -> tuple[dict, float, list[dict], int, int]:
     usage_totals = {key: 0 for key in _USAGE_KEYS}
     if options.no_draft:
-        return usage_totals, 0.0, [], 0
+        return usage_totals, 0.0, [], 0, 0
     drafter = drafter or _make_drafter(config)
 
     candidates = [item for item in queue.items()
@@ -420,6 +427,7 @@ def _draft_top_items(config, queue, ssot, discovered_index, store, options,
     cost_total = 0.0
     drafted_items: list[dict] = []
     validation_held = 0
+    decode_replacements = 0
     for item in candidates[:config.draft_cap]:
         posting = dict(item.payload["posting"])
         discovered = discovered_index.get(item.identity_key)
@@ -435,6 +443,7 @@ def _draft_top_items(config, queue, ssot, discovered_index, store, options,
         cost_total += result.cost_usd
         for key in _USAGE_KEYS:
             usage_totals[key] += result.usage.get(key, 0)
+        decode_replacements += result.decode_replacements
         if not result.validation_ok:
             # Anti-injection L1 (draft.py's `_validate_material`) flagged this
             # body: a poisoned draft must never be surfaced as ready/clean.
@@ -460,7 +469,7 @@ def _draft_top_items(config, queue, ssot, discovered_index, store, options,
             "job_id": discovered.job_id if discovered is not None else None,
             "updated_ts": discovered.updated_ts if discovered is not None else None,
         })
-    return usage_totals, cost_total, drafted_items, validation_held
+    return usage_totals, cost_total, drafted_items, validation_held, decode_replacements
 
 
 def _attach_material(store, item, material: str) -> None:
