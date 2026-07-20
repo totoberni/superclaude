@@ -13,16 +13,41 @@ The `claude -p` invocation mirrors `engine.draft.ClaudeCliDrafter`: single-shot
 print mode, `--output-format json`, all tools disabled, no session persistence.
 The subprocess runner is injectable, so tests run OFFLINE with a fake runner or
 a fake judge and no real `claude` process starts.
+
+Decode policy (mirrors `engine.draft`): the CLI's captured output is decoded with
+an explicit UTF-8 codec and `errors="replace"`, never the strict default. One
+malformed byte anywhere in the response used to raise `UnicodeDecodeError` out of
+`subprocess`, past the fail-closed handlers below, and abort the whole run
+(observed in production at the sibling draft site, 2026-07-20). Substitution
+cannot manufacture a `pass`: it can only leave a verdict intact or make it
+unparseable, and unparseable is already a FAIL. The substitution is never silent:
+`JudgeVerdict.decode_replacements` counts it and a WARNING names it.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
 from engine.ssot import MISSING, SSOT
+
+_LOG = logging.getLogger(__name__)
+
+# Passed to the injected runner in place of a bare `text=True`. Either kwarg puts
+# `subprocess` in text mode, but `text=True` alone decodes strictly and raises on
+# the first invalid byte; these keep the same str-returning contract while
+# degrading a malformed byte to U+FFFD. Explicit `encoding` also removes the
+# locale-dependent default codec as a second hazard.
+_TEXT_DECODE = {"encoding": "utf-8", "errors": "replace"}
+
+# What `errors="replace"` substitutes. Counting it is a deliberate slight
+# over-report: a genuine U+FFFD in the model's output is indistinguishable from a
+# substituted one, so the signal errs toward flagging a clean verdict rather than
+# missing a corrupted one.
+_REPLACEMENT_CHAR = "�"
 
 # Datamark token (spotlight datamarking, spec L0): interleaved into the DATA
 # framing so the model can tell the audited content apart from its instructions.
@@ -50,6 +75,13 @@ class JudgeVerdict:
     verdict: str                       # "pass" | "fail"
     reasons: list[str] = field(default_factory=list)
     error: str | None = None           # set when the verdict could not be parsed
+    # Number of U+FFFD characters in the CLI's captured output (see the module
+    # docstring's decode policy). Non-zero means the judge process emitted bytes
+    # that are not valid UTF-8. This does NOT flip the verdict, and that is safe
+    # rather than lax: replacement can only corrupt a verdict into something the
+    # strict parser rejects (already a FAIL), never spell "pass" where the model
+    # wrote "fail". It exists so a degraded verdict is attributable.
+    decode_replacements: int = 0
 
     @property
     def passed(self) -> bool:
@@ -87,16 +119,25 @@ class ClaudeCliJudge:
             "--effort", self.effort,
         ]
         try:
-            completed = self.runner(cmd, capture_output=True, text=True,
-                                    timeout=self.timeout_s)
+            completed = self.runner(cmd, capture_output=True,
+                                    timeout=self.timeout_s, **_TEXT_DECODE)
         except subprocess.TimeoutExpired:
             return _fail(f"judge timed out after {self.timeout_s}s")
         except (OSError, ValueError) as exc:
             return _fail(f"judge process error: {exc}")
+        replacements = _count_replacements(completed)
+        if replacements:
+            _LOG.warning(
+                "judge model output carried %d undecodable byte(s); each became "
+                "U+FFFD, so those characters are lost from this verdict "
+                "(model=%s)", replacements, self.model)
         if completed.returncode != 0:
             stderr = (completed.stderr or "").strip()[:200]
-            return _fail(f"claude exited {completed.returncode}: {stderr}")
-        return parse_verdict(completed.stdout)
+            verdict = _fail(f"claude exited {completed.returncode}: {stderr}")
+        else:
+            verdict = parse_verdict(completed.stdout)
+        verdict.decode_replacements = replacements
+        return verdict
 
 
 def build_judge_prompt(generated_output: dict, ssot: SSOT) -> str:
@@ -180,6 +221,14 @@ def _compact(value) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _count_replacements(completed) -> int:
+    """Count substituted characters across both captured streams: stdout feeds
+    the verdict, stderr feeds the failure message, and the decode policy applies
+    to both."""
+    return sum((getattr(completed, name, "") or "").count(_REPLACEMENT_CHAR)
+               for name in ("stdout", "stderr"))
 
 
 def _fail(message: str) -> JudgeVerdict:

@@ -5,8 +5,12 @@ parser (fail-closed on every deviation), the orchestrator wiring, and render_dif
 
 from __future__ import annotations
 
+import logging
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent / "fixtures" / "validate"))
 import harness  # noqa: E402
@@ -271,3 +275,126 @@ def test_render_diff_shows_output_and_ground_truth_and_redacts_sensitive():
     # sensitive section is acknowledged but not printed verbatim
     assert "X1234567" not in diff
     assert "redacted" in diff
+
+
+# --------------------------------------------------------------------------- #
+# DECODE POLICY (L2 judge): the judge process is a foreign program and can emit
+# bytes that are not valid UTF-8. Under a strict decode ONE such byte raised
+# UnicodeDecodeError out of subprocess, past every fail-closed handler in
+# judge(), and aborted the whole run (observed in production at the sibling
+# draft site, 2026-07-20). These tests pin the non-strict policy, the signal
+# that keeps a degraded verdict attributable, and the fact that substitution
+# can never buy a pass.
+#
+# They drive a REAL local process rather than a fake, because decoding is
+# precisely what an injected fake cannot exercise: `claude_bin` points at a
+# throwaway script that writes fixed bytes and exits. No `claude` binary and no
+# socket, so the autouse no-network guard stays satisfied.
+# --------------------------------------------------------------------------- #
+
+_PASS_VERDICT = '{"verdict": "pass", "reasons": ["grounded in the SSOT"]}'
+
+
+def _fake_claude_bin(tmp_path, payload: bytes, returncode: int = 0,
+                     stream: str = "stdout",
+                     name: str = "fake_claude") -> str:
+    """An executable stand-in for `claude` that ignores its arguments and writes
+    `payload` as RAW bytes, so the REAL subprocess.run performs the decode."""
+    script = tmp_path / name
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        f"sys.{stream}.buffer.write({payload!r})\n"
+        f"sys.exit({returncode})\n"
+    )
+    script.chmod(0o755)
+    return str(script)
+
+
+def _envelope_bytes(old: bytes = b"", new: bytes = b"") -> bytes:
+    """The canned pass envelope, optionally with one substring rewritten so a raw
+    undecodable byte lands at a chosen position."""
+    raw = harness.cli_envelope(_PASS_VERDICT).encode("utf-8")
+    return raw.replace(old, new, 1) if old else raw
+
+
+def test_strict_decode_of_judge_output_would_raise(tmp_path):
+    """Teeth for the regressions below: the kwargs judge() used to pass DO raise
+    on this exact envelope, so the passing tests that follow are not vacuous."""
+    cmd = [_fake_claude_bin(tmp_path, _envelope_bytes(b"grounded",
+                                                      b"gro\x88unded"))]
+    with pytest.raises(UnicodeDecodeError):
+        subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+
+def test_judge_survives_undecodable_output_from_real_subprocess(tmp_path):
+    """End-to-end through the DEFAULT runner (real subprocess.run), the way
+    production runs: an undecodable byte inside a reason degrades one character
+    instead of aborting the run."""
+    judge = ClaudeCliJudge(claude_bin=_fake_claude_bin(
+        tmp_path, _envelope_bytes(b"grounded", b"gro\x88unded")))
+    verdict = judge.judge(harness.clean_output(), SSOT)
+    assert verdict.passed is True
+    assert verdict.error is None
+    assert any("�" in reason for reason in verdict.reasons)
+
+
+def test_judge_records_decode_replacements_and_discriminates(tmp_path):
+    """The substitution must be attributable: a corrupted verdict is never handed
+    back looking identical to a clean one."""
+    corrupted = ClaudeCliJudge(claude_bin=_fake_claude_bin(
+        tmp_path, _envelope_bytes(b"grounded", b"gro\x88unded")))
+    assert corrupted.judge(harness.clean_output(),
+                           SSOT).decode_replacements == 1
+    # a clean verdict over the same path records nothing, so the signal
+    # discriminates rather than always firing
+    clean = ClaudeCliJudge(claude_bin=_fake_claude_bin(
+        tmp_path, _envelope_bytes(), name="fake_claude_clean"))
+    clean_verdict = clean.judge(harness.clean_output(), SSOT)
+    assert clean_verdict.passed is True
+    assert clean_verdict.decode_replacements == 0
+
+
+def test_judge_undecodable_verdict_key_still_fails_closed(tmp_path):
+    """Substitution must never buy a pass. A byte landing in the verdict KEY
+    makes the object non-conforming, and non-conforming is a FAIL: replacement
+    can only degrade a verdict into something the strict parser rejects, never
+    spell 'pass' where the model wrote 'fail'."""
+    judge = ClaudeCliJudge(claude_bin=_fake_claude_bin(
+        tmp_path, _envelope_bytes(b"verdict", b"verd\x88ct")))
+    verdict = judge.judge(harness.clean_output(), SSOT)
+    assert verdict.passed is False
+    assert verdict.error is not None
+    assert verdict.decode_replacements == 1
+
+
+def test_judge_undecodable_stderr_on_failure_is_also_recorded(tmp_path):
+    """A non-zero exit whose stderr carries bad bytes must fail closed with the
+    signal attached, not raise."""
+    judge = ClaudeCliJudge(claude_bin=_fake_claude_bin(
+        tmp_path, b"not logged in\x88", returncode=1, stream="stderr",
+        name="fake_claude_err"))
+    verdict = judge.judge(harness.clean_output(), SSOT)
+    assert verdict.passed is False
+    assert "claude exited 1" in verdict.error
+    assert verdict.decode_replacements == 1
+
+
+def test_judge_undecodable_output_is_logged(tmp_path, caplog):
+    judge = ClaudeCliJudge(claude_bin=_fake_claude_bin(
+        tmp_path, _envelope_bytes(b"grounded", b"gro\x88unded")))
+    with caplog.at_level(logging.WARNING, logger="engine.validate.judge"):
+        judge.judge(harness.clean_output(), SSOT)
+    assert any(record.levelno == logging.WARNING and "undecodable" in
+               record.getMessage() for record in caplog.records)
+
+
+def test_judge_runner_is_called_with_non_strict_decode():
+    """The injected-runner contract still gets text mode, but never the strict
+    default: this kwarg pair is what stops the crash from coming back."""
+    runner = harness.FakeRunner(harness.cli_envelope(_PASS_VERDICT))
+    ClaudeCliJudge(runner=runner).judge(harness.clean_output(), SSOT)
+    kwargs = runner.calls[0][1]
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "replace"
+    assert "text" not in kwargs

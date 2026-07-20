@@ -2,11 +2,18 @@
 
 No real pdflatex runs in the default suite: the `fake_pdflatex` fixture (conftest)
 stands in for the subprocess. Two integration tests opt back in and are skipped
-when pdflatex is absent.
+when pdflatex is absent. The decode-policy tests at the bottom do start a real
+local process (a throwaway script standing in for the pdflatex binary), because
+decoding is precisely what an in-process fake cannot exercise.
 """
 
+import logging
 import shutil
+import subprocess
+import sys
 from datetime import date
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -255,3 +262,136 @@ def test_render_report_pdf_integration_real_pdflatex(tmp_path):
     result = render_report_pdf("r-int", _REPORT_DATA, out)
     assert result is not None
     assert result.read_bytes().startswith(b"%PDF")
+
+
+# --------------------------------------------------------------------------- #
+# DECODE POLICY: pdflatex is a foreign program whose log is NOT reliably UTF-8
+# (it echoes source content and emits its own messages as raw bytes). Under a
+# strict decode ONE such byte raised UnicodeDecodeError out of subprocess, past
+# the (OSError, SubprocessError) handler in _render_tex, and killed the daily run
+# at this exact site (production, 2026-07-20). These tests pin the non-strict
+# policy, prove it does not mask a genuine LaTeX failure, and pin the signal.
+# --------------------------------------------------------------------------- #
+
+# A realistic pdflatex log carrying one byte that is not valid UTF-8.
+_BAD_TEX_LOG = (b"This is pdfTeX, Version 3.141592653-2.6-1.40.25\n"
+                b"LaTeX Font Warning: undefined shape for \x88 in this document\n"
+                b"Output written on doc.pdf (1 page, 42 bytes).\n")
+_CLEAN_TEX_LOG = b"This is pdfTeX, Version 3.141592653-2.6-1.40.25\nDone.\n"
+
+
+def _fake_pdflatex_bin(tmp_path, payload: bytes, create_pdf: bool = True,
+                       returncode: int = 0,
+                       name: str = "fake_pdflatex") -> str:
+    """An executable stand-in for the pdflatex binary that writes `payload` to
+    stdout as RAW bytes, so the REAL subprocess.run performs the decode. It
+    honours -output-directory the way pdflatex does, so a successful run leaves
+    a stub PDF exactly where _render_tex looks for it."""
+    script = tmp_path / name
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"sys.stdout.buffer.write({payload!r})\n"
+        f"if {create_pdf!r}:\n"
+        "    out = sys.argv[sys.argv.index('-output-directory') + 1]\n"
+        "    stem = Path(sys.argv[-1]).stem\n"
+        "    (Path(out) / (stem + '.pdf')).write_bytes(b'%PDF-1.4 stub\\n%%EOF\\n')\n"
+        f"sys.exit({returncode})\n"
+    )
+    script.chmod(0o755)
+    return str(script)
+
+
+def _real_runner(fake_bin: str):
+    """Forward _render_tex's OWN kwargs to a real subprocess, swapping only the
+    binary. The production decode kwargs are therefore the ones under test."""
+    def runner(cmd, **kwargs):
+        return subprocess.run([fake_bin, *cmd[1:]], **kwargs)
+    return runner
+
+
+def _render_letter(out, runner):
+    return render_letter_pdf("j-dec", _LETTER_BODY, _HEADER, _RECIPIENT, "Role",
+                             "en", out, runner=runner)
+
+
+def test_strict_decode_of_pdflatex_output_would_raise(tmp_path):
+    """Teeth for the regressions below: the kwargs _render_tex used to pass DO
+    raise on this exact TeX log, so the passing tests that follow are not
+    vacuous."""
+    cmd = [_fake_pdflatex_bin(tmp_path, _BAD_TEX_LOG, create_pdf=False)]
+    with pytest.raises(UnicodeDecodeError):
+        subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+
+def test_render_pdf_survives_undecodable_pdflatex_output(tmp_path):
+    """The production crash, end to end: a TeX log with an undecodable byte now
+    renders normally instead of aborting the run."""
+    out = tmp_path / "j-ok"
+    result = _render_letter(out, _real_runner(
+        _fake_pdflatex_bin(tmp_path, _BAD_TEX_LOG)))
+    assert result == out / "j-dec-cover-letter.pdf"
+    assert result.read_bytes().startswith(b"%PDF")
+
+
+def test_undecodable_output_does_not_mask_a_genuine_pdflatex_failure(tmp_path):
+    """Not raising must not become not failing: a real LaTeX failure still
+    returns None, and the EXIT STATUS is what decides that, not the presence of
+    a PDF or the decodability of the log."""
+    out = tmp_path / "j-fail"
+    assert _render_letter(out, _real_runner(_fake_pdflatex_bin(
+        tmp_path, _BAD_TEX_LOG, create_pdf=False, returncode=1))) is None
+    assert not out.exists()
+    # rc 1 that nonetheless left a PDF behind is still a failure
+    assert _render_letter(out, _real_runner(_fake_pdflatex_bin(
+        tmp_path, _BAD_TEX_LOG, create_pdf=True, returncode=1,
+        name="fake_pdflatex_rc1_pdf"))) is None
+    assert not out.exists()
+
+
+def test_undecodable_pdflatex_output_is_recorded_on_failure(tmp_path, caplog):
+    """A lossy log is attributable when it is the diagnosis (failed render), and
+    is DEBUG rather than WARNING when the PDF came out fine, so a routine
+    substitution does not train the operator to ignore warnings."""
+    with caplog.at_level(logging.DEBUG, logger="engine.artifacts"):
+        assert _render_letter(tmp_path / "j-w", _real_runner(
+            _fake_pdflatex_bin(tmp_path, _BAD_TEX_LOG, create_pdf=False,
+                               returncode=1))) is None
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "1 undecodable byte(s)" in warnings[0].getMessage()
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="engine.artifacts"):
+        assert _render_letter(tmp_path / "j-d", _real_runner(
+            _fake_pdflatex_bin(tmp_path, _BAD_TEX_LOG,
+                               name="fake_pdflatex_ok"))) is not None
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+    assert any("undecodable" in r.getMessage() for r in caplog.records)
+
+
+def test_clean_pdflatex_output_records_nothing(tmp_path, caplog):
+    """The signal discriminates rather than always firing."""
+    with caplog.at_level(logging.DEBUG, logger="engine.artifacts"):
+        assert _render_letter(tmp_path / "j-c", _real_runner(
+            _fake_pdflatex_bin(tmp_path, _CLEAN_TEX_LOG))) is not None
+    assert [r for r in caplog.records if "undecodable" in r.getMessage()] == []
+
+
+def test_render_tex_passes_non_strict_decode_to_runner(tmp_path):
+    """The injected-runner contract still gets text mode, but never the strict
+    default: this kwarg pair is what stops the crash from coming back."""
+    seen: dict = {}
+
+    def runner(cmd, **kwargs):
+        seen.update(kwargs)
+        build_dir = Path(kwargs["cwd"])
+        (build_dir / f"{Path(cmd[-1]).stem}.pdf").write_bytes(b"%PDF-1.4 stub\n")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert render_report_pdf("j-kw", _REPORT_DATA, tmp_path / "j-kw",
+                             runner=runner) is not None
+    assert seen["encoding"] == "utf-8"
+    assert seen["errors"] == "replace"
+    assert "text" not in seen

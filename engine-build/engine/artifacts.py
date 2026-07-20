@@ -21,10 +21,21 @@ back to a plain `.txt` attachment instead of crashing the run.
 -halt-on-error`); only the finished PDF is moved into `out_dir`, which is created
 0700. The subprocess call is injectable (`runner`) so tests drive it with a fake
 and never shell out to a real TeX installation.
+
+Decode policy (mirrors `engine.draft`): pdflatex's captured output is decoded with
+an explicit UTF-8 codec and `errors="replace"`, never the strict default. TeX
+echoes source content and emits its own messages as raw bytes, so its log is NOT
+reliably UTF-8; under a strict decode one such byte raised `UnicodeDecodeError`
+out of `subprocess`, past the handler below (which catches `OSError` and
+`subprocess.SubprocessError`, and `UnicodeDecodeError` is neither), and aborted a
+production run at this exact site (2026-07-20). The captured output is only ever
+read for its exit status, so a substitution costs nothing in the PDF itself; what
+it costs is fidelity in the log, which is why it is logged rather than ignored.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
@@ -34,6 +45,17 @@ from pathlib import Path
 from typing import Callable
 
 _PDFLATEX_TIMEOUT_S = 60
+
+_LOG = logging.getLogger(__name__)
+
+# Passed to the injected runner in place of a bare `text=True`. Either kwarg puts
+# `subprocess` in text mode, but `text=True` alone decodes strictly and raises on
+# the first invalid byte; these keep the same str-returning contract while
+# degrading a malformed byte to U+FFFD. Explicit `encoding` also removes the
+# locale-dependent default codec as a second hazard.
+_TEXT_DECODE = {"encoding": "utf-8", "errors": "replace"}
+
+_REPLACEMENT_CHAR = "�"
 
 # LaTeX-special characters that must never reach the compiler verbatim. A single
 # regex pass (re.sub does not re-scan its own replacements) keeps the backslash
@@ -307,12 +329,27 @@ def _render_tex(document: str, stem: str, out_dir: str | Path,
             completed = runner(
                 ["pdflatex", "-interaction=nonstopmode", "-halt-on-error",
                  "-output-directory", str(build_dir), tex_path.name],
-                cwd=str(build_dir), capture_output=True, text=True,
-                timeout=_PDFLATEX_TIMEOUT_S,
+                cwd=str(build_dir), capture_output=True,
+                timeout=_PDFLATEX_TIMEOUT_S, **_TEXT_DECODE,
             )
         except (OSError, subprocess.SubprocessError):
             return None  # pdflatex missing (FileNotFoundError) or timed out
-        if getattr(completed, "returncode", 1) != 0:
+        failed = getattr(completed, "returncode", 1) != 0
+        replacements = _count_replacements(completed)
+        if replacements:
+            # Severity splits on the outcome deliberately. A lossy log matters
+            # only when the render failed and that log was the diagnosis; on the
+            # happy path this fires routinely (TeX emits non-UTF-8 bytes for any
+            # accented source) and warning about a PDF that came out perfect
+            # would only teach the operator to ignore warnings. The count is
+            # logged but never the output itself: TeX echoes the letter body,
+            # which is owner PII and must not reach the journal.
+            _LOG.log(
+                logging.WARNING if failed else logging.DEBUG,
+                "pdflatex output for %s carried %d undecodable byte(s); each "
+                "became U+FFFD, so the captured log is lossy (the PDF itself is "
+                "byte-for-byte unaffected)", stem, replacements)
+        if failed:
             return None
         built_pdf = build_dir / f"{stem}.pdf"
         if not built_pdf.exists():
@@ -322,6 +359,14 @@ def _render_tex(document: str, stem: str, out_dir: str | Path,
         return final
     finally:
         shutil.rmtree(build_dir, ignore_errors=True)
+
+
+def _count_replacements(completed) -> int:
+    """Count substituted characters across both captured streams: pdflatex writes
+    its log to stdout and its errors to stderr, and the decode policy applies to
+    both."""
+    return sum((getattr(completed, name, "") or "").count(_REPLACEMENT_CHAR)
+               for name in ("stdout", "stderr"))
 
 
 def _latex_body(material: str) -> str:
