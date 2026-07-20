@@ -75,8 +75,14 @@ FIELD-DRIVING SPECIFICS (W5.4 spec PART B):
   field, already routed to the photo asset by the inherited resolve_values).
 - address -> the SAME text path fills `input[name="address"]` only; the
   city/postcode/country COMPANIONS are machine-managed (never mapped to a Field,
-  so never driven), and a pre-existing `prefilledByLocation` value simply reads
-  back as the confirmed value.
+  so never driven). A pre-existing `prefilledByLocation` value reads back as the
+  confirmed value ONLY on the DRIVEN path, i.e. when the SSOT actually answers
+  address. When it does NOT resolve (the live rokt r7 case,
+  `missing:canned_answers.address`) the field is PARKED: the engine never types
+  there, so nothing is confirmed and the value is NOT counted filled. The
+  platform's own prefill is instead OBSERVED read-only after the drive loop
+  (`_observe_parked_page_state`) and recorded in that field's census skip reason,
+  so the census distinguishes a blank box from a platform-populated one.
 - boolean -> CLICK the ONE yes/no option WRAPPER matching the resolved intent
   (located by its visible text, `_drive_boolean_radio`), confirmed via
   aria-checked; never a `.check()` on the aria-hidden inner radio input.
@@ -161,7 +167,9 @@ def resolve_values(fieldmap: FieldMap, ssot, profile: dict, *,
 # (text via type_human, a file via _safe_upload, a boolean by CLICKING its yes/no
 # option wrapper; a dropdown/multiple/group is handed off, never auto-clicked),
 # (3) readback-gate what counts
-# as filled, (4) DOM-sweep cross-check (GREENHOUSE semantics: the schema is the
+# as filled, (3b) OBSERVE (read-only, never drive) the page state of every PARKED
+# text field, so the census tells a blank box from a PLATFORM PREFILL,
+# (4) DOM-sweep cross-check (GREENHOUSE semantics: the schema is the
 # oracle, the sweep confirms it) forces NOT_COMPLETE on any mismatch, (5) return
 # the existing FillReport dataclass.
 
@@ -298,7 +306,11 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     mismatch = base.completeness_mismatch(schema_required, dom_required)
 
     filled = len(filled_keys)
-    all_skips = list(values.skipped) + extra_skips
+    # (3b) PARKED-FIELD PAGE-STATE OBSERVATION (read-only; see that function).
+    # It annotates skip REASONS only -- `filled_keys` and `fieldmap.fields` are
+    # both untouched, so neither side of the completeness bar moves.
+    all_skips = _observe_parked_page_state(
+        page, fieldmap, list(values.skipped) + extra_skips, values)
     fillable_total, required_unfilled, justified_skips = _completeness(
         fieldmap, filled_keys, all_skips, filled, vendor_resolver=None)
     required_unfilled = required_unfilled + _sweep_gaps(mismatch)
@@ -516,6 +528,138 @@ def _fill_field(page, fv) -> tuple[bool, Any]:
     return ok, actual
 
 
+# -- PARKED-field page state: READ-ONLY observation, never a drive (P2-1) ------
+# LIVE ROOT CAUSE (rokt 136262D382, r7 acceptance run): the census reported
+# `address` as `missing:canned_answers.address` AND required-unfilled while a
+# pixel audit showed the box VISIBLY POPULATED by a Workable PLATFORM PREFILL.
+# fill()'s drive loop iterates `values.fields` -- the RESOLVED fields -- so a
+# field that never resolved reached NO readback at all, and the census reported
+# ENGINE state as though it were PAGE state. The direction is safe (it can only
+# under-report), but it is still wrong about the page. The schema GET corroborates
+# the prefill independently: the real captured payload carries `"value": "Milan,
+# Italy", "prefilledByLocation": true` on the address field (fixture
+# `form-FAF4116602.json`), which `capture._workable_field` does not carry onto the
+# Field -- so the PAGE, read back, is the only source this module has.
+#
+# This OBSERVES; it never DRIVES. Typing into a field the engine has no answer for
+# would OVERWRITE the platform's own value -- a far worse defect than the
+# misreport it would fix -- so the only method called here is `input_value()`:
+# no type_human, no click, no check, on any path.
+#
+# It does NOT move the completeness bar. The numerator is `len(filled_keys)` and
+# nothing here touches `filled_keys`; the denominator is the non-hidden field
+# count and nothing here touches `fieldmap`. The annotation is a SUFFIX on an
+# existing reason, and every reason classifier in `kernel.resolve._completeness`
+# is a `startswith` or a substring test, so a suffix cannot destroy a match; these
+# markers carry none of the classifier trigger tokens, so they cannot manufacture
+# one either. A platform-prefilled required field therefore STAYS a required gap:
+# the engine still has no answer of its own for it, and the census now says so
+# precisely instead of implying a blank box.
+
+_TEXTBOX_ROLE = "textbox"
+
+# The three page states a parked text field can be in. All three are recorded
+# EXPLICITLY: "no marker" would be indistinguishable from "not a text field".
+# The prefilled marker records a LENGTH, never the value itself -- the census is
+# an artefact that gets read and shipped, and the prefill is the owner's own
+# personal data (the live case was a home location).
+_PAGE_STATE_PREFILLED = (
+    "[page-state: PLATFORM-PREFILLED -- the control already holds a value of "
+    "{length} characters that the engine neither typed nor has an answer for; "
+    "observed read-only and left untouched, never counted as filled]")
+
+_PAGE_STATE_EMPTY = (
+    "[page-state: the control reads back empty, so this is a genuine data gap]")
+
+_PAGE_STATE_UNOBSERVED = (
+    "[page-state: NOT OBSERVED -- the control did not resolve to exactly one "
+    "readable box, so no claim is made about what the page holds]")
+
+
+def _observe_parked_page_state(page, fieldmap, all_skips: list[tuple[str, str]],
+                               values: ResolvedValues) -> list[tuple[str, str]]:
+    """Annotate each PARKED text field's skip reason with the page's own state.
+
+    Returns a NEW skip list (`values.skipped` is never mutated: the content
+    overlay upstream owns that list and keys its own reasoning off the reasons it
+    wrote there).
+
+    PARKED means the key is absent from `values.fields`, which is the precise
+    structural test for "the engine never typed here": every text-class field the
+    engine DOES drive goes through `_fill_field`, and a field that failed to
+    resolve never enters `values.fields` at all. Keying on that -- rather than on
+    "not in filled_keys" -- is load-bearing: a DRIVEN field whose readback missed
+    is also unfilled, and calling the engine's own half-landed text a PLATFORM
+    prefill would be a straight falsehood.
+    """
+    if fieldmap is None:
+        return all_skips
+    by_key = {f.key: f for f in fieldmap.fields}
+    resolved_keys = {fv.key for fv in values.fields}
+    annotated: list[tuple[str, str]] = []
+    for key, reason in all_skips:
+        field = by_key.get(key)
+        if (key in resolved_keys or field is None
+                or not _is_parked_text_field(field)):
+            annotated.append((key, reason))
+            continue
+        annotated.append((key, f"{reason} {_page_state_note(page, field)}"))
+    return annotated
+
+
+def _is_parked_text_field(field) -> bool:
+    """Is this a plain TEXT box, the only control this observation can read?
+
+    `input_value()` is meaningful on a textbox and on nothing else here: a
+    Workable upload is typed `file` (role "button"), a boolean is a radiogroup of
+    wrappers, a dropdown/multiple is a custom widget, and a group subfield's
+    container is never even opened. A date IS a textbox but is excluded too -- its
+    box carries a LOCALE-DEPENDENT placeholder rather than a platform-authored
+    value (see `_workable_dom_required`), so reading one back would say nothing
+    about prefilled content."""
+    return (field.locator.role == _TEXTBOX_ROLE
+            and field.type not in (_BOOLEAN_TYPE, _DATE_TYPE)
+            and not _is_group_subfield(field))
+
+
+def _page_state_note(page, field) -> str:
+    """One of the three `_PAGE_STATE_*` markers for this parked control."""
+    value = _parked_control_value(page, field)
+    if value is None:
+        return _PAGE_STATE_UNOBSERVED
+    if not value.strip():
+        return _PAGE_STATE_EMPTY
+    return _PAGE_STATE_PREFILLED.format(length=len(value.strip()))
+
+
+def _parked_control_value(page, field):
+    """The control's current text, or None when it cannot be read HONESTLY.
+
+    UNIQUENESS-GATED, the same discipline `_drive_boolean_radio` applies to an
+    option wrapper: a locator matching zero or several nodes reads as None (no
+    claim recorded) rather than guessing which box the schema field meant. This
+    matters more here than on the driven path -- the driven locators are pinned by
+    a live resolution fixture, whereas a PARKED field's locator has by definition
+    never been resolved on a live page.
+
+    Guarded end to end (a partial fake, a detached node, a locator with no
+    `input_value` all read as None), and READ-ONLY by construction: `input_value`
+    is the only method this calls."""
+    try:
+        locator = base._locate(page, field)
+    except Exception:
+        return None
+    if _option_count(locator) != 1:
+        return None
+    reader = getattr(locator, "input_value", None)
+    if not callable(reader):
+        return None
+    try:
+        return str(reader() or "")
+    except Exception:
+        return None
+
+
 # -- boolean / date: the shared kernel control mechanism (W5.1c) ---------------
 
 
@@ -688,8 +832,10 @@ def _other_option_text(option_text: str) -> str:
 
 
 def _option_count(locator) -> int:
-    """How many live elements a filtered option locator matches, guarded (a partial
-    fake or a detached scope reads as zero, never a raised drive)."""
+    """How many live elements a locator matches, guarded (a partial fake or a
+    detached scope reads as zero, never a raised drive). Shared by both
+    uniqueness gates: the option-wrapper pick above and the parked text field
+    probe (`_parked_control_value`)."""
     counter = getattr(locator, "count", None)
     if not callable(counter):
         return 0

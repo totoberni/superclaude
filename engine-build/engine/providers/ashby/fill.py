@@ -71,48 +71,88 @@ differ, for the two reasons Ashby is a distinct reference:
    still forces NOT_COMPLETE, and an unfilled required field is never reconciled
    away. See the section comment above `_reconcile` for the live evidence.
 
-2. CHECKBOX/RADIO: A SINGLE CONTROL AND A RADIO GROUP DRIVE, A CHECKBOX GROUP
-   HANDS OFF (W5.1c; radio-group adoption completed after the TB5 live run). The
-   original blanket Turnstile hand-off is now narrow: `engine.kernel.
-   control_toolkit.drive_control` proved (W5.1c click-policy research) that a
-   native, CDP-trusted `.check()` carries the SAME anti-bot risk tier as the
-   typing this module already does -- the hazard was never the click, only a
-   JS-dispatched `new Event`, which this path never uses -- so a lone, boolean
-   Ashby checkbox (the graphql `Boolean` type; `fv.value` is a Python bool)
-   drives through the shared mechanism, and so now does a radio-rendered
-   `multi_value_single_select` GROUP (33/34 live `ValueSelect` fields).
+2. CHECKBOX/RADIO: A SINGLE CONTROL AND BOTH OPTION GROUPS DRIVE (W5.1c; the
+   radio-group adoption completed after the TB5 live run, the checkbox-group
+   adoption P2-5 after it). The original blanket Turnstile hand-off is now
+   narrow: `engine.kernel.control_toolkit.drive_control` proved (W5.1c
+   click-policy research) that a native, CDP-trusted `.check()` carries the SAME
+   anti-bot risk tier as the typing this module already does -- the hazard was
+   never the click, only a JS-dispatched `new Event`, which this path never uses
+   -- so a lone, boolean Ashby checkbox (the graphql `Boolean` type; `fv.value`
+   is a Python bool) drives through the shared mechanism, and so now do BOTH
+   option GROUPS: a radio-rendered `multi_value_single_select` (33/34 live
+   `ValueSelect` fields) and a checkbox-rendered `multi_value_multi_select`.
 
-   THE RADIO GROUP (`ControlKind.RADIO`). A single boolean checkbox is resolved
-   by `base._locate` (its own accessible name IS the field title). A radio group
-   is N controls that share the field's entry, and each carries the OPTION's own
-   accessible name, never the field title, so the field's role+name locator
-   cannot pick one option. `_locate_option` builds the missing per-option locator
-   the way lever's FX1 proved it: intersect a page-wide role+accessible-name
-   match (`get_by_role("radio", name=<option>, exact=True)`) with a
-   group-scoping locator via `Locator.and_`. Lever scopes by the group's shared
-   submission NAME; ashby's radios carry no such schema-known name (they share an
-   entry-id-prefixed name the graphql does not carry), so it scopes by the field
-   ENTRY (`[data-field-path="<key>"] input`, the same structural anchor
+   ONE MECHANISM FOR BOTH GROUPS (`_fill_option_group`). A single boolean
+   checkbox is resolved by `base._locate` (its own accessible name IS the field
+   title). An option GROUP is N controls that share the field's entry, and each
+   carries the OPTION's own accessible name, never the field title, so the
+   field's role+name locator cannot pick one option. `_locate_option` builds the
+   missing per-option locator the way lever's FX1 proved it: intersect a
+   page-wide role+accessible-name match (`get_by_role(<role>, name=<option>,
+   exact=True)`) with a group-scoping locator via `Locator.and_`. Lever scopes by
+   the group's shared submission NAME; ashby's radios carry no such schema-known
+   name (they share an entry-id-prefixed name the graphql does not carry) and its
+   checkboxes carry the OPTION's wording as their `name`, so NEITHER has a
+   group-distinguishing submission name and BOTH scope by the field ENTRY
+   (`[data-field-path="<key>"] input`, the same structural anchor
    `_geo_control`/`_reconcile` use, and it IS `Field.key`). Only the option that
    is BOTH worded `<option>` AND inside THIS group's entry can match, so a page
    with the same option wording ("Other") in two groups resolves each to its own
-   control (the FX1 collision class). LIVE-VERIFIED: two 2026-07-18/19 w5_accept
-   runs on real ashby postings are the acceptance evidence the deferral demanded.
+   control (the FX1 collision class). The mechanism is SHARED, not copied: a
+   radio group is the degenerate one-option case of the same driver, which is
+   what `_group_options` expresses. LIVE-VERIFIED for the radio half: two
+   2026-07-18/19 w5_accept runs on real ashby postings are the acceptance
+   evidence the deferral demanded.
 
-   Single-select semantics, fail-closed: exactly the resolved option is ticked,
-   and driven through the SAME `drive_control` (`.check()` + `.is_checked()`
-   readback) as a lone checkbox. An option that does not resolve to exactly one
-   control inside its entry is HANDED OFF (`_GROUP_OPTION_HANDOFF_REASON`, loud
-   and named); a driven option whose checked state does not read back is a GAP.
-   A required group that is handed off or unconfirmed still lands in
-   `required_unfilled` -> NOT_COMPLETE, never a silent skip and never a guessed
-   click.
+   Fail-closed, for both: exactly the requested options are ticked, each driven
+   through the SAME `drive_control` (`.check()` + `.is_checked()` readback) as a
+   lone checkbox. Every requested option is LOCATED BEFORE ANY IS DRIVEN, so an
+   option that does not resolve to exactly one control inside its entry hands the
+   WHOLE group off with the page UNTOUCHED (`_GROUP_OPTION_HANDOFF_REASON`, loud
+   and named) rather than leaving a half-ticked group behind. A required group
+   that is handed off or unconfirmed still lands in `required_unfilled` ->
+   NOT_COMPLETE, never a silent skip and never a guessed click.
 
-   A checkbox-rendered `multi_value_multi_select` GROUP still HANDS OFF,
-   unchanged (`_control_kind` returns None for it; a list value is not a bool):
-   per-option checkbox-group driving is a sibling this wave scoped out, not a
-   technical impossibility (`_locate_option` would serve it structurally). It
-   stays a named `required_unfilled` hand-off, never a fill-error.
+   WHY A CHECKBOX GROUP IS RISKIER THAN A RADIO, and what answers it. A radio is
+   one-of-N and its wrong answer is still an answer; a checkbox group can end up
+   in the wrong COMBINATION, and a raw click TOGGLES rather than sets, so a
+   second pass over an already-correct box would UNTICK it. Three properties
+   answer that, all in `_fill_option_group`:
+     - PARTIAL IS A GAP. A multi-select where only SOME requested options read
+       back ticked is reported UNFILLED (`_partial_group_reason`), never filled.
+       So is an empty request. The convention predates this adoption and survives
+       it intact.
+     - IDEMPOTENT. The desired state is read FIRST (`_already_ticked`): an option
+       already in the desired state is confirmed WITHOUT being touched, so a
+       re-run of a correct group performs ZERO interactions. Underneath, the
+       kernel drives with `.check()` (which SETS and is itself idempotent), never
+       `.click()` (which toggles).
+     - ADDITIVE ONLY. This path passes `value=True` and nothing else, so it can
+       only ever ADD a tick. It never unticks, so it can never clear a box a
+       human deliberately ticked, and it never touches a control outside the
+       requested set. The cost is stated honestly: `FieldValue` carries no option
+       list, so a group PRE-TICKED by the page with an option the SSOT did not
+       request keeps that tick, and this module does not claim otherwise.
+
+   CONSENT/EEO ARE EXCLUDED FROM THE NEW DRIVER (`_is_excluded_group`). The
+   population this adoption makes newly drivable is exactly the
+   `multi_value_multi_select` checkbox GROUP, and the kernel's consent machinery
+   does NOT cover it: `resolve._resolve_boolean` dispositions a consent-class
+   checkbox through the seeded `policies.consent.<class>` policy, but that branch
+   is reached only for the `Boolean` type, so a consent-class or demographic
+   MULTI-SELECT would reach `_render_select` with no policy behind it at all.
+   Driving one would tick a legally significant box on a heuristic. So a checkbox
+   GROUP whose question classifies as consent (`resolve._classify_checkbox`) or
+   as EEO/demographic (`resolve._DEMOGRAPHIC_KEYWORDS`) keeps the human hand-off,
+   named (`_SENSITIVE_GROUP_HANDOFF_REASON`). Both predicates are the KERNEL's
+   own, imported rather than restated, so the classification cannot drift from
+   the one the resolve layer applies. The demographic half is defence in depth
+   (`resolve._manual_only_reason` already skips those before the fill loop); the
+   consent half is load-bearing and has no upstream equivalent for this type.
+   The exclusion is deliberately scoped to the NEWLY drivable population: a lone
+   boolean checkbox keeps `_resolve_boolean`'s ratified policy handling and a
+   radio group keeps its live-verified adoption, both unchanged.
 
    Ashby serves no DATE-kind `drive_control` target: Ashby's Date raw type
    collapses into the generic canonical `input_text` type with no surviving
@@ -181,6 +221,10 @@ from typing import Any
 from engine.kernel.contracts import (
     Field, FieldMap, FillAssets, FillReport, FillSafetyError, ResolvedValues)
 from engine.kernel.resolve import resolve_values as _kernel_resolve_values
+# The kernel's OWN consent/demographic classifiers, imported rather than
+# restated, so `_is_excluded_group` cannot drift from the classification the
+# resolve layer applies to the same label (see the module docstring, section 2).
+from engine.kernel.resolve import _DEMOGRAPHIC_KEYWORDS, _classify_checkbox
 from engine.kernel.fill_toolkit import (
     _current_url, _fill_upload, _is_upload, _needs_human_handoff,
     _strip_fragment, _sweep_gaps)
@@ -239,8 +283,9 @@ def resolve_values(fieldmap: FieldMap, ssot, profile: dict, *,
 # -- fill(): the Provider contract's ordered sequence (schema + controlled-select)
 # (1) never-send FIRST, (2) drive each field via the right primitive (Ashby
 # controlled-component driver for selects/comboboxes, base.type_human for text,
-# base._safe_upload for the resume, a single checkbox and a radio group driven
-# via drive_control, a checkbox multi-select group handed off),
+# base._safe_upload for the resume, a single checkbox and BOTH option groups
+# (radio single-select, checkbox multi-select) driven via drive_control, a
+# consent/EEO checkbox group and a value of the wrong shape handed off),
 # (3) readback-gate what counts as filled, (4) DOM-sweep CROSS-CHECK (greenhouse
 # semantics -- the schema is authoritative) forces NOT_COMPLETE on any mismatch,
 # (5) return the existing FillReport dataclass.
@@ -275,11 +320,18 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
             _fill_upload(page, fv, uploads, extra_skips, filled_keys)
             continue
         kind = _control_kind(fv)
+        if _is_excluded_group(fv):
+            # A consent-class or EEO/demographic checkbox GROUP: drivable since
+            # P2-5, and deliberately NOT driven. The kernel's consent policy
+            # covers the `Boolean` type only, so this control would be ticked on
+            # a heuristic with no policy behind it. Named, and a required one
+            # falls through to required_unfilled -> NOT_COMPLETE.
+            extra_skips.append((fv.key, _SENSITIVE_GROUP_HANDOFF_REASON))
+            continue
         if kind is None and _needs_human_handoff(fv):
-            # A checkbox multi-select GROUP (a list value, not a bool): still a
-            # human hand-off this wave. Radio single-select groups are driven
-            # per-option below (`_control_kind` -> RADIO); checkbox-group driving
-            # is a scoped-out sibling. Named, and a required one falls through to
+            # A click-hazard control whose resolved value does not match any
+            # shape this module knows how to drive (see `_control_kind`): the
+            # residual human hand-off. Named, and a required one falls through to
             # required_unfilled -> NOT_COMPLETE.
             extra_skips.append((fv.key, _HUMAN_HANDOFF_REASON))
             continue
@@ -352,7 +404,8 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
 # -- per-field driving ---------------------------------------------------------
 # text/email/phone via base.type_human; an Ashby select/combobox via the OWN
 # controlled-component driver (NEVER react-select, NEVER native select_option);
-# a checkbox/radio never here (it is handed off before this is reached).
+# a checkbox/radio never here (`_control_kind` routes it to `_fill_control`, or
+# it is handed off, before this is reached).
 
 
 # The Ashby SELECT-TYPE fields, decided by the vendor's own schema `type` (NOT by
@@ -362,22 +415,60 @@ _ASHBY_SELECT_TYPES = frozenset({
     "multi_value_single_select", "multi_value_multi_select", "yes_no",
 })
 
+# The RESIDUAL hand-off. Both option groups and the lone boolean checkbox now
+# drive, so what is left is a click-hazard control whose resolved value does not
+# match any shape this module knows how to drive (a checkbox group whose value
+# came back a bare string, a radio whose value came back a list). Driving one
+# would mean guessing what the value meant, so it goes to a human instead.
 _HUMAN_HANDOFF_REASON = (
-    "checkbox multi-select OPTION GROUP handed off for a human-operated trusted "
-    "click: radio single-select groups are now driven per-option, but "
-    "multi-select checkbox-group driving is a scoped-out sibling of this wave, "
-    "so this control is handed off (a required one forces NOT_COMPLETE, never a "
-    "guessed click)")
+    "checkbox/radio control handed off for a human-operated trusted click: its "
+    "resolved value does not match the shape its control kind drives (a "
+    "checkbox group takes a list of options, a radio group one option string, a "
+    "lone checkbox a bool), so no control is driven on a guess (a required one "
+    "forces NOT_COMPLETE)")
 
-# A radio group whose resolved option cannot be located to exactly ONE control
-# inside its own field entry (none, or several): ashby's entry container is
-# always present for a captured field, so a 0-or-2+ resolution is a genuine
-# "cannot pick this option", handed off loudly rather than driving a guess.
+# A consent-class or EEO/demographic checkbox GROUP. Structurally drivable since
+# the P2-5 adoption and deliberately not driven: see the module docstring's
+# CONSENT/EEO ARE EXCLUDED note for why the kernel's consent policy does not
+# reach this type and why a heuristic tick on a legally significant box is the
+# one outcome this adoption must not buy.
+_SENSITIVE_GROUP_HANDOFF_REASON = (
+    "consent-class or EEO/demographic checkbox OPTION GROUP handed off for a "
+    "human: the kernel's seeded consent policy (policies.consent.<class>) "
+    "dispositions the Boolean checkbox type only, so this multi-select carries "
+    "no policy verdict and is never auto-ticked on a label heuristic (a "
+    "required one forces NOT_COMPLETE)")
+
+# An option group with a requested option that cannot be located to exactly ONE
+# control inside its own field entry (none, or several): ashby's entry container
+# is always present for a captured field, so a 0-or-2+ resolution is a genuine
+# "cannot pick this option", handed off loudly rather than driving a guess. The
+# WHOLE group is handed off and NOTHING is driven, because every option is
+# located before any is ticked -- a half-ticked multi-select left behind by a
+# mid-way abort would be the wrong-combination hazard this path exists to avoid.
 _GROUP_OPTION_HANDOFF_REASON = (
-    "radio OPTION GROUP: the resolved option did not resolve to exactly ONE "
-    "control inside this field's entry (none, or several), so it is handed off "
-    "for a human rather than driving a guessed control (a required one forces "
-    "NOT_COMPLETE, never a guessed click)")
+    "OPTION GROUP: a requested option did not resolve to exactly ONE control "
+    "inside this field's entry (none, or several), so the WHOLE group is handed "
+    "off for a human, untouched, rather than driving a guessed control (a "
+    "required one forces NOT_COMPLETE, never a guessed click)")
+
+# PARTIAL CONFIRMATION IS A GAP. A multi-select whose requested options were
+# located and driven but did not ALL read back ticked is reported UNFILLED, with
+# the ones that did not confirm named. A partly-answered multi-select is a
+# different answer from the one intended, so counting it filled would be exactly
+# the silent wrong answer this engine's doctrine forbids.
+_PARTIAL_GROUP_REASON = (
+    "OPTION GROUP only PARTIALLY confirmed: {count} requested option(s) did not "
+    "read back ticked ({names}), so the group is a GAP and NOT a fill -- a "
+    "partially-answered multi-select is never reported as filled (a required "
+    "one forces NOT_COMPLETE)")
+
+# A group whose request is EMPTY has nothing to confirm, so it is never a fill.
+# `resolve._render_select` already skips a multi-select no option matched, so
+# this is the defence-in-depth guard at the driver boundary.
+_EMPTY_GROUP_REASON = (
+    "OPTION GROUP: no option was requested for this field, so there is nothing "
+    "to tick and nothing to confirm; it is never counted as filled")
 
 _READBACK_MISMATCH_REASON = "value did not commit (readback mismatch)"
 
@@ -456,27 +547,31 @@ def _is_ashby_combobox(fv) -> bool:
 
 
 def _control_kind(fv) -> str | None:
-    """`ControlKind.CHECKBOX` for a single, unambiguous boolean checkbox;
-    `ControlKind.RADIO` for a radio-rendered single-select GROUP; `None` for
-    everything else (a checkbox-rendered multi-select GROUP), which keeps the
-    human hand-off.
+    """`ControlKind.CHECKBOX` for a single boolean checkbox AND for a
+    checkbox-rendered multi-select GROUP; `ControlKind.RADIO` for a
+    radio-rendered single-select GROUP; `None` for everything else, which keeps
+    the human hand-off.
+
+    The kind is the CONTROL's, so both checkbox shapes share it; what tells them
+    apart downstream is the VALUE's shape, which is also the schema's own
+    distinction: a `Boolean` resolves to a Python bool (ONE control), a
+    `multi_value_multi_select` to a LIST of chosen options (a GROUP).
+    `_group_options` is the single place that reads that distinction.
 
     Ashby's `Field.locator` is ONE role+name pair per FIELD. It resolves a lone
     boolean checkbox correctly through `base._locate` (the DOM invariant table:
     role "checkbox" is the live, correct role for a `Boolean` field, whose own
     accessible name IS the field title). It cannot resolve one specific OPTION
     inside a GROUP -- each control in a group carries the OPTION's own accessible
-    name, never the field title -- so a radio group is driven a different way:
+    name, never the field title -- so BOTH groups are driven a different way:
     `_locate_option` builds the per-option locator (lever's FX1 shape, scoped to
-    the field entry), and `_fill_radio_group` ticks exactly the resolved option.
-    A `multi_value_single_select` renders as radios on 33/34 live ValueSelect
-    fields (`fv.value` is the ONE chosen option, a str); the 34th renders as the
-    nameless combobox, routed by role before this is reached.
+    the field entry), and `_fill_option_group` ticks exactly the requested
+    options. A `multi_value_single_select` renders as radios on 33/34 live
+    ValueSelect fields (`fv.value` is the ONE chosen option, a str); the 34th
+    renders as the nameless combobox, routed by role before this is reached.
 
-    A checkbox-rendered `multi_value_multi_select` GROUP (`fv.value` a LIST of
-    chosen options, never a bool) returns None and keeps the hand-off: per-option
-    checkbox-group driving is a sibling this wave scoped out, not a technical
-    impossibility.
+    A click-hazard control whose value matches NONE of those shapes returns None
+    and keeps the hand-off: driving it would mean guessing what the value meant.
 
     Ashby serves no DATE-kind target: Ashby's Date raw type collapses into the
     generic canonical `input_text` type with no surviving signal to tell it apart
@@ -484,45 +579,97 @@ def _control_kind(fv) -> str | None:
     nothing to route to `ControlKind.DATE` without inventing a detection this
     wave was told not to invent."""
     role = fv.locator.role
-    if role == "checkbox" and isinstance(fv.value, bool):
+    if role == "checkbox" and isinstance(fv.value, (bool, list)):
         return ControlKind.CHECKBOX
     if role == "radio" and isinstance(fv.value, str):
         return ControlKind.RADIO
     return None
 
 
+def _group_options(fv, kind: str) -> list | None:
+    """The options this field asks to be TICKED when it is an option GROUP, or
+    None for a lone boolean checkbox (the one control that is not a group).
+
+    This is where the two group shapes MEET rather than fork: a radio group is
+    the DEGENERATE ONE-OPTION CASE of a multi-select, so `_fill_option_group`
+    below serves both and there is no second per-option locate/drive path to
+    drift from this one. A radio's single-select semantics are preserved
+    structurally -- the list it produces can never hold more than the ONE
+    resolved option, so exactly one control in the group is ever ticked."""
+    if kind == ControlKind.RADIO:
+        return [fv.value]
+    if isinstance(fv.value, list):
+        return list(fv.value)
+    return None
+
+
+def _is_excluded_group(fv) -> bool:
+    """True for a checkbox GROUP this module refuses to drive on CONSENT or
+    EEO/DEMOGRAPHIC grounds, however drivable it now is.
+
+    Scoped deliberately to the population the P2-5 adoption made NEWLY drivable
+    (`isinstance(fv.value, list)`, i.e. a `multi_value_multi_select`): a lone
+    boolean checkbox keeps `resolve._resolve_boolean`'s ratified per-class
+    consent policy and a radio group keeps its live-verified adoption, and
+    neither is touched here.
+
+    Both classifiers are the KERNEL's own (`_classify_checkbox`, the RS-g
+    consent classes; `_DEMOGRAPHIC_KEYWORDS`, the EEO label keywords), imported
+    rather than restated so this gate cannot drift from the classification the
+    resolve layer applies to the same label. It fails CLOSED by construction: a
+    label it over-matches costs an honest hand-off and a NOT_COMPLETE, while a
+    label it under-matched would cost a heuristic tick on a legally significant
+    box. See the module docstring, section 2."""
+    if not isinstance(fv.value, list):
+        return False
+    label = fv.label or ""
+    if _classify_checkbox(label) is not None:
+        return True
+    low = label.lower()
+    return any(word in low for word in _DEMOGRAPHIC_KEYWORDS)
+
+
 def _fill_control(page, fv, kind: str) -> tuple[bool, Any, str]:
-    """Drive a single checkbox or a radio GROUP through the shared kernel
+    """Drive a single checkbox or EITHER option GROUP through the shared kernel
     mechanism (`engine.kernel.control_toolkit.drive_control`) instead of the
     Turnstile hand-off, and readback-gate the result.
 
-    A radio GROUP (`ControlKind.RADIO`) goes through `_fill_radio_group`, which
-    locates the ONE resolved option inside the field entry before driving it. A
-    single checkbox is located directly by `base._locate` (its own accessible
-    name IS the field title). `name` is the REAL accessible name (`fv.locator.
-    name or fv.label`), exactly as `_safe_upload` passes it, so the submit
-    denylist still sees it. `drive_control` is fail-soft for everything except a
-    denylist/type safety error (both `FillSafetyError`, left to propagate), so a
-    control that does not confirm surfaces as a skip carrying `reason`, never a
-    raised exception."""
-    if kind == ControlKind.RADIO:
-        return _fill_radio_group(page, fv)
+    An option GROUP (radio single-select or checkbox multi-select) goes through
+    `_fill_option_group`, which locates every requested option inside the field
+    entry before driving any of them. A single checkbox is located directly by
+    `base._locate` (its own accessible name IS the field title). `name` is the
+    REAL accessible name (`fv.locator.name or fv.label`), exactly as
+    `_safe_upload` passes it, so the submit denylist still sees it.
+    `drive_control` is fail-soft for everything except a denylist/type safety
+    error (both `FillSafetyError`, left to propagate), so a control that does not
+    confirm surfaces as a skip carrying `reason`, never a raised exception."""
+    options = _group_options(fv, kind)
+    if options is not None:
+        return _fill_option_group(page, fv, kind, options)
     outcome = drive_control(ControlSpec(
         key=fv.key, kind=kind, locator=base._locate(page, fv),
         value=fv.value, name=fv.locator.name or fv.label))
     return outcome.confirmed, outcome.actual, outcome.reason
 
 
-# -- radio GROUP driving: the per-option locate (lever's FX1 shape, ashby anchor)
-# A radio group is N controls sharing this field's entry, each carrying the
-# OPTION's own accessible name. To tick the resolved option, its control must be
-# located among the group's own radios and NEVER a sibling group's option worded
-# the same. Lever's FX1 proved the shape: intersect a page-wide role+accessible-
-# name match with a group-scoping locator via `Locator.and_`. Lever scopes by the
-# group's shared submission NAME; ashby's radios carry no such schema-known name
-# (they share an entry-id-prefixed name the graphql schema does not carry), so
-# the group is scoped by its `data-field-path` field ENTRY instead -- the same
-# structural anchor `_geo_control`/`_reconcile` use, and it IS `Field.key`.
+# -- option GROUP driving: the per-option locate (lever's FX1 shape, ashby anchor)
+# An option group (radio single-select OR checkbox multi-select) is N controls
+# sharing this field's entry, each carrying the OPTION's own accessible name. To
+# tick a requested option, its control must be located among the group's own
+# controls and NEVER a sibling group's option worded the same. Lever's FX1 proved
+# the shape: intersect a page-wide role+accessible-name match with a
+# group-scoping locator via `Locator.and_`. Lever scopes by the group's shared
+# submission NAME; ashby's radios carry no such schema-known name (they share an
+# entry-id-prefixed name the graphql schema does not carry) and its checkboxes
+# carry the OPTION's own wording as their `name` (live: `name="Documentaries"`),
+# so NEITHER group has a group-distinguishing submission name and both are scoped
+# by the `data-field-path` field ENTRY instead -- the same structural anchor
+# `_geo_control`/`_reconcile` use, and it IS `Field.key`.
+#
+# Everything below is ROLE-PARAMETRIC and shared by both group kinds. The three
+# separate emission sites this codebase once grew for one derivation are the
+# lesson: there is ONE locate here and ONE drive, and a checkbox group reaches
+# them by passing its own role, never by growing a parallel copy.
 
 
 # `[data-field-path="{path}"] input` matches the option INPUT nodes (descendants
@@ -536,9 +683,11 @@ def _group_scope_css(key: str) -> str:
     field entry. Paired with a role+accessible-name locator via `.and_()` in
     `_locate_option`, it narrows the page-wide option match to the ONE option
     belonging to THIS group. The ashby analogue of lever's submission-name
-    `_group_css` (FX1): ashby radios carry no group-distinguishing submission
-    name to scope by, so the entry container is the anchor. Empty for a missing
-    key or one that could break out of the attribute selector."""
+    `_group_css` (FX1): neither ashby group carries a group-distinguishing
+    submission name to scope by (radios share an entry-id-prefixed name the
+    schema does not carry, checkboxes carry the option's own wording), so the
+    entry container is the anchor for both. Empty for a missing key or one that
+    could break out of the attribute selector."""
     if not key or '"' in key:
         return ""
     return _GROUP_SCOPE_CSS.format(path=key)
@@ -564,7 +713,9 @@ def _locate_option(page, role: str, key: str, option: str):
     Mirrors lever's proven FX1 shape (`.and_()` intersecting a role+name match
     with a group-scoping locator) with the ashby-specific anchor, so a page with
     the SAME option wording ("Other") in two groups resolves each to its own
-    control. Returns None when the intersection does not resolve to exactly one
+    control. `role` is the CALLER's, so this one function serves a radio group
+    and a checkbox group identically; nothing here knows which it is being asked
+    about. Returns None when the intersection does not resolve to exactly one
     control: ashby's entry container is always present for a captured field, so a
     0-or-2+ result is a genuine "cannot pick this option", which the caller HANDS
     OFF. This is where ashby DEVIATES from lever's `_locate_option`, which falls
@@ -578,27 +729,112 @@ def _locate_option(page, role: str, key: str, option: str):
     return scoped if _resolves_to_one(scoped) else None
 
 
-def _fill_radio_group(page, fv) -> tuple[bool, Any, str]:
-    """Drive the ONE resolved option of a radio-rendered single-select GROUP.
+def _locate_group_options(page, fv, options: list):
+    """Every requested option's OWN control, all resolved BEFORE any of them is
+    driven; None as soon as one of them cannot be resolved to exactly one control
+    inside this field's entry.
 
-    Single-select semantics, fail-closed: exactly the resolved option (`fv.value`,
-    the chosen option's own wording) is located among the group's radios by its
-    OPTION accessible name and scoped to the field entry (`_locate_option`), then
-    ticked through the SAME shared kernel mechanism as a lone checkbox
-    (`drive_control`, `.check()` + `.is_checked()` readback). The `name` passed to
-    `drive_control` is the option wording, so the submit denylist still guards the
-    click. An option that cannot be located to exactly one control is HANDED OFF
-    (named, honest); a driven option whose checked state does not read back is a
-    GAP, never a silent fill. Both surface as a required gap on a required
-    group -> NOT_COMPLETE."""
-    option = fv.value
-    control = _locate_option(page, fv.locator.role, fv.key, option)
-    if control is None:
-        return False, "", _GROUP_OPTION_HANDOFF_REASON
-    outcome = drive_control(ControlSpec(
-        key=fv.key, kind=ControlKind.RADIO, locator=control,
-        value=True, name=option))
-    return outcome.confirmed, outcome.actual, outcome.reason
+    LOCATE-ALL-FIRST is what makes a group hand-off ATOMIC, and it matters far
+    more for a multi-select than for a radio: resolving lazily inside the drive
+    loop would tick the options that resolved and then abandon the group when a
+    later one did not, leaving the page holding a COMBINATION the candidate never
+    asked for. Here a group that cannot be driven in full is not driven at all,
+    so the page is left exactly as it was found."""
+    located = []
+    for option in options:
+        control = _locate_option(page, fv.locator.role, fv.key, option)
+        if control is None:
+            return None
+        located.append((option, control))
+    return located
+
+
+def _already_ticked(control) -> bool:
+    """True iff this option's control ALREADY reads back checked.
+
+    THE IDEMPOTENCE READ. A checkbox is a TOGGLE under a raw click, so a driver
+    that acts without reading first inverts an already-correct box on the second
+    pass. Reading the desired state first means an already-correct group performs
+    ZERO interactions with the page, which is both the correctness property and
+    the smaller anti-bot surface. The kernel's `.check()` is itself set-not-toggle
+    and idempotent, so this is belt AND braces, not the only line of defence.
+
+    Never-confirmed bias, matching `control_toolkit._confirm`: a readback this
+    cannot perform answers False, which falls through to the drive (which sets
+    rather than toggles) and is then readback-gated as usual. So an unreadable
+    state can cost a redundant `.check()`, never a silent unfilled claim and
+    never an inverted box."""
+    try:
+        return bool(control.is_checked())
+    except Exception:
+        return False
+
+
+def _partial_group_reason(unconfirmed: list) -> str:
+    return _PARTIAL_GROUP_REASON.format(
+        count=len(unconfirmed),
+        names=", ".join(repr(option) for option in unconfirmed))
+
+
+def _fill_option_group(page, fv, kind: str, options: list) -> tuple[bool, Any, str]:
+    """Drive an option GROUP to the requested set of ticks: ONE mechanism for a
+    radio single-select (`options` holds the one resolved option) and a checkbox
+    multi-select (it holds every option the SSOT matched).
+
+    Fail-closed, in the order the risks demand:
+
+    1. An EMPTY request has nothing to confirm and is never a fill.
+    2. Every requested option is LOCATED FIRST (`_locate_group_options`) by its
+       OPTION accessible name scoped to the field entry. If any cannot be
+       resolved to exactly one control, the WHOLE group is handed off with the
+       page untouched -- never a guessed near-match, and never a half-ticked
+       group.
+    3. Each located option is ticked through the SAME shared kernel mechanism as
+       a lone checkbox (`drive_control`, `.check()` + `.is_checked()` readback),
+       and only after `_already_ticked` says it is not already in that state, so
+       driving a correct group is a no-op rather than an inversion. `value` is
+       always True: this path can only ADD a tick, never remove one. The `name`
+       passed to `drive_control` is the OPTION wording, so the submit denylist
+       guards every click.
+    4. PARTIAL IS A GAP. If any requested option did not read back ticked, the
+       field is reported UNFILLED with those options named, never partially
+       filled. `actual` is the list of options that DID confirm, so the report
+       says what the page actually holds.
+
+    DISCLOSED RESIDUAL (checkbox multi-select only, newly reachable via this P2-5
+    adoption; a radio single-select is one-of-N and cannot over-tick). Because
+    step 3 only ADDs the SSOT-requested ticks and confirms only those, a tick the
+    PAGE shipped on a NON-requested option (a platform prefill or a sticky prior
+    selection) is neither read nor cleared, and the group can still report
+    filled/complete with that extra tick present. The direction is an OVER-report
+    of page state, not a mis-fill the engine authored, and it is bounded by
+    never-send: nothing auto-submits, and a human reviews the group before the
+    trusted click. This mirrors the platform-prefill residual workable discloses
+    for parked text fields (`workable/fill.py` `_observe_parked_page_state`); the
+    stricter fix, if ever wanted, is to read the full group's tick set and
+    annotate any non-requested extra. Consent and EEO/demographic groups never
+    reach this path (excluded upstream by `_is_excluded_group`), so the residual
+    cannot touch a legally significant tick.
+
+    A required group that is handed off, empty or partial lands in
+    `required_unfilled` -> NOT_COMPLETE."""
+    if not options:
+        return False, [], _EMPTY_GROUP_REASON
+    located = _locate_group_options(page, fv, options)
+    if located is None:
+        return False, [], _GROUP_OPTION_HANDOFF_REASON
+    confirmed: list = []
+    unconfirmed: list = []
+    for option, control in located:
+        if _already_ticked(control):
+            confirmed.append(option)
+            continue
+        outcome = drive_control(ControlSpec(
+            key=fv.key, kind=kind, locator=control, value=True, name=option))
+        (confirmed if outcome.confirmed else unconfirmed).append(option)
+    if unconfirmed:
+        return False, confirmed, _partial_group_reason(unconfirmed)
+    return True, confirmed, ""
 
 
 def _fill_field(page, fv) -> tuple[bool, Any, str]:

@@ -581,10 +581,31 @@ class _FakeLocationWidget:
     with a city appended, carries a comma/digit and geocodes to nothing, exactly as
     the engine hit while a probe typing the city into a CLEAN field got 3 options.
     `clear()` (driven by the fill's keyboard select-all + delete) empties the content
-    so the typeahead's city query is clean again."""
+    so the typeahead's city query is clean again.
+
+    P1-1 TRANSIENT-CLOSE model (live full-form trace, gopuff 2026-07-20). The menu
+    this widget renders is TRANSIENT and the live failure is a RACE, so the fixture
+    models the exact dimension every earlier location fixture omitted: the dropdown
+    is POPULATED at one observation and EMPTY at the next. `focus_thief_after_polls`
+    fires a focus thief (live: an embedded third-party widget iframe took focus)
+    once that many option queries have happened -- the traced sequence is `count 3,
+    texts [Bologna, ITA, ...]` at t=209928 followed by `count 0, texts []` 22 ms
+    later at t=209950, then a keypress dispatched with an IFRAME holding focus.
+    The thief does two things at once, because the live one did:
+      * it CLOSES the menu (the input blurred), and
+      * it takes FOCUS, so page-keyboard keystrokes no longer reach this widget
+        (`_FakeLocationKeyboard` records them as dispatched-but-stolen).
+    Focus alone does not bring the menu back: `focus()` restores keyboard delivery
+    but leaves the menu closed, because a real blur clears the widget's results
+    state -- only a fresh query (clear + type, which is how the driver recovers)
+    re-establishes it. That is deliberately the LESS friendly model of the two.
+    `thief_releases=False` makes the thief re-take focus after every option query
+    (it never lets go), so no attempt can ever commit -- the fixture for proving the
+    driver parks honestly instead of dispatching keys into the void."""
 
     def __init__(self, *, geocode=(), no_results=False,
-                 selected_name_override=None, render_after_polls=0, prefill=""):
+                 selected_name_override=None, render_after_polls=0, prefill="",
+                 focus_thief_after_polls=None, thief_releases=True):
         self.geocode = list(geocode)
         self._no_results = no_results
         self._selected_name_override = selected_name_override
@@ -594,6 +615,11 @@ class _FakeLocationWidget:
         self.visible_value = prefill
         self.selected_json = ""       # the hidden selectedLocation value
         self.option_polls = 0         # how many times option_nodes was queried
+        self.focused = True           # does the page keyboard reach THIS widget?
+        self.searches = 0             # how many city queries were typed (attempts)
+        self._thief_after_polls = focus_thief_after_polls
+        self._thief_releases = thief_releases
+        self._thief_fired = False
         self._highlight = -1
         self._closed = False
 
@@ -601,12 +627,25 @@ class _FakeLocationWidget:
         self.content += ch            # type_human APPENDS to whatever is already there
         self.typed += ch
         self.visible_value = self.content
+        # typing is a real keystroke on the control: it focuses the input and starts
+        # a new search, so a menu a blur had closed is re-established here.
+        self.focused = True
+        self._closed = False
 
     def clear(self):
-        # the fill's keyboard clear (select-all + delete) empties the input.
+        # the fill's keyboard clear (select-all + delete) empties the input. One
+        # clear precedes each city query, so this counts the driver's ATTEMPTS.
+        self.searches += 1
         self.content = ""
         self.typed = ""
         self.visible_value = ""
+        self.focused = True
+        self._closed = False
+
+    def focus(self):
+        # an explicit .focus() puts the keyboard back on the input -- and does NOT
+        # reopen the menu: the blur that closed it cleared the results state.
+        self.focused = True
 
     def _open(self):
         # the dropdown is shown only once something is typed, and closes on
@@ -632,8 +671,24 @@ class _FakeLocationWidget:
         self.option_polls += 1
         if (not self._open() or self._no_results or not self._resolved()
                 or not self._query_clean()):
+            self._maybe_steal_focus()
             return []
-        return [_FakeSweepLocator(text=name) for name in self.geocode]
+        nodes = [_FakeSweepLocator(text=name) for name in self.geocode]
+        # the thief fires AFTER this read is served: the caller sees the populated
+        # menu, and the very next read finds it gone (the traced 22 ms window).
+        self._maybe_steal_focus()
+        return nodes
+
+    def _maybe_steal_focus(self):
+        if self._thief_after_polls is None:
+            return
+        if self.option_polls < self._thief_after_polls:
+            return
+        if self._thief_fired and self._thief_releases:
+            return                    # a one-shot thief: it took focus once, at load
+        self._thief_fired = True
+        self.focused = False
+        self._closed = True
 
     def no_results_nodes(self):
         # the no-results node EXISTS in the DOM from load (count>0, so a count-based
@@ -667,18 +722,27 @@ class _FakeLocationVisibleInput(_FakeTextLocator):
     """The visible `location` input: keystrokes feed the widget's search, readback
     reads the widget's visible value (rewritten to the committed option name). The
     fill's keyboard clear (`_clear_text_field`: select-all then delete) empties the
-    widget content, so a pre-filled input is cleaned before the city query is typed."""
+    widget content, so a pre-filled input is cleaned before the city query is typed.
+
+    A locator-level keystroke acts on THIS element, so it focuses it first (real
+    Playwright does the same); `focus()` serves the driver's explicit pre-commit
+    focus re-establishment. Neither reopens a menu a blur has closed -- only a fresh
+    query does (see `_FakeLocationWidget`)."""
 
     def __init__(self, widget):
         super().__init__()
         self._widget = widget
 
     def press(self, key):
+        self._widget.focused = True
         if key in ("Delete", "Backspace"):
             self._widget.clear()
 
     def press_sequentially(self, ch, delay=None):
         self._widget.type_char(ch)
+
+    def focus(self):
+        self._widget.focus()
 
     def input_value(self):
         return self._widget.visible_value
@@ -700,14 +764,23 @@ class _FakeHiddenSelectedLocation:
 
 class _FakeLocationKeyboard:
     """The page keyboard: ArrowDown/Enter/Escape drive the widget, exactly as the
-    fill's focus-following `_press_location_key` presses them on the live page."""
+    fill's focus-following `_press_location_key` presses them on the live page.
+
+    FOCUS-FOLLOWING, so a key only reaches the widget while the widget holds focus.
+    `presses` records what was DISPATCHED (the live trace's PRE_PRESS record) and
+    `stolen` the subset that went to whatever else held focus instead -- the live
+    run dispatched exactly one key, Escape, with an IFRAME as activeElement."""
 
     def __init__(self, widget):
         self._widget = widget
         self.presses = []
+        self.stolen = []
 
     def press(self, key):
         self.presses.append(key)
+        if not self._widget.focused:
+            self.stolen.append(key)   # dispatched, but focus was elsewhere
+            return
         if key == "ArrowDown":
             self._widget.arrow_down()
         elif key == "Enter":
@@ -1349,6 +1422,145 @@ def test_lever_location_settle_awaits_option_nodes_over_the_empty_container(tmp_
     assert not any(m["key"] == _LOCATION_KEY for m in report.readback_mismatches)
     assert not any(g["key"] == _LOCATION_KEY for g in report.required_unfilled)
     assert report.complete is True
+
+
+# -- P1-1: the check-then-use gap on the transient geocode menu -----------------
+# Instrumented live full-form run (gopuff, 2026-07-20), the decisive three lines:
+#   t=209928  option tick: count 3, texts ["Bologna, ITA", "Bologna, Asti, ITA",
+#                                          "Bologna, Ferrara, ITA"]
+#   t=209950  option tick: count 0, texts []                       (22 ms later)
+#   t=209968  PRE_PRESS key=Escape, activeElement {tag: "IFRAME"}
+# The first read was `_await_location_dropdown`'s, which proved the wanted option
+# present and then threw the texts away (it returned a bare bool). The second was
+# `_first_matching_option`'s INDEPENDENT re-query, which found an empty menu and
+# returned None. The driver parked, and ArrowDown/Enter were never dispatched at
+# all: the option the engine wanted had been on screen 22 ms earlier.
+#
+# Every location fixture before these ones modelled a menu that, once populated,
+# STAYS populated -- friendlier than the live DOM in exactly the dimension that
+# decides the verdict, which is why a green suite coexisted with an 0/4 live
+# failure. These four pin the transient close itself: populated at one observation,
+# empty at the next, with focus gone to another element.
+
+def _location_report(fieldmap, values, widget):
+    page = _FakeLocationLeverPage(
+        fieldmap, location_widget=widget,
+        sweep_required_labels=_SAFE_REQUIRED_LABELS + (_LOCATION_LABEL,))
+    return page, lever.fill(page, fieldmap, values)
+
+
+def _location_park_reason(report):
+    return next(r for k, r in report.skipped if k == _LOCATION_KEY)
+
+
+def test_lever_location_commits_when_the_menu_closes_between_observation_and_commit(tmp_path):
+    # P1-1 REGRESSION (this is the live failure, offline). The menu renders the
+    # matching options, and the instant after the driver observes them a third-party
+    # widget takes focus and the menu closes. The pre-fix driver observed the options
+    # and then re-queried an already-empty menu, so it parked without ever dispatching
+    # a key. The driver must instead carry its observation to the commit, notice the
+    # widget is no longer committable, re-establish the search, and commit.
+    fieldmap = _fieldmap_location_required()
+    values = _resolved_values(fieldmap, tmp_path=tmp_path,
+                              ssot=_fake_ssot(location=_FAKE_ADDRESS))
+    widget = _FakeLocationWidget(
+        geocode=["Bologna, ITA", "Bologna, Asti, ITA", "Bologna, Ferrara, ITA"],
+        focus_thief_after_polls=1)
+
+    page, report = _location_report(fieldmap, values, widget)
+
+    # the option the engine wanted DID commit: selectedLocation -- the value Lever
+    # submits -- names the city, so the required location counts and the form is
+    # COMPLETE (the pre-fix driver parked here with the city on screen).
+    assert json.loads(widget.selected_json)["name"] == "Bologna, ITA"
+    assert not any(m["key"] == _LOCATION_KEY for m in report.readback_mismatches)
+    assert not any(g["key"] == _LOCATION_KEY for g in report.required_unfilled)
+    assert report.complete is True
+    # it got there the honest way: the race DID fire (the first attempt could not
+    # commit, so the driver re-established the search exactly once)...
+    assert widget.searches == 2
+    # ...and no keystroke was ever dispatched while focus was elsewhere. Carrying the
+    # index alone would have fired ArrowDown/Enter into the iframe and committed
+    # NOTHING while believing it had -- a silent wrong state, worse than the park.
+    assert page.keyboard.stolen == []
+    assert page.keyboard.presses[:2] == ["ArrowDown", "Enter"]
+
+
+def test_lever_location_parks_by_name_when_the_menu_never_becomes_committable(tmp_path):
+    # P1-1 HONESTY HALF: the focus thief never lets go, so no attempt is ever
+    # committable. The driver must NOT dispatch a commit it cannot land (that would
+    # leave selectedLocation empty while the driver believed it committed); it must
+    # exhaust its BOUNDED attempts and park by name.
+    fieldmap = _fieldmap_location_required()
+    values = _resolved_values(fieldmap, tmp_path=tmp_path,
+                              ssot=_fake_ssot(location=_FAKE_ADDRESS))
+    widget = _FakeLocationWidget(geocode=["Bologna, ITA"],
+                                 focus_thief_after_polls=1, thief_releases=False)
+
+    page, report = _location_report(fieldmap, values, widget)
+
+    # nothing was committed and nothing was faked: no ArrowDown and no Enter was
+    # DISPATCHED at all (the live run's exact shape -- one key, Escape, into an
+    # element that was not the location input).
+    assert widget.selected_json == ""
+    assert page.keyboard.presses == ["Escape"]
+    assert page.keyboard.stolen == ["Escape"]
+    # the retries are BOUNDED: exactly the attempt cap, never an unbounded loop.
+    assert widget.searches == lever_fill._LOCATION_COMMIT_ATTEMPTS
+    # and the recorded reason says what actually happened. The old reason ("no
+    # dropdown option matched the city") was true of what the driver saw on its
+    # second read and false about the world; it read as proof of a geocoding failure
+    # and sent four investigation rounds after a cause that did not exist.
+    reason = _location_park_reason(report)
+    assert "DID return a matching option" in reason
+    assert "no longer the one that had been observed" in reason
+    assert "no dropdown option matched" not in reason
+    # the required location is an honest gap, exactly as before the fix.
+    assert any(g["key"] == _LOCATION_KEY for g in report.required_unfilled)
+    assert any(m["key"] == _LOCATION_KEY for m in report.readback_mismatches)
+    assert report.complete is False
+
+
+def test_lever_location_park_reason_separates_a_genuine_geocoder_no_match(tmp_path):
+    # The other side of the same distinction: here the geocoder really did answer
+    # with nothing (the no-results terminal was shown). That must NOT read like the
+    # closed-menu case, and it must not burn a single retry -- retrying cannot make
+    # a geocoder answer differently.
+    fieldmap = _fieldmap_location_required()
+    values = _resolved_values(fieldmap, tmp_path=tmp_path,
+                              ssot=_fake_ssot(location=_FAKE_ADDRESS))
+    widget = _FakeLocationWidget(no_results=True)
+
+    _page, report = _location_report(fieldmap, values, widget)
+
+    reason = _location_park_reason(report)
+    assert "returned NO location" in reason
+    assert "DID return a matching option" not in reason
+    assert widget.searches == 1                 # one search, no retries burned
+    assert widget.selected_json == ""
+    assert report.complete is False
+
+
+def test_lever_location_park_reason_names_options_that_did_not_match_the_city(tmp_path):
+    # And the third case: the geocoder answered, with places that are not the city.
+    # Distinct again from both "answered nothing" and "menu closed", and the option
+    # texts it DID return are recorded, so the next reader of a park log can see what
+    # the widget actually offered instead of inferring it.
+    fieldmap = _fieldmap_location_required()
+    values = _resolved_values(fieldmap, tmp_path=tmp_path,
+                              ssot=_fake_ssot(location=_FAKE_ADDRESS))
+    widget = _FakeLocationWidget(geocode=["Genoa, ITA", "Milan, ITA"])
+
+    _page, report = _location_report(fieldmap, values, widget)
+
+    reason = _location_park_reason(report)
+    assert "2 option(s), none naming the city 'Bologna'" in reason
+    assert "Genoa, ITA, Milan, ITA" in reason
+    assert "DID return a matching option" not in reason
+    # a non-matching option is NEVER committed, and no retry is burned on it.
+    assert widget.selected_json == ""
+    assert widget.searches == 1
+    assert report.complete is False
 
 
 # -- F-6: per-posting option-phrasing reconnect (checkbox multi-select + radio) --

@@ -1628,6 +1628,365 @@ def test_greenhouse_combobox_readback_rejects_a_foreign_committed_option():
 
 
 # =============================================================================
+# P1-2 / LIVE-DOM FIX #3: the commit path must pick the row it ASKED FOR, never
+# the row react-select happens to have focused.
+#
+# EVERY fixture below is built from the markup captured on the live
+# canonical/5569916 posting (`auto/trackB/gh-probe.out`, analysed in
+# `T12a-gh-probe-report.md`), NOT from a friendlier invented DOM:
+#   - the two option class strings are verbatim from the pre-Enter menu
+#     outerHTML at `:46` (re-confirmed on a second control at `:91`);
+#   - the 11-row unfiltered list is `:16-:26`;
+#   - the 2-row filtered list, and the fact that the focus ring sits on `1`
+#     after typing `2`, are `:33-:36`;
+#   - `_FakeOptionMenu.press("Enter")` commits the FOCUSED row, which is what
+#     react-select actually did live (`:50` read back `1`, unchanged at `:56`).
+# That last point is why the pre-existing `_FakeComboInput` could not serve
+# here: it commits the intended `combo_reads` on ANY Enter, so it cannot
+# express committing the WRONG row, which is the entire defect.
+# =============================================================================
+
+# Verbatim from the captured pre-Enter menu outerHTML (`gh-probe.out:46`). The
+# `remix-css-*` suffix is a per-build hash and is deliberately kept in the
+# fixture so any matcher that keys on a full class string fails here the way it
+# would fail live.
+_LIVE_OPTION_CLASS = "select__option remix-css-1yzzbro-option"
+_LIVE_FOCUSED_OPTION_CLASS = (
+    "select__option select__option--is-focused remix-css-1dqp7bk-option")
+
+# The failing control's own lists (`gh-probe.out:16-:26` unfiltered, `:33-:35`
+# after typing "2").
+_LIVE_UNFILTERED_ROWS = ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10+")
+_LIVE_FILTERED_ROWS = ("1", "2")
+_LIVE_FIELD_ID = "question_55255480"
+
+
+class _FakeMenuRow:
+    """One rendered `div.select__option`: its visible text and its class
+    string, the only two things `_menu_options` reads off a row."""
+
+    def __init__(self, menu, index):
+        self._menu = menu
+        self._index = index
+
+    def inner_text(self):
+        return self._menu.texts[self._index]
+
+    def get_attribute(self, name):
+        if name != "class":
+            return None
+        return (_LIVE_FOCUSED_OPTION_CLASS if self._index == self._menu.focused
+                else _LIVE_OPTION_CLASS)
+
+
+class _FakeOptionMenu:
+    """The field's OPEN react-select menu: an ordered row list plus the focus
+    ring react-select keeps on exactly one row.
+
+    Models the three behaviours the live probe demonstrated: ArrowDown/ArrowUp
+    move the ring (WRAPPING at both ends, as react-select's does), `Enter`
+    commits whatever row the ring is on at that instant, and the committed text
+    is what `.select__single-value` then reads back. `focused=0` is react-select
+    focusing the first filtered row, the state that made Enter commit `1` when
+    `2` was asked for (`gh-probe.out:36`, `:50`)."""
+
+    def __init__(self, texts, focused=0, single_value=None):
+        self.texts = list(texts)
+        self.focused = focused
+        self.presses = []
+        self._single_value = single_value
+
+    def count(self):
+        return len(self.texts)
+
+    def nth(self, index):
+        return _FakeMenuRow(self, index)
+
+    def press(self, key):
+        self.presses.append(key)
+        if not self.texts:
+            return
+        if key == "ArrowDown":
+            self.focused = (self.focused + 1) % len(self.texts)
+        elif key == "ArrowUp":
+            self.focused = (self.focused - 1) % len(self.texts)
+        elif key == "Enter" and self._single_value is not None:
+            self._single_value.commit_text(self.texts[self.focused])
+
+
+class _FakeCommittedValue:
+    """The `.select__single-value` node: empty until react-select commits a
+    row, then reading back THAT row's text (never the intended one, unless the
+    driver genuinely committed it)."""
+
+    def __init__(self):
+        self.text = ""
+
+    def commit_text(self, text):
+        self.text = text
+
+    def inner_text(self):
+        return self.text
+
+
+class _FakeMenuKeyboard:
+    """The page keyboard the live focus-following commit path uses; every key
+    is routed into the menu's own ring/commit model."""
+
+    def __init__(self, menu):
+        self._menu = menu
+
+    def press(self, key):
+        self._menu.press(key)
+
+
+class _FakeExactMatchControl:
+    def __init__(self, combo_input, single_value):
+        self.clicked = 0
+        self._combo_input = combo_input
+        self._single_value = single_value
+
+    def click(self):
+        self.clicked += 1
+
+    def locator(self, css):
+        if css == "input":
+            return self._combo_input
+        if css.endswith(".select__single-value"):
+            return self._single_value
+        raise AssertionError(f"unexpected control-scoped locator: {css!r}")
+
+
+class _FakeExactMatchPage:
+    """The minimal page the react-select commit path touches: the field's
+    live-region-anchored control, its `-listbox`-scoped option menu, a
+    focus-following keyboard, and a recorded `wait_for_timeout`.
+
+    `rows=()` models a menu that cannot be READ (the offline/unknown-theme
+    case), which is a different state from a menu that renders rows none of
+    which match."""
+
+    def __init__(self, *, field_id=_LIVE_FIELD_ID, rows=_LIVE_FILTERED_ROWS,
+                 focused=0):
+        self.field_id = field_id
+        self.single_value = _FakeCommittedValue()
+        self.menu = _FakeOptionMenu(rows, focused=focused,
+                                    single_value=self.single_value)
+        self.combo_input = _FakeComboInput()
+        self.control = _FakeExactMatchControl(self.combo_input,
+                                               self.single_value)
+        self.keyboard = _FakeMenuKeyboard(self.menu)
+        self.timeouts = []
+
+    def locator(self, css):
+        if css == greenhouse_fill._combobox_control_selector(self.field_id):
+            return self.control
+        if css == greenhouse_fill._menu_option_selector(self.field_id):
+            return self.menu
+        raise AssertionError(f"unexpected selector {css!r}")
+
+    def wait_for_timeout(self, ms):
+        self.timeouts.append(ms)
+
+
+def test_greenhouse_menu_option_selector_matches_the_captured_live_markup():
+    """The option selector is checked against the REAL captured menu, so a
+    fixture that drifts from live markup cannot pass unnoticed.
+
+    Both halves of `_menu_option_selector` must appear in the outerHTML the
+    probe captured immediately before Enter (`gh-probe.out:46`): the per-field
+    `-listbox` id and the `select__option` row class."""
+    captured_outer_html = (
+        '<div class="select__menu remix-css-1oc7h4y-menu">'
+        '<div class="select__menu-list remix-css-qr46ko" role="listbox" '
+        'aria-multiselectable="false" '
+        'id="react-select-question_55255480-listbox">'
+        '<div class="select__option select__option--is-focused '
+        'remix-css-1dqp7bk-option" aria-disabled="false" '
+        'id="react-select-question_55255480-option-1" tabindex="-1" '
+        'role="option" aria-selected="false">1</div>'
+        '<div class="select__option remix-css-1yzzbro-option" '
+        'aria-disabled="false" id="react-select-question_55255480-option-2" '
+        'tabindex="-1" role="option" aria-selected="false">2</div>'
+        '</div></div>')
+
+    selector = greenhouse_fill._menu_option_selector(_LIVE_FIELD_ID)
+
+    assert '[id="react-select-question_55255480-listbox"]' in selector
+    assert "div.select__option" in selector
+    assert f'id="react-select-{_LIVE_FIELD_ID}-listbox"' in captured_outer_html
+    assert 'class="select__option' in captured_outer_html
+    # The fixture class strings this suite drives the fake with are the ones
+    # actually captured, focused row included.
+    assert _LIVE_FOCUSED_OPTION_CLASS in captured_outer_html
+    assert _LIVE_OPTION_CLASS in captured_outer_html
+    assert greenhouse_fill._FOCUSED_OPTION_CLASS in _LIVE_FOCUSED_OPTION_CLASS
+    assert greenhouse_fill._FOCUSED_OPTION_CLASS not in _LIVE_OPTION_CLASS
+
+
+def test_greenhouse_combobox_walks_focus_to_the_requested_row_not_the_focused_one():
+    """THE P1-2 regression: reproduces the live failure exactly.
+
+    Typing `2` into `question_55255480` left the rows `["1", "2"]` with
+    react-select's ring on `1` (`gh-probe.out:30-:36`). The pre-fix driver
+    pressed Enter there and committed `1` (`:50`), and `select_react_combobox`
+    returned False (`:59`) because the readback refused a value it had not
+    asked for. The wrong value was nonetheless sitting in a REQUIRED question's
+    widget, and would have been submitted.
+
+    Against the pre-fix code this test fails on BOTH counts (no ArrowDown is
+    ever pressed, and the committed value reads `1`); it can only pass if the
+    driver positively identifies the `2` row and moves the ring onto it first.
+    """
+    page = _FakeExactMatchPage(rows=_LIVE_FILTERED_ROWS, focused=0)
+
+    landed = greenhouse_fill.select_react_combobox(page, _LIVE_FIELD_ID, "2")
+
+    assert landed is True
+    # The ring was walked one row DOWN (from "1" to "2") before any commit ...
+    assert page.menu.presses == ["ArrowDown", "Enter", "Escape"]
+    # ... so what react-select committed is the row that was asked for.
+    assert page.single_value.text == "2"
+    assert page.menu.texts[page.menu.focused] == "2"
+    # The walk itself costs no settle wait when the re-read confirms straight
+    # away: the only recorded wait is the readback's own first poll mark.
+    assert page.timeouts == [200]
+
+
+def test_greenhouse_combobox_parks_when_no_row_matches_exactly():
+    """EXACT-MATCH-OR-PARK, and the reason the rule cannot be loosened.
+
+    Driven with the control's REAL unfiltered 11-row list (`gh-probe.out:16-
+    :26`), which contains `10+`. Asking for `10` has NO exact match, but `10`
+    IS a substring of `10+` -- and the readback downstream (`_poll_single_
+    value`) is itself a substring test, so a near-match committed here would
+    have sailed through BOTH gates and been counted as a fill.
+
+    Nothing may be committed: no Enter, an untouched widget, and False."""
+    page = _FakeExactMatchPage(rows=_LIVE_UNFILTERED_ROWS, focused=0)
+
+    landed = greenhouse_fill.select_react_combobox(page, _LIVE_FIELD_ID, "10")
+
+    assert landed is False
+    # Escape only: the menu is closed, never committed into.
+    assert page.menu.presses == ["Escape"]
+    assert "Enter" not in page.menu.presses
+    assert page.single_value.text == ""
+    # The ring never moved either -- the park is decided before any navigation.
+    assert page.menu.focused == 0
+
+
+def test_greenhouse_combobox_commits_without_walking_when_match_already_focused():
+    """NO REGRESSION on the paths that pass today.
+
+    The single-option privacy control `question_44538607` filters to ONE row
+    which react-select already focuses, and Enter commits it (`gh-probe.out:
+    :77-:104`, returned True). That path must keep its exact prior DOM
+    interaction: zero arrow keys, one Enter, one Escape."""
+    page = _FakeExactMatchPage(field_id="question_44538607",
+                                rows=("Acknowledge/Confirm",), focused=0)
+
+    landed = greenhouse_fill.select_react_combobox(
+        page, "question_44538607", "Acknowledge/Confirm")
+
+    assert landed is True
+    assert page.menu.presses == ["Enter", "Escape"]
+    assert page.single_value.text == "Acknowledge/Confirm"
+
+
+def test_greenhouse_combobox_walks_upward_when_that_is_the_shorter_route():
+    """The ring wraps, so the shorter direction is taken. With the real 11-row
+    list and the ring on row 0, `10+` (the last row) is 1 step UP and 10 steps
+    down. Pinned because a down-only walk would spend 10 keystrokes of extra
+    re-render churn on the long-list path this vendor also uses for
+    countries."""
+    page = _FakeExactMatchPage(rows=_LIVE_UNFILTERED_ROWS, focused=0)
+
+    landed = greenhouse_fill.select_react_combobox(page, _LIVE_FIELD_ID, "10+")
+
+    assert landed is True
+    assert page.menu.presses == ["ArrowUp", "Enter", "Escape"]
+    assert page.single_value.text == "10+"
+
+
+def test_greenhouse_combobox_parks_when_two_rows_read_the_same():
+    """AMBIGUITY parks. Two rows with identical visible text carry different
+    underlying values and nothing visible says which was meant, so there is no
+    honest way to pick one -- and picking the first would be the very
+    first-row-trust this fix removes."""
+    page = _FakeExactMatchPage(rows=("Yes", "Yes"), focused=0)
+
+    landed = greenhouse_fill.select_react_combobox(page, _LIVE_FIELD_ID, "Yes")
+
+    assert landed is False
+    assert page.menu.presses == ["Escape"]
+    assert page.single_value.text == ""
+
+
+def test_greenhouse_combobox_unreadable_menu_keeps_the_bare_enter_fallback():
+    """A menu that renders NO readable rows is IGNORANCE, not evidence that
+    nothing matched, and must not be conflated with it: the driver falls back
+    to the bare Enter it has always pressed and lets `_poll_single_value` gate,
+    exactly as before this fix.
+
+    Pinned deliberately, because deleting this fallback looks like tightening
+    the fix and would instead break every caller whose page cannot enumerate a
+    menu (`test_providers_base.py`'s combobox fakes, `_FakeGreenhousePage`, and
+    any Greenhouse theme whose menu does not render under the `-listbox` id)."""
+    page = _FakeExactMatchPage(rows=(), focused=0)
+
+    landed = greenhouse_fill.select_react_combobox(page, _LIVE_FIELD_ID, "2")
+
+    # Enter was pressed on an unreadable menu, committing nothing ...
+    assert page.menu.presses == ["Enter", "Escape"]
+    # ... and the readback -- still the gate -- honestly reports no fill.
+    assert landed is False
+    assert page.single_value.text == ""
+
+
+def test_greenhouse_education_typeahead_commits_the_exact_remote_row():
+    """P2-3 / seal-greenhouse NIT-2: the async education typeahead runs the
+    SAME exact-match-or-park commit path, so a remote result list whose FIRST
+    row is not the requested one no longer commits that first row.
+
+    FIXTURE HONESTY: the row class strings and menu shape are live-captured
+    (`gh-probe.out:46`), but the degree LABELS below are placeholders -- no
+    Greenhouse degree option list has ever been captured. What this test claims
+    is the commit DISCIPLINE on a result list whose first row is wrong; it
+    claims nothing about Greenhouse's real degree vocabulary, and whether that
+    remote list contains an exact counterpart for the SSOT degree string stays
+    an open live-gate question. The shape is harsher than live, not friendlier:
+    the wrong row is focused."""
+    page = _FakeExactMatchPage(
+        field_id="degree--0",
+        rows=("Bachelor's Degree", "Master's Degree"), focused=0)
+
+    landed = greenhouse_fill.select_education_typeahead(
+        page, "degree--0", "Master's Degree")
+
+    assert landed is True
+    assert page.menu.presses == ["ArrowDown", "Enter", "Escape"]
+    assert page.single_value.text == "Master's Degree"
+
+
+def test_greenhouse_education_typeahead_parks_when_no_remote_row_matches():
+    """The same driver must PARK rather than commit a near-miss degree. Before
+    this fix the first returned row was committed and the readback rejected it
+    afterwards, leaving a wrong degree in the widget (NIT-2's blank field was
+    the symptom, the committed wrong row was the hazard)."""
+    page = _FakeExactMatchPage(
+        field_id="degree--0",
+        rows=("Bachelor's Degree", "Doctorate"), focused=0)
+
+    landed = greenhouse_fill.select_education_typeahead(
+        page, "degree--0", "Master's Degree")
+
+    assert landed is False
+    assert "Enter" not in page.menu.presses
+    assert page.single_value.text == ""
+
+
+# =============================================================================
 # RS-e: async education typeahead (School / Degree / Discipline). Greenhouse
 # renders the education section as react-select selects backed by a DEBOUNCED
 # remote search; the static combobox driver commits an empty menu (the live

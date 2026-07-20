@@ -130,10 +130,20 @@ class _CaptureOpener:
 class _FakeTextLocator:
     """A plain text/email/paragraph/phone input: type_human -> press_sequentially,
     readback via input_value(). Raises on the forbidden fill()/click()/check()
-    paths (the Turnstile human-cadence + no-auto-click invariants)."""
+    paths (the Turnstile human-cadence + no-auto-click invariants).
 
-    def __init__(self):
-        self.value = ""
+    `prefilled` seeds the box with a value the ENGINE did not type -- the live
+    Workable PLATFORM PREFILL (`prefilledByLocation`, see `_FakeWorkablePage`).
+    `count()` is the live Locator surface `_parked_control_value`'s uniqueness
+    gate reads; a real resolved locator always answers it, so omitting it here
+    would make the parked-field probe inert against a page that in production
+    answers it -- a fixture friendlier than the live DOM."""
+
+    def __init__(self, prefilled=""):
+        self.value = prefilled
+
+    def count(self):
+        return 1
 
     def press_sequentially(self, ch, delay=None):
         self.value += ch
@@ -694,7 +704,7 @@ class _FakeWorkablePage:
                  sweep_required_keys=None, sweep_controls=None,
                  file_inputs=None, bad_keys=(), phone_locator=None,
                  boolean_groups=None, tab_controls=None,
-                 cookie_banner_button=None, cookie_modal=None):
+                 cookie_banner_button=None, cookie_modal=None, prefilled=None):
         self._url = url
         # W5.1-R2 FX2: the OVERVIEW|APPLICATION tab bar + cookie-consent
         # banner the defensive recovery probes for. Empty/None by default (no
@@ -707,6 +717,11 @@ class _FakeWorkablePage:
         self._cookie_banner_button = cookie_banner_button
         self._cookie_modal = cookie_modal
         self.boolean_groups = dict(boolean_groups or {})
+        # `prefilled` maps a SCHEMA KEY to the text the PLATFORM already put in
+        # that box before the engine ever touched the page (Workable's
+        # `prefilledByLocation` address). The engine never typed it, so any
+        # readback of it is an observation of PAGE state, not of engine state.
+        prefilled = dict(prefilled or {})
         self.controls = {}
         for fld in fieldmap.fields:
             if fld.locator.role == "textbox":
@@ -716,7 +731,8 @@ class _FakeWorkablePage:
                 elif fld.type == "phone":
                     self.controls[key] = (phone_locator or _FakeIntlTelLocator())
                 else:
-                    self.controls[key] = _FakeTextLocator()
+                    self.controls[key] = _FakeTextLocator(
+                        prefilled.get(fld.key, ""))
         self.file_inputs = (list(file_inputs) if file_inputs is not None else
                             [_FakeFileInput(id="resume", name="resume",
                                            accept=".pdf,.doc,.docx"),
@@ -1335,6 +1351,183 @@ def test_fill_readback_mismatch_on_required_field_forces_not_complete():
     assert report.complete is False
     assert any(g["key"] == "email" for g in report.required_unfilled)
     assert any(m["key"] == "email" for m in report.readback_mismatches)
+
+
+# =============================================================================
+# parked-field PAGE STATE: a platform prefill is observed, never overwritten
+# =============================================================================
+# The r7 rokt defect (P2-1): the census called `address` a bare data gap
+# (`missing:canned_answers.address`) while the box was VISIBLY POPULATED by
+# Workable's own location prefill. The io-global schema below is the REAL
+# captured payload and carries that exact shape -- `address` required, with
+# `"value"` present and `"prefilledByLocation": true` -- so the fixture does not
+# have to invent the situation, only render it into the DOM.
+
+
+def _schema_prefill(filename: str, key: str) -> str:
+    """The text the PLATFORM prefilled into `key`, read out of the REAL captured
+    schema payload rather than invented here.
+
+    Workable serves the prefill in the same GET the FieldMap is built from
+    (`"value": ..., "prefilledByLocation": true`), so the value the fake DOM
+    renders is exactly the one the live platform put there. `capture.
+    _workable_field` does not carry either attribute onto the Field, which is
+    why the fill layer has to read the PAGE to learn about it at all."""
+    for section in _raw(filename):
+        for spec in section.get("fields") or []:
+            if spec.get("id") == key:
+                assert spec.get("prefilledByLocation") is True, (
+                    f"{filename}:{key} is no longer a platform-prefilled field; "
+                    "this test's premise came from that attribute")
+                return spec["value"]
+    raise AssertionError(f"no field {key!r} in {filename}")
+
+
+def test_fill_parked_text_field_records_a_platform_prefill_distinguishably():
+    # P2-1. `address` is REQUIRED, the SSOT has no canned answer for it, and the
+    # PLATFORM has already populated it. Pre-fix, fill() iterated `values.fields`
+    # only, so a field that never resolved reached NO readback and the census
+    # reported "missing:canned_answers.address" full stop -- true about the
+    # ENGINE, wrong about the PAGE.
+    fieldmap = _fieldmap("form-FAF4116602.json", "FAF4116602")
+    values = _resolved_values(fieldmap)
+    prefill = _schema_prefill("form-FAF4116602.json", "address")
+    assert "address" not in {fv.key for fv in values.fields}, (
+        "premise: address must PARK (no canned answer), i.e. never be driven")
+    page = _FakeWorkablePage(fieldmap, prefilled={"address": prefill})
+
+    report = workable.fill(page, fieldmap, values)
+
+    gap = {g["key"]: g for g in report.required_unfilled}
+    # (b) the platform-prefilled case, recorded EXPLICITLY on the census record.
+    assert "PLATFORM-PREFILLED" in gap["address"]["reason"]
+    assert f"{len(prefill)} characters" in gap["address"]["reason"]
+    # ... and still carrying WHY the engine itself has no answer for it.
+    assert gap["address"]["reason"].startswith("missing:canned_answers.address")
+
+    # (a) the genuine data gap: a required parked text box that IS blank reads
+    # back empty, so the two cases are distinguishable rather than both bare.
+    assert "reads back empty" in gap["CA_6419"]["reason"]
+    assert "PLATFORM-PREFILLED" not in gap["CA_6419"]["reason"]
+
+
+def test_fill_never_types_into_a_platform_prefilled_parked_field():
+    # The hard constraint on this fix: OBSERVE, never DRIVE. Typing an engine
+    # value into a box the engine has no answer for would OVERWRITE the
+    # platform's own data -- worse than the misreport being fixed here.
+    fieldmap = _fieldmap("form-FAF4116602.json", "FAF4116602")
+    values = _resolved_values(fieldmap)
+    prefill = _schema_prefill("form-FAF4116602.json", "address")
+    page = _FakeWorkablePage(fieldmap, prefilled={"address": prefill})
+
+    report = workable.fill(page, fieldmap, values)
+
+    # The control still holds EXACTLY what the platform put there: not appended
+    # to, not cleared, not retyped. (`_FakeTextLocator` also hard-fails on
+    # fill()/click()/check(), so a drive by any other route raises.)
+    assert page.controls[("textbox", "Address")].value == prefill
+    # An observed prefill is NOT a fill: the engine did not author it, so it can
+    # never count toward completeness, and the field stays a required gap.
+    assert "address" not in {fv.key for fv in values.fields}
+    assert "address" in {g["key"] for g in report.required_unfilled}
+    assert report.complete is False
+
+
+def test_parked_field_observation_records_length_never_the_value():
+    # The census is an artefact that gets read and shipped; a location prefill is
+    # the owner's own personal data. Presence and LENGTH are recorded, the value
+    # never is.
+    fieldmap = _fieldmap("form-FAF4116602.json", "FAF4116602")
+    values = _resolved_values(fieldmap)
+    prefill = _schema_prefill("form-FAF4116602.json", "address")
+    page = _FakeWorkablePage(fieldmap, prefilled={"address": prefill})
+
+    report = workable.fill(page, fieldmap, values)
+
+    rendered = json.dumps({"required_unfilled": report.required_unfilled,
+                           "skipped": [list(s) for s in report.skipped]})
+    assert prefill not in rendered
+    for token in prefill.replace(",", " ").split():
+        assert token not in rendered
+
+
+def test_parked_field_observation_does_not_move_the_completeness_bar():
+    # Load-bearing: this fix changes what the census SAYS, never what it COUNTS.
+    # Both readings are taken from the same page in the same state, differing
+    # only in whether the platform had prefilled the address box.
+    fieldmap = _fieldmap("form-FAF4116602.json", "FAF4116602")
+    prefill = _schema_prefill("form-FAF4116602.json", "address")
+
+    blank = workable.fill(_FakeWorkablePage(fieldmap), fieldmap,
+                          _resolved_values(fieldmap))
+    seeded = workable.fill(
+        _FakeWorkablePage(fieldmap, prefilled={"address": prefill}), fieldmap,
+        _resolved_values(fieldmap))
+
+    assert seeded.filled == blank.filled
+    assert seeded.fillable_total == blank.fillable_total
+    assert seeded.justified_skips == blank.justified_skips
+    assert ({g["key"] for g in seeded.required_unfilled}
+            == {g["key"] for g in blank.required_unfilled})
+    assert seeded.complete is blank.complete is False
+    # The ONE thing that differs is the reason text on the prefilled field.
+    assert (dict((g["key"], g["reason"]) for g in seeded.required_unfilled)
+            != dict((g["key"], g["reason"]) for g in blank.required_unfilled))
+
+
+def test_parked_field_observation_makes_no_claim_when_it_cannot_read_the_box():
+    # A PARKED field's locator has, by definition, never been resolved on a live
+    # page (the driven ones are pinned by the live-resolution fixture). If it does
+    # not resolve to exactly one readable box, the census must say NOTHING about
+    # page state rather than guess a blank -- an unreadable box is not evidence of
+    # a data gap. `_FakeWorkablePage.get_by_role` KeyErrors on an unwired control,
+    # which is exactly the "did not resolve" case.
+    fieldmap = _fieldmap("form-FAF4116602.json", "FAF4116602")
+    values = _resolved_values(fieldmap)
+    page = _FakeWorkablePage(fieldmap)
+    del page.controls[("textbox", "Address")]
+
+    report = workable.fill(page, fieldmap, values)
+
+    gap = {g["key"]: g for g in report.required_unfilled}
+    assert "NOT OBSERVED" in gap["address"]["reason"]
+    assert "PLATFORM-PREFILLED" not in gap["address"]["reason"]
+    assert "reads back empty" not in gap["address"]["reason"]
+
+
+def test_parked_observation_never_relabels_a_driven_field_as_a_prefill():
+    # The structural test is "absent from values.fields", NOT "absent from
+    # filled_keys": a DRIVEN field whose readback missed is also unfilled, and
+    # calling the engine's own half-landed text a PLATFORM prefill would be a
+    # straight falsehood. `bad_keys` models the live mode (the box takes the
+    # keystrokes, then reads back empty).
+    fieldmap = _fieldmap("form-57CFF1B2AF.json", "57CFF1B2AF")
+    values = _resolved_values(fieldmap)
+    page = _FakeWorkablePage(fieldmap, bad_keys={"email"})
+
+    report = workable.fill(page, fieldmap, values)
+
+    reason = dict(report.skipped)["email"]
+    assert reason == "value did not take (readback mismatch)"
+    assert "page-state" not in reason
+
+
+def test_parked_observation_skips_controls_it_cannot_honestly_read():
+    # Only a plain TEXT box is probed. An upload (role "button"), a boolean
+    # radiogroup, an unsampled custom widget and a group subfield have no
+    # meaningful `input_value()`, so none of them is annotated -- and none of
+    # their locators is even requested.
+    fieldmap = _fieldmap("form-FAF4116602.json", "FAF4116602")
+    values = _resolved_values(fieldmap)
+    page = _FakeWorkablePage(fieldmap)
+
+    report = workable.fill(page, fieldmap, values)
+
+    reasons = dict(report.skipped)
+    assert "page-state" not in reasons["resume"]        # file -> role "button"
+    assert "page-state" not in reasons["avatar"]
+    assert "page-state" not in reasons["education.school"]   # group subfield
+    assert "page-state" in reasons["summary"]           # a real paragraph box
 
 
 def test_fill_dom_sweep_extra_required_field_forces_not_complete():

@@ -1050,22 +1050,42 @@ class _LocatorMiss(Exception):
     element: the fill's `except Exception` turns it into a `fill-error:` skip."""
 
 
-class _FakeRadioOption:
-    """One native radio in a group (the live shape: `<input type=radio>` whose
-    OWN accessible name is the option label, sharing the group's
-    `data-field-path` entry). Driven through the kernel's `ControlKind.RADIO`
+class _FakeOptionControl:
+    """One native option control inside a GROUP -- a radio OR a checkbox, one
+    class because live they are one shape: an `<input>` whose OWN accessible name
+    is the option's `<label for=id>` wording, sharing the group's
+    `data-field-path` entry. Driven through the shared kernel mechanism
     (`drive_control`) via `.check()`, confirmed via `.is_checked()`, never
-    `.click()` -- exactly like the lone `Boolean` checkbox."""
+    `.click()` -- exactly like the lone `Boolean` checkbox.
 
-    def __init__(self, path, name):
+    The ONE structural difference between the two live groups is the `name`
+    ATTRIBUTE, and it is the reason both must scope by `data-field-path`: a radio
+    carries the GROUP's `<entry-id>_<path>` name (which the graphql schema does
+    not carry, so it is not knowable in advance), while a checkbox carries the
+    OPTION's own wording (live: `name="Documentaries"`, `_SIBLING_DOM`). Neither
+    is a group-distinguishing name the driver could scope by, so neither is
+    modelled as one here; `path` is what the entry scope resolves on.
+
+    `checks`/`unchecks` COUNT the drives. A checkbox group needs the count, not
+    just the final state: `.check()` is idempotent, so a driver that re-drove an
+    already-ticked box would leave identical state and only the counter would
+    show it. `.click()` RAISES because a click TOGGLES, which is the exact
+    mechanism by which a second pass would untick a correct box."""
+
+    def __init__(self, path, name, role="radio", checked=False):
         self.path = path
         self.name = name
-        self._checked = False
+        self.role = role
+        self._checked = checked
+        self.checks = 0
+        self.unchecks = 0
 
     def check(self, *args, **kwargs):
+        self.checks += 1
         self._checked = True
 
     def uncheck(self, *args, **kwargs):
+        self.unchecks += 1
         self._checked = False
 
     def is_checked(self):
@@ -1073,17 +1093,28 @@ class _FakeRadioOption:
 
     def click(self, *args, **kwargs):
         raise AssertionError(
-            "a radio option must be driven via .check(), never .click()")
+            f"a {self.role} option must be driven via .check(), never .click(): "
+            "a click TOGGLES and would invert an already-correct control")
 
 
-class _FakeRadioMatch:
-    """A Playwright-Locator-shaped match over radio option controls: `.count()`
-    (the honest number the entry-scoping guard turns on), `.and_()` (the FX1
-    intersection `_locate_option` uses to narrow a page-wide role+name match to
-    one group's own option), and the drive/readback verbs, which delegate to the
-    SINGLE matched control (a strict-mode violation for 0 or 2+). It CAN MISS: an
-    unscoped `.and_()` that lost the group anchor leaves >1 node, and `.check()`
-    then raises exactly as live strict mode would."""
+class _FakeUnreadableOption(_FakeOptionControl):
+    """An option whose `.check()` lands but whose readback NEVER confirms it: the
+    silent-no-op `control_toolkit._confirm`'s never-confirmed bias exists to
+    catch. In a multi-select it is the ingredient of a PARTIAL confirmation,
+    which the convention says is a GAP and never a fill."""
+
+    def is_checked(self):
+        return False
+
+
+class _FakeOptionMatch:
+    """A Playwright-Locator-shaped match over option controls of EITHER group:
+    `.count()` (the honest number the entry-scoping guard turns on), `.and_()`
+    (the FX1 intersection `_locate_option` uses to narrow a page-wide role+name
+    match to one group's own option), and the drive/readback verbs, which
+    delegate to the SINGLE matched control (a strict-mode violation for 0 or 2+).
+    It CAN MISS: an unscoped `.and_()` that lost the group anchor leaves >1 node,
+    and `.check()` then raises exactly as live strict mode would."""
 
     def __init__(self, nodes):
         self.nodes = list(nodes)
@@ -1095,7 +1126,7 @@ class _FakeRadioMatch:
         return len(self.nodes)
 
     def and_(self, other):
-        return _FakeRadioMatch(
+        return _FakeOptionMatch(
             [n for n in self.nodes if any(n is o for o in other.nodes)])
 
     def _only(self):
@@ -1137,17 +1168,20 @@ class _FakeAshbyPage:
                  url="https://jobs.ashbyhq.com/fauxcorp/9001/application",
                  sweep_required_labels=_SAFE_REQUIRED_LABELS,
                  file_inputs=None, bad_text_keys=(), bad_select_keys=(),
-                 entries=(), geo_suggestions=(), dom_roles=None,
-                 geo_class=_FakeGeoAutocomplete, geo_duplicate_keys=()):
+                 bad_option_names=(), entries=(), geo_suggestions=(),
+                 dom_roles=None, geo_class=_FakeGeoAutocomplete,
+                 geo_duplicate_keys=()):
         self._url = url
         self.controls = {}
-        # A radio-rendered single-select GROUP: keyed by data-field-path, each
-        # holding N distinct option controls (`_radio_nodes` is the page-wide
-        # flat list `get_by_role("radio", ...)` searches). Distinct controls so
-        # the fake CAN express the FX1 collision (two groups, same option
-        # wording) and the entry-scoping that resolves it.
-        self.radios = {}
-        self._radio_nodes = []
+        # An option GROUP -- a radio-rendered single-select OR a checkbox-rendered
+        # multi-select -- keyed by data-field-path, each holding N distinct option
+        # controls. `_option_nodes` is the page-wide flat list PER ROLE that
+        # `get_by_role(<role>, ...)` searches, kept per role so a radio named
+        # "Yes" and a checkbox named "Yes" cannot answer for each other. Distinct
+        # controls so the fake CAN express the FX1 collision (two groups, same
+        # option wording) and the entry-scoping that resolves it.
+        self.option_groups = {}
+        self._option_nodes = {"radio": [], "checkbox": []}
         self.geo = {}
         # A path that mounts its widget TWICE: the entry-anchored selector then
         # resolves to TWO live controls and the resolver has to choose. The
@@ -1177,14 +1211,29 @@ class _FakeAshbyPage:
                                       else _FakeAshbyReactSelect())
             elif role == "checkbox" and isinstance(fld.type, str) and \
                     fld.type == "boolean":
+                # The LONE boolean checkbox: ONE control whose own accessible
+                # name IS the field title, so `base._locate` reaches it directly.
+                # Checked BEFORE the group branch, because both wear role
+                # "checkbox" and only the schema type tells them apart.
                 self.controls[key] = _FakeCheckboxLocator()
-            elif role == "radio":
-                # One option control per graphql option, each carrying the
-                # OPTION's own accessible name; all scoped to this field's
-                # data-field-path entry (mirrors the live radio group).
-                opts = [_FakeRadioOption(fld.key, opt) for opt in fld.options]
-                self.radios[fld.key] = opts
-                self._radio_nodes.extend(opts)
+            elif role in ("radio", "checkbox"):
+                # An option GROUP, either kind: one option control per graphql
+                # option, each carrying the OPTION's own accessible name (never
+                # the field title, which is why the field-level role+name locator
+                # cannot reach one), all scoped to this field's data-field-path
+                # entry. Mirrors both live groups: the 8-radio ValueSelect and
+                # the 5-checkbox MultiValueSelect of `_SIBLING_DOM`.
+                # `bad_option_names` makes ONE option a control whose `.check()`
+                # lands but whose readback never confirms -- the silent-no-op the
+                # readback gate exists for, and the ingredient of a PARTIALLY
+                # confirmed multi-select. Same convention as `bad_text_keys` /
+                # `bad_select_keys` above.
+                opts = [(_FakeUnreadableOption(fld.key, opt, role=role)
+                         if opt in bad_option_names
+                         else _FakeOptionControl(fld.key, opt, role=role))
+                        for opt in fld.options]
+                self.option_groups[fld.key] = opts
+                self._option_nodes[role].extend(opts)
         for key in geo_duplicate_keys:
             twin = self.geo[key]
             self.geo_dupes[key] = geo_class(f"combobox-listbox-{key}-twin",
@@ -1210,18 +1259,22 @@ class _FakeAshbyPage:
 
     def get_by_role(self, role, name=None, exact=None):
         self.requested.append(("role", role, name))
-        if role == "radio":
-            # A radio OPTION is located page-wide by its OWN accessible name (the
+        if (role, name) in self.controls:
+            # A FIELD-level role+name control (text, lone boolean checkbox, ...).
+            # Asked FIRST so the lone checkbox keeps resolving by the field title
+            # exactly as before, and only an unmatched checkbox query falls
+            # through to the option-group table below.
+            return self.controls[(role, name)]
+        if role in self._option_nodes:
+            # A group OPTION is located page-wide by its OWN accessible name (the
             # option label), exactly as `_locate_option` does before scoping.
             # `exact` is honoured by the `==` match. NEVER raises: a 0-match is a
             # real answer the caller narrows via `.and_()` and then hands off on,
             # not a locator error.
-            return _FakeRadioMatch(
-                [n for n in self._radio_nodes if n.name == name])
-        if (role, name) not in self.controls:
-            raise _LocatorMiss(
-                f"get_by_role({role!r}, name={name!r}) resolved to 0 elements")
-        return self.controls[(role, name)]
+            return _FakeOptionMatch(
+                [n for n in self._option_nodes[role] if n.name == name])
+        raise _LocatorMiss(
+            f"get_by_role({role!r}, name={name!r}) resolved to 0 elements")
 
     def get_by_label(self, label):
         self.requested.append(("label", label))
@@ -1247,20 +1300,20 @@ class _FakeAshbyPage:
             return _FakeLocatorSet([])
         if css == "[data-field-path]":
             return _FakeLocatorSet(list(self.entries))
-        radio = self._radio_group_locator(css)
-        if radio is not None:
-            return radio
+        group = self._option_group_locator(css)
+        if group is not None:
+            return group
         return _FakeLocatorSet(self._geo_matches(css))
 
-    def _radio_group_locator(self, css):
-        """`[data-field-path="P"] input` for a RADIO group path P -> a
-        `_FakeRadioMatch` of that group's option controls, so `_locate_option`'s
-        `.and_()` intersects at the input level. None for any non-radio path (a
-        path is EITHER a radio group OR a combobox, never both), so the geo/other
-        CSS handling below is untouched."""
+    def _option_group_locator(self, css):
+        """`[data-field-path="P"] input` for an option-GROUP path P (radio OR
+        checkbox) -> a `_FakeOptionMatch` of that group's option controls, so
+        `_locate_option`'s `.and_()` intersects at the input level. None for any
+        non-group path (a path is EITHER an option group OR a combobox, never
+        both), so the geo/other CSS handling below is untouched."""
         match = re.match(r'\[data-field-path="([^"]+)"\] input$', css)
-        if match and match.group(1) in self.radios:
-            return _FakeRadioMatch(self.radios[match.group(1)])
+        if match and match.group(1) in self.option_groups:
+            return _FakeOptionMatch(self.option_groups[match.group(1)])
         return None
 
     # -- the geo widget's own DOM: its entry-scoped control and its listbox ----
@@ -2281,7 +2334,7 @@ def _radio_posting_fillable():
 
 
 def test_ashby_radio_group_drives_the_resolved_option_and_completes(tmp_path):
-    """W5.1c radio-group adoption, now due: the deferral (plan.md) unlocked on the
+    """W5.1c radio-group adoption, now due: the deferral, now unlocked, on the
     TB5 live ashby run, satisfied twice over (2026-07-18/19 w5_accept). This is
     the sanctioned rewrite the old
     `test_ashby_radio_is_handed_off_not_driven_and_still_blocks` foresaw ("W5.1c
@@ -2314,7 +2367,7 @@ def test_ashby_radio_group_drives_the_resolved_option_and_completes(tmp_path):
 
     # DRIVEN: exactly the resolved option "No" was ticked, inside this group's
     # entry; the other option stayed untouched (single-select semantics).
-    by_name = {o.name: o for o in page.radios[_RADIO_PATH]}
+    by_name = {o.name: o for o in page.option_groups[_RADIO_PATH]}
     assert by_name["No"].is_checked() is True
     assert by_name["Yes"].is_checked() is False
     # a `.check()` on the located option, never a `.click()` (Turnstile), and the
@@ -2393,6 +2446,39 @@ def _ashby_radio_entry(path, entry_id, question, options):
             f'<label for="{rid}" class="_label_1258i_42 ">{opt}</label></div>')
     return (
         f'<div data-field-path="{path}" data-field-entry-id="{group_name}">'
+        '<fieldset class="_container_1258i_28 _fieldEntry_1e3gg_28">'
+        '<label class="_heading_f7cvd_52 _required_f7cvd_91 _label_1e3gg_42 '
+        f'ashby-application-form-question-title" for="{path}">{question}</label>'
+        + "".join(opts) + "</fieldset></div>")
+
+
+def _ashby_checkbox_entry(path, entry_id, question, options):
+    """One live-shaped ashby CHECKBOX-group field entry, the multi-select sibling
+    of `_ashby_radio_entry`. The SHAPE is `_SIBLING_DOM`'s own (the real
+    five-checkbox MultiValueSelect at `2726a0b3-...`, captured 2026-07-13): a
+    `data-field-path` container, a `<fieldset>`, a `<label for=path>` question,
+    and one `_option_1258i_34` div per option holding an `<input type=checkbox>`
+    whose id is `<entry_id>_<path>-labeled-checkbox-<i>`, beside a
+    `<label for=input-id>` that IS the option's accessible name.
+
+    THE ONE STRUCTURAL DIFFERENCE FROM THE RADIO, reproduced faithfully because it
+    is the whole reason both must scope by `data-field-path`: a radio's `name` is
+    the GROUP's `<entry-id>_<path>`, but a CHECKBOX's `name` is the OPTION's own
+    WORDING (live: `name="Documentaries"`). So neither group carries a
+    group-distinguishing submission name, and lever's `input[name="<group>"]`
+    scoping has no ashby analogue for either. A fixture that gave checkboxes a
+    shared group name would have invented a friendlier world in which the bug
+    class this test exists for could not occur."""
+    opts = []
+    for i, opt in enumerate(options):
+        cid = f"{entry_id}_{path}-labeled-checkbox-{i}"
+        opts.append(
+            '<div class="_option_1258i_34"><span class=" _container_1danv_28" '
+            'data-disabled="false">'
+            f'<input type="checkbox" id="{cid}" name="{opt}"></span>'
+            f'<label for="{cid}" class="_label_1258i_42 ">{opt}</label></div>')
+    return (
+        f'<div data-field-path="{path}" data-field-entry-id="{entry_id}_{path}">'
         '<fieldset class="_container_1258i_28 _fieldEntry_1e3gg_28">'
         '<label class="_heading_f7cvd_52 _required_f7cvd_91 _label_1e3gg_42 '
         f'ashby-application-form-question-title" for="{path}">{question}</label>'
@@ -2492,6 +2578,91 @@ def test_ashby_locate_option_scopes_each_group_and_refuses_the_unlocatable():
     assert page.get_by_role("radio", name="Same", exact=True).and_(
         page.locator('[data-field-path="path-c"] input')).count() == 2
     assert ashby_fill._locate_option(page, "radio", "path-c", "Same") is None
+
+
+def test_ashby_locate_option_scopes_checkbox_groups_and_never_crosses_roles():
+    """THE FX1 COLLISION ON THE REAL ASHBY CHECKBOX SHAPE (P2-5), against parsed
+    DOM built from `_SIBLING_DOM`'s own five-checkbox markup and resolved through
+    the SAME INDEPENDENT ARIA resolver, so this cannot merely agree with the
+    driver.
+
+    Three things are proven, and the third is a collision class the checkbox
+    adoption CREATES rather than inherits:
+
+    (a) THE BUG, reproduced: a bare page-wide `get_by_role("checkbox",
+        name="Documentaries", exact=True)` is genuinely ambiguous when two
+        checkbox groups render the same wording, exactly as lever's FX1 showed
+        for radios. Ashby has no submission name to scope by here either -- and
+        LESS than for radios, since a live checkbox's `name` is the OPTION's own
+        wording, so scoping by `input[name=...]` would match the collision rather
+        than resolve it.
+    (b) THE FIX: each group's own option resolves to exactly the control inside
+        THAT group's `data-field-path` entry, and refuses (None -> hand-off) an
+        option resolving to 0 or 2+.
+    (c) NO CROSS-ROLE BLEED: a page carrying a RADIO group and a CHECKBOX group
+        that share an option wording ("Yes") resolves each to its OWN control.
+        Before P2-5 only radios were ever located, so this could not arise; now
+        both roles are located on the same page and the role filter in
+        `get_by_role` is what keeps them apart. A driver that dropped the role
+        (or guessed it from the schema type, which this vendor shipped three
+        phantoms of) would tick the wrong control's group entirely."""
+    html = (
+        "<html><body><form>"
+        + _ashby_checkbox_entry("path-x", "entryX", "Which content types?",
+                                ["Documentaries", "Ads/socials"])
+        + _ashby_checkbox_entry("path-y", "entryY", "Which have you dubbed?",
+                                ["Documentaries", "Movies/TV shows"])
+        + _ashby_checkbox_entry("path-dup", "entryD", "Duplicated wording?",
+                                ["Same", "Same"])
+        + _ashby_checkbox_entry("path-cb", "entryC", "Consent to contact?",
+                                ["Yes", "No"])
+        + _ashby_radio_entry("path-rd", "entryR", "Sponsorship required?",
+                             ["Yes", "No"])
+        + "</form></body></html>")
+    page = _AshbyRadioDomPage(html)
+
+    # sanity: the live checkbox shape parses to real checkboxes whose accessible
+    # name is the option's own `<label>`, resolved by the independent resolver.
+    assert page.get_by_role("checkbox", name="Ads/socials", exact=True).count() == 1
+    # (a) THE BUG: a bare page-wide "Documentaries" is ambiguous across the two
+    # groups that share the wording.
+    assert page.get_by_role(
+        "checkbox", name="Documentaries", exact=True).count() == 2
+
+    # (b) THE FIX: each group's own "Documentaries" is the one inside its entry.
+    x = ashby_fill._locate_option(page, "checkbox", "path-x", "Documentaries")
+    y = ashby_fill._locate_option(page, "checkbox", "path-y", "Documentaries")
+    assert x.count() == 1 and y.count() == 1
+    assert x.nodes[0] is not y.nodes[0]
+    x_group = page.locator('[data-field-path="path-x"] input').nodes
+    y_group = page.locator('[data-field-path="path-y"] input').nodes
+    assert any(x.nodes[0] is n for n in x_group)
+    assert any(y.nodes[0] is n for n in y_group)
+    assert not any(x.nodes[0] is n for n in y_group)   # never the sibling's
+
+    # the hand-off residual, same as the radio half: 0 or 2+ is refused.
+    assert ashby_fill._locate_option(
+        page, "checkbox", "path-x", "Nonexistent") is None
+    assert ashby_fill._locate_option(page, "checkbox", "path-dup", "Same") is None
+
+    # (c) NO CROSS-ROLE BLEED. "Yes" exists once as a checkbox and once as a
+    # radio; each role sees only its own, and each locate lands in its own entry.
+    assert page.get_by_role("checkbox", name="Yes", exact=True).count() == 1
+    assert page.get_by_role("radio", name="Yes", exact=True).count() == 1
+    cb = ashby_fill._locate_option(page, "checkbox", "path-cb", "Yes")
+    rd = ashby_fill._locate_option(page, "radio", "path-rd", "Yes")
+    assert cb.count() == 1 and rd.count() == 1
+    assert cb.nodes[0] is not rd.nodes[0]
+    assert _attr_of(cb.nodes[0], "type") == "checkbox"
+    assert _attr_of(rd.nodes[0], "type") == "radio"
+    # and asking for a role the group does not wear finds nothing, so a
+    # role-guessing driver hands off rather than driving a sibling's control.
+    assert ashby_fill._locate_option(page, "radio", "path-cb", "Yes") is None
+    assert ashby_fill._locate_option(page, "checkbox", "path-rd", "Yes") is None
+
+
+def _attr_of(node, name):
+    return node.attrs.get(name, "")
 
 
 # == THE ROLE INVARIANT ========================================================
@@ -2598,6 +2769,25 @@ def _every_shape_posting():
         ]}]}}
 
 
+def _realistic_value(fld):
+    """The value SHAPE `resolve_values` really produces for this field type.
+
+    The routing predicates in `fill()` turn on the value's SHAPE as well as the
+    role (`_control_kind`: a bool is a lone checkbox, a list is a checkbox
+    GROUP; `_is_upload`: a Path), so a stub that handed every field a string
+    mirrors fill()'s routing INCORRECTLY. That is exactly how the phantom sweep
+    below stayed green about the wrong thing after the P2-5 adoption: with a
+    string value, `_control_kind` returned None for the checkbox GROUP and the
+    sweep kept counting it as handed off, months after it started being driven."""
+    if fld.type == "input_file":
+        return Path("cv.pdf")
+    if fld.type == "boolean":
+        return True
+    if fld.type == "multi_value_multi_select":
+        return list(fld.options[:1]) or ["x"]
+    return "x"
+
+
 def test_ashby_no_captured_role_is_a_phantom_on_the_real_dom():
     # THE PHANTOM SWEEP, as a test, over EVERY shape Ashby renders. For every
     # captured field: either the fill never builds a role+name locator for it (a
@@ -2631,26 +2821,28 @@ def test_ashby_no_captured_role_is_a_phantom_on_the_real_dom():
 
     assert len(fm.fields) == 8
     located, handed_off, anchored, driven_per_option = [], [], [], []
+    known_nameless = []
     for fld in fm.fields:
-        # The upload route keys on the VALUE being a Path -- that is the real
-        # predicate, and it is why a file field's role never reaches a locator --
-        # so the resume carries one here exactly as resolve_values gives it.
-        value = Path("cv.pdf") if fld.type == "input_file" else "x"
-        fv = _FieldValueStub(fld, value)
-        # MIRRORS fill()'s routing, in fill()'s ORDER (`_control_kind` is checked
-        # BEFORE the checkbox-group hand-off). A field that reaches base._locate
-        # is one whose FIELD-level role+name is aimed at the live page.
+        fv = _FieldValueStub(fld, _realistic_value(fld))
+        # MIRRORS fill()'s routing, in fill()'s ORDER: upload, then
+        # `_control_kind`, then the consent/EEO exclusion, then the residual
+        # hand-off. A field that reaches base._locate is one whose FIELD-level
+        # role+name is aimed at the live page.
         if ashby_fill._is_upload(fv):
             anchored.append(fld.locator.role)
             continue
         kind = ashby_fill._control_kind(fv)
-        if kind == ashby_fill.ControlKind.RADIO:
-            # A radio group is DRIVEN, but per OPTION (`_locate_option`), never by
-            # the field's role+name -- so its field-level role+name is NOT aimed at
-            # the page and there is nothing to phantom-check here (the option
-            # locators are pinned by the FX1 collision + drive tests). This is the
-            # W5.1c change: the radio moved out of `handed_off`.
+        if kind is not None and ashby_fill._group_options(fv, kind) is not None:
+            # An option GROUP, EITHER kind, is DRIVEN per OPTION
+            # (`_locate_option`), never by the field's role+name -- so its
+            # field-level role+name is NOT aimed at the page and there is nothing
+            # to phantom-check here (the option locators are pinned by the FX1
+            # collision + drive tests). The radio moved out of `handed_off` at
+            # W5.1c; the checkbox group moved out at P2-5.
             driven_per_option.append(fld.locator.role)
+            continue
+        if ashby_fill._is_excluded_group(fv):
+            handed_off.append(fld.locator.role)
             continue
         if kind is None and ashby_fill._needs_human_handoff(fv):
             handed_off.append(fld.locator.role)
@@ -2658,18 +2850,48 @@ def test_ashby_no_captured_role_is_a_phantom_on_the_real_dom():
         if ashby_fill._is_ashby_combobox(fv):
             anchored.append(fld.locator.role)
             continue
-        # everything else IS aimed at the page, so it must EXIST there.
         n = len(_role_matches(page, fld.locator.role, fld.locator.name))
+        if fld.type == "boolean":
+            # KNOWN GAP, PRE-EXISTING, NOT INTRODUCED BY P2-5 AND NOT FIXED BY IT.
+            # The lone Boolean IS driven through `base._locate` (`_fill_control`),
+            # so its field-level role+name IS aimed at the page -- and on the real
+            # captured DOM it resolves to ZERO elements, which is this test's own
+            # definition of a phantom.
+            #
+            # The markup says why (`_SIBLING_DOM`, the 0d9175ab entry): the live
+            # control is a Yes/No BUTTON PAIR, and the `<input type="checkbox">`
+            # behind it carries `tabindex="-1"`, NO `id` and NO `aria-label`,
+            # while the entry's `<label for="0d9175ab-...">` points at the entry
+            # PATH, which is not an element id. So the checkbox has no accessible
+            # name to be found by.
+            #
+            # This is pinned as a FINDING rather than hidden, because the previous
+            # version of this loop handed every field a STRING value, which made
+            # `_control_kind` return None for the Boolean and routed it into
+            # `handed_off` -- so the sweep never phantom-checked it at all. It is
+            # asserted, not skipped, so a fix to the Boolean path turns this RED
+            # and forces this comment to be revisited. Whether Playwright's own
+            # name computation agrees with this test's independent ARIA resolver
+            # is a LIVE question this fixture cannot settle.
+            assert n == 0, ("the Boolean checkbox's accessible name now resolves; "
+                            "the known-gap carve-out below must be retired")
+            known_nameless.append(fld.locator.role)
+            continue
+        # everything else IS aimed at the page, so it must EXIST there.
         assert n == 1, (f"PHANTOM: get_by_role({fld.locator.role!r}, "
                         f"name={fld.locator.name!r}) resolved to {n} elements")
         located.append(fld.locator.role)
 
-    # the radio group is now DRIVEN per-option; the two checkbox groups are still
-    # handed off; the two nameless comboboxes and the upload are path-anchored; and
-    # the only field-level roles AIMED at the page are the ones the page carries.
-    assert driven_per_option == ["radio"]
-    assert sorted(handed_off) == ["checkbox", "checkbox"]
+    # BOTH option groups are now DRIVEN per-option; nothing in this posting is
+    # handed off any more (the residual hand-off needs a wrong-shaped value, and
+    # the exclusion needs a consent/EEO label, neither of which this posting
+    # carries); the two nameless comboboxes and the upload are path-anchored; the
+    # lone Boolean is the known nameless gap above; and the only field-level roles
+    # AIMED at the page are the ones the page carries.
+    assert sorted(driven_per_option) == ["checkbox", "radio"]
+    assert handed_off == []
     assert sorted(anchored) == ["button", "combobox", "combobox"]
+    assert known_nameless == ["checkbox"]
     assert sorted(located) == ["spinbutton", "textbox"]
 
 
@@ -2693,19 +2915,59 @@ def _one_field_posting(path, title, raw_type, options=(), *, required=True):
         ]}]}}
 
 
-def test_ashby_multi_select_checkbox_group_is_handed_off_not_a_fill_error(tmp_path):
-    # MAJOR 1, end to end, on the REAL five-checkbox control. Round 6 captured this
-    # REQUIRED field as `listbox`; `listbox` is not a click hazard, so the fill
-    # DROVE it, `base._locate` built `get_by_role("listbox", name=...)`, that
-    # resolved to ZERO elements on the live page, and the field died as a
-    # `fill-error:` -- which the seal bar calls "a CAPTURE BUG and a REJECT, never
-    # an exemption". Four of the six live MultiValueSelect fields are required.
-    #
-    # Captured as the CHECKBOX group it is, the control is a click hazard: the fill
-    # hands it to a human BEFORE any locator is built, and it lands in
-    # required_unfilled as a NAMED, temporary W5.1c click-debt. Same census outcome
-    # (NOT_COMPLETE), completely different KIND of entry -- a subtractable debt
-    # instead of a capture bug.
+# The canned-answer slug of the REAL five-option question (`_missing_path_guess`
+# normalizes the title). Seeding it is what makes the LIVE question answerable,
+# so the drives below run on the real control AND the real wordings rather than
+# on a friendlier stand-in.
+_CONTENT_SLUG = ("which_of_the_following_types_of_content_have_you_produced_"
+                 "dubs_or_audiovisual_translations_for_in_a_professional_"
+                 "context")
+_CONTENT_OPTIONS = ("Movies/TV shows/other dramatic content",
+                    "Creator content (e.g. YouTube videos)",
+                    "Ads/socials",
+                    "E-learning or informational content",
+                    "Documentaries")
+
+
+def _content_group_fieldmap():
+    """The REAL five-checkbox control carrying its REAL question and its REAL
+    five option wordings (elevenlabs/1713bfd7, captured 2026-07-13; the entry
+    `_SIBLING_DOM` holds verbatim)."""
+    raw = {"data": {"jobPosting": _one_field_posting(
+        _CHECKBOX_GROUP_PATH, _CHECKBOX_GROUP_TITLE, "MultiValueSelect",
+        _CONTENT_OPTIONS)}}
+    cap_page = _FakePage(responses=_ashby_responses(raw),
+                         html=_dom_with_siblings())
+    return capture_ashby("fauxcorp", "9009", _factory_for(cap_page),
+                         now=lambda: _PINNED)
+
+
+def test_ashby_multi_select_checkbox_group_is_driven_per_option_and_completes(tmp_path):
+    """P2-5 checkbox-group adoption, end to end on the REAL five-checkbox control.
+    This is the sanctioned rewrite the OLD test foresaw in its own words: it
+    called the hand-off "a NAMED, temporary W5.1c click-debt" and "a subtractable
+    debt instead of a capture bug", and this wave subtracts it. Exactly the
+    precedent the radio adoption set at
+    `test_ashby_radio_group_drives_the_resolved_option_and_completes` ("the
+    sanctioned rewrite the old test foresaw ... that rewrite is the planned path,
+    not a test-weakening").
+
+    WHAT IS KEPT, because it was never about the hand-off: round 6 captured this
+    REQUIRED field as `listbox`; `listbox` is not a click hazard, so the fill
+    DROVE it, `base._locate` built `get_by_role("listbox", name=...)`, that
+    resolved to ZERO elements on the live page, and the field died as a
+    `fill-error:` -- which the seal bar calls "a CAPTURE BUG and a REJECT, never
+    an exemption". The capture half below still pins role `checkbox`, and still
+    pins that `listbox` exists NOWHERE on the page. Four of the six live
+    MultiValueSelect fields are required, so this control's correctness is
+    load-bearing either way.
+
+    WHAT CHANGES: the control is no longer handed off. It is DRIVEN per option
+    through the same `_locate_option` + `_fill_option_group` the radio group uses,
+    and the run COMPLETES instead of carrying a debt. The honest-census half
+    survives the rewrite intact and is pinned by the siblings below: a partial
+    confirmation is still a GAP, an unlocatable option still hands the whole group
+    off untouched, and a consent/EEO group still never reaches the driver."""
     # The real DOM entry, carrying the REAL question, captures as a checkbox group.
     raw = {"data": {"jobPosting": _one_field_posting(
         _CHECKBOX_GROUP_PATH, _CHECKBOX_GROUP_TITLE, "MultiValueSelect",
@@ -2725,19 +2987,80 @@ def test_ashby_multi_select_checkbox_group_is_handed_off_not_a_fill_error(tmp_pa
     # Now drive the fill. The live question is owner content the fake SSOT cannot
     # answer, and an unanswered field never reaches the driver -- so the SAME real
     # control carries an ANSWERABLE question here. That the SSOT DOES answer it is
-    # the point: it proves the fill HANDS THE CONTROL OFF rather than driving it,
-    # EVEN WHEN AN ANSWER EXISTS.
+    # the point: it proves the fill DRIVES the control, where it once handed it off.
+    # THE QUESTION IS THE REAL ONE, and it must be a question the exclusion does
+    # NOT catch, or this test would prove the exclusion rather than the drive. The
+    # live content question is exactly that: `resolve._classify_checkbox` sorts it
+    # into no consent class and it carries no demographic keyword.
+    #
+    # It deliberately is NOT `_VISA_LABEL`. A sponsorship ask classifies as the
+    # consent class "assertion" (kernel `_classify_checkbox`), so a sponsorship
+    # MULTI-SELECT is EXCLUDED from this driver by design -- pinned by
+    # `test_ashby_sponsorship_multi_select_is_excluded_as_a_consent_assertion`.
+    fieldmap = _content_group_fieldmap()
+    assert {f.key: f for f in fieldmap.fields}[_CHECKBOX_GROUP_PATH]\
+        .locator.role == "checkbox"
+    values = _resolved_values(
+        fieldmap, tmp_path=tmp_path,
+        ssot=_fake_ssot(canned={_CONTENT_SLUG: ["Documentaries"]}))
+    # a multi-select resolves to a LIST, and it is NOT a bool -- so the drive
+    # below is earned by the ROLE plus the LIST shape, never by a bool shortcut.
+    assert {fv.key: fv.value
+            for fv in values.fields}[_CHECKBOX_GROUP_PATH] == ["Documentaries"]
+
+    page = _FakeAshbyPage(fieldmap, sweep_required_labels=(
+        "Full name", "Email", "Resume", _CHECKBOX_GROUP_TITLE))
+    report = ashby.fill(page, fieldmap, values)
+
+    # DRIVEN: exactly the resolved option was ticked, inside this group's entry,
+    # and every option NOT requested stayed untouched (the combination is exact).
+    by_name = {o.name: o for o in page.option_groups[_CHECKBOX_GROUP_PATH]}
+    assert by_name["Documentaries"].is_checked() is True
+    assert by_name["Documentaries"].checks == 1   # set ONCE, never toggled in
+    for other in set(_CONTENT_OPTIONS) - {"Documentaries"}:
+        assert by_name[other].is_checked() is False, other
+        assert by_name[other].checks == 0, other
+    # a `.check()` on the located option, never a `.click()` (Turnstile), and the
+    # per-option locate went through `get_by_role("checkbox", name=<option>)`.
+    assert ("role", "checkbox", "Documentaries") in page.requested
+    assert ("role", "checkbox", "Ads/socials") not in page.requested
+    # counts filled: NOT a required gap, not a skip, and the run completes. The
+    # old test asserted the exact opposite of all four of these lines.
+    assert _CHECKBOX_GROUP_PATH not in {g["key"] for g in report.required_unfilled}
+    assert _CHECKBOX_GROUP_PATH not in {key for key, _ in report.skipped}
+    assert not any("fill-error" in reason for _, reason in report.skipped)
+    assert report.readback_mismatches == []
+    assert report.complete is True
+    assert report.caption().endswith("- COMPLETE")
+
+
+def test_ashby_sponsorship_multi_select_is_excluded_as_a_consent_assertion(tmp_path):
+    """A SPONSORSHIP question rendered as a checkbox GROUP is EXCLUDED from this
+    driver, and the reason is worth pinning because it is a cross-change
+    interaction rather than a rule this module wrote.
+
+    `_is_excluded_group` imports the KERNEL's `_classify_checkbox` rather than
+    restating it, so it tracks the kernel automatically. The kernel sorts a
+    sponsorship ask into the consent class "assertion", whose defining property
+    (the P2-2 polarity work) is that "require sponsorship" answers with the
+    OPPOSITE polarity to "authorized to work" -- get it backwards and you assert
+    the opposite of the truth on a legally significant question.
+
+    For a `Boolean` the kernel has real machinery for that (a truthful-only
+    disposition against the SSOT). For a MULTI-SELECT it has NONE:
+    `_render_select` just matches SSOT values to option labels. So a sponsorship
+    multi-select must NOT be driven, and this pins that it is not -- and that the
+    exclusion tracks the kernel's classification rather than a local copy that
+    could silently fall out of date."""
     raw = {"data": {"jobPosting": _one_field_posting(
         _CHECKBOX_GROUP_PATH, _VISA_LABEL, "MultiValueSelect", ("Yes", "No"))}}
     cap_page = _FakePage(responses=_ashby_responses(raw),
                          html=_dom_with_siblings())
     fieldmap = capture_ashby("fauxcorp", "9009", _factory_for(cap_page),
                              now=lambda: _PINNED)
-    assert {f.key: f for f in fieldmap.fields}[_CHECKBOX_GROUP_PATH]\
-        .locator.role == "checkbox"
     values = _resolved_values(fieldmap, tmp_path=tmp_path)
-    # a multi-select resolves to a LIST, and it is NOT a bool -- so the hand-off
-    # below is earned by the ROLE, not by `_needs_human_handoff`'s bool shortcut.
+    # the resolver DID answer it, so the exclusion is what stops the drive rather
+    # than an absent answer. Without this the test could pass vacuously.
     assert {fv.key: fv.value for fv in values.fields}[_CHECKBOX_GROUP_PATH] == ["No"]
 
     page = _FakeAshbyPage(fieldmap, sweep_required_labels=(
@@ -2745,13 +3068,162 @@ def test_ashby_multi_select_checkbox_group_is_handed_off_not_a_fill_error(tmp_pa
     report = ashby.fill(page, fieldmap, values)
 
     gap = {g["key"]: g for g in report.required_unfilled}
-    assert _CHECKBOX_GROUP_PATH in gap             # named, not silently dropped
-    # a HAND-OFF, not a fill-error: the distinction the seal bar turns on.
-    # Asserted against the module's own reason constant, not a wording literal.
+    assert gap[_CHECKBOX_GROUP_PATH]["reason"] == \
+        ashby_fill._SENSITIVE_GROUP_HANDOFF_REASON
+    assert all(o.is_checked() is False and o.checks == 0
+               for o in page.option_groups[_CHECKBOX_GROUP_PATH])
+    assert not any(req[:2] == ("role", "checkbox") for req in page.requested)
+    assert report.complete is False
+
+
+def test_ashby_checkbox_group_with_a_wrong_shaped_value_still_hands_off(tmp_path):
+    """THE RESIDUAL HAND-OFF, which the adoption narrowed but did not delete.
+
+    Both option groups and the lone boolean now drive, so what remains on the
+    hand-off path is a click-hazard control whose resolved value matches NO shape
+    this module knows how to drive. Driving it would mean guessing what the value
+    meant, so it goes to a human, and `_HUMAN_HANDOFF_REASON` is what says so.
+
+    This test exists because the P2-5 rewrite of the old hand-off test removed the
+    only end-to-end assertion on that constant, and a reason string no test
+    reaches is a reason string that can rot.
+
+    The wrong shape is produced by CORRUPTING a genuinely resolved value rather
+    than by hand-building one: `_render_select` always returns a list for a
+    multi-select, so this branch is defence in depth against a future resolve
+    change, not a state the current resolve path can reach. Saying that plainly
+    is better than inventing a fixture that pretends otherwise."""
+    fieldmap = _content_group_fieldmap()
+    values = _resolved_values(
+        fieldmap, tmp_path=tmp_path,
+        ssot=_fake_ssot(canned={_CONTENT_SLUG: ["Documentaries"]}))
+    target = [fv for fv in values.fields if fv.key == _CHECKBOX_GROUP_PATH][0]
+    target.value = "Documentaries"      # a bare string where a list belongs
+
+    page = _FakeAshbyPage(fieldmap, sweep_required_labels=(
+        "Full name", "Email", "Resume", _CHECKBOX_GROUP_TITLE))
+    report = ashby.fill(page, fieldmap, values)
+
+    gap = {g["key"]: g for g in report.required_unfilled}
     assert gap[_CHECKBOX_GROUP_PATH]["reason"] == ashby_fill._HUMAN_HANDOFF_REASON
+    # a HAND-OFF, not a fill-error, and no control was touched or even located.
     assert not any("fill-error" in reason for _, reason in report.skipped)
-    # and no locator was EVER built for it: the hand-off fires first.
-    assert not any(_VISA_LABEL in str(req) for req in page.requested)
+    assert all(o.checks == 0
+               for o in page.option_groups[_CHECKBOX_GROUP_PATH])
+    assert not any(req[:2] == ("role", "checkbox") for req in page.requested)
+    assert report.complete is False
+
+
+def test_ashby_checkbox_group_ticks_only_the_requested_options_of_the_real_five(tmp_path):
+    """THE MULTI-SELECT'S OWN RISK, end to end: the group must end in exactly the
+    requested COMBINATION, not a superset.
+
+    A radio is one-of-N and cannot be over-answered; a checkbox group can. Two of
+    the five REAL options are requested here, through the real resolve path (a
+    seeded canned answer for the real question's slug), so this exercises the
+    live wordings -- slashes, parentheses, "e.g." -- that the per-option
+    accessible-name match actually has to carry. The other three must be left
+    untouched, and `.checks == 0` proves untouched rather than merely unticked."""
+    fieldmap = _content_group_fieldmap()
+    requested = ["Documentaries", "Ads/socials"]
+    values = _resolved_values(
+        fieldmap, tmp_path=tmp_path,
+        ssot=_fake_ssot(canned={_CONTENT_SLUG: list(requested)}))
+    # the resolver really did answer it, with BOTH options, matched to the real
+    # option labels (`_match_option`), or the drive below would prove nothing.
+    assert {fv.key: fv.value
+            for fv in values.fields}[_CHECKBOX_GROUP_PATH] == requested
+
+    page = _FakeAshbyPage(fieldmap, sweep_required_labels=(
+        "Full name", "Email", "Resume", _CHECKBOX_GROUP_TITLE))
+    report = ashby.fill(page, fieldmap, values)
+
+    by_name = {o.name: o for o in page.option_groups[_CHECKBOX_GROUP_PATH]}
+    for option in _CONTENT_OPTIONS:
+        want = option in requested
+        assert by_name[option].is_checked() is want, option
+        assert by_name[option].checks == (1 if want else 0), option
+        assert by_name[option].unchecks == 0, option
+    assert _CHECKBOX_GROUP_PATH not in {g["key"] for g in report.required_unfilled}
+    assert report.complete is True
+
+
+def test_ashby_checkbox_group_partial_confirmation_is_a_gap_end_to_end(tmp_path):
+    """PARTIAL CONFIRMATION IS A GAP, proven through `fill()` rather than only at
+    the driver seam. Both requested options are located and driven, but one never
+    reads back ticked (the silent no-op). The field must land in
+    `required_unfilled` and the run must be NOT_COMPLETE, even though one option
+    genuinely committed: a multi-select answered in part is a DIFFERENT answer,
+    and reporting it filled would be the silent wrong answer this engine forbids.
+
+    This is the convention that predates the adoption, and the test that proves
+    the adoption did not quietly cost it."""
+    fieldmap = _content_group_fieldmap()
+    requested = ["Documentaries", "Ads/socials"]
+    values = _resolved_values(
+        fieldmap, tmp_path=tmp_path,
+        ssot=_fake_ssot(canned={_CONTENT_SLUG: list(requested)}))
+
+    page = _FakeAshbyPage(fieldmap, sweep_required_labels=(
+        "Full name", "Email", "Resume", _CHECKBOX_GROUP_TITLE),
+        bad_option_names=("Ads/socials",))
+    report = ashby.fill(page, fieldmap, values)
+
+    gap = {g["key"]: g for g in report.required_unfilled}
+    assert _CHECKBOX_GROUP_PATH in gap          # named, not silently dropped
+    assert gap[_CHECKBOX_GROUP_PATH]["reason"] == \
+        ashby_fill._partial_group_reason(["Ads/socials"])
+    # NOT a fill-error: the control was found and driven, it just did not confirm.
+    assert not any("fill-error" in reason for _, reason in report.skipped)
+    # the option that DID commit is left as it is, and reported as what landed.
+    by_name = {o.name: o for o in page.option_groups[_CHECKBOX_GROUP_PATH]}
+    assert by_name["Documentaries"].is_checked() is True
+    mismatch = {m["key"]: m for m in report.readback_mismatches}
+    assert mismatch[_CHECKBOX_GROUP_PATH]["actual"] == ["Documentaries"]
+    assert report.complete is False
+
+
+def test_ashby_consent_and_eeo_checkbox_groups_never_reach_the_driver(tmp_path):
+    """THE EXCLUSION, end to end, on the same REAL five-checkbox control.
+
+    Making checkbox groups drivable made consent-class and EEO/demographic
+    checkbox groups drivable too, and the kernel's consent machinery does not
+    reach them (`resolve._resolve_boolean` dispositions a consent checkbox through
+    the seeded `policies.consent.<class>` policy, but only for the `Boolean`
+    type). So the same control, carrying a CONSENT question instead of a content
+    question, must be handed off by `_is_excluded_group` and must never have a
+    per-option locator built for it at all.
+
+    Asserting on `page.requested` is the load-bearing half: it proves the
+    exclusion fires BEFORE any option is located, so no consent box is ever
+    touched even momentarily."""
+    consent_label = "I agree to the privacy policy and consent to data processing"
+    raw = {"data": {"jobPosting": _one_field_posting(
+        _CHECKBOX_GROUP_PATH, consent_label, "MultiValueSelect",
+        ("Yes", "No"))}}
+    cap_page = _FakePage(responses=_ashby_responses(raw),
+                         html=_dom_with_siblings())
+    fieldmap = capture_ashby("fauxcorp", "9009", _factory_for(cap_page),
+                             now=lambda: _PINNED)
+    slug = "i_agree_to_the_privacy_policy_and_consent_to_data_processing"
+    values = _resolved_values(fieldmap, tmp_path=tmp_path,
+                              ssot=_fake_ssot(canned={slug: ["Yes"]}))
+    # the resolver DID produce a value, so the exclusion is what stops the drive,
+    # not an absent answer. Without this the test would pass vacuously.
+    assert {fv.key: fv.value for fv in values.fields}[_CHECKBOX_GROUP_PATH] == ["Yes"]
+
+    page = _FakeAshbyPage(fieldmap, sweep_required_labels=(
+        "Full name", "Email", "Resume", consent_label))
+    report = ashby.fill(page, fieldmap, values)
+
+    gap = {g["key"]: g for g in report.required_unfilled}
+    assert _CHECKBOX_GROUP_PATH in gap
+    assert gap[_CHECKBOX_GROUP_PATH]["reason"] == \
+        ashby_fill._SENSITIVE_GROUP_HANDOFF_REASON
+    # NOTHING was ticked, and no option locator was ever built.
+    assert all(o.is_checked() is False and o.checks == 0
+               for o in page.option_groups[_CHECKBOX_GROUP_PATH])
+    assert not any(req[:2] == ("role", "checkbox") for req in page.requested)
     assert report.complete is False
 
 

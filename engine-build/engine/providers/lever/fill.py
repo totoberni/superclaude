@@ -97,7 +97,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 from engine.kernel.contracts import (
     FieldMap, FieldValue, FillAssets, FillReport, FillSafetyError,
@@ -370,11 +370,18 @@ def fill(page: Any, fieldmap: FieldMap, values: ResolvedValues, *,
     # (1b) DISMISS THE PRIVACY BANNER before any field is driven. Lever renders a
     # fixed "This website uses cookies..." overlay (DENY / ACCEPT) and is the only
     # vendor whose banner was never dismissed; a fixed aria-region overlay intercepts
-    # focus/keyboard, and is the leading explanation for the geocoded dropdown commit
-    # failing (its ArrowDown/Enter went to the banner, and the uncommitted geocode
-    # text was then wiped on blur, leaving the location EMPTY). Dismissing it here --
-    # at fill START, BEFORE the location drive -- means it can never sit between the
-    # location type and its keyboard commit.
+    # focus/keyboard, so a keystroke meant for a field can land on the banner instead.
+    # Dismissing it here -- at fill START, BEFORE the location drive -- means it can
+    # never sit between a field's keystrokes and the control they were meant for.
+    #
+    # This banner is NOT the cause of the geocoded-location commit failure. An earlier
+    # revision of this comment named it "the leading explanation"; a full-form
+    # instrumented live run REFUTED that (the banner's deny button was clicked and
+    # confirmed dismissed at t=16.9s, and the location still parked at t=209s). The
+    # proven root cause is the CHECK-THEN-USE gap in `_drive_location_field` (see the
+    # location-driver block below), which that same run measured directly. The
+    # dismissal stays because a keyboard-intercepting overlay is worth removing on its
+    # own merits, not because it explains the location gap.
     _dismiss_privacy_banner(page)
     readback_mismatches: list[dict] = []
     extra_skips: list[tuple[str, str]] = []
@@ -1096,6 +1103,37 @@ def _text_reads_back(locator, fv) -> bool:
 # value: the fill counts only when it is non-empty AND its committed name contains
 # the city token.
 #
+# P1-1, THE CHECK-THEN-USE GAP (root cause, measured on a full-form instrumented
+# live run, 2026-07-20). The menu this widget renders is TRANSIENT: it closes the
+# moment the input blurs. The previous driver awaited the dropdown, THREW AWAY the
+# option texts the awaiter had just proved present (it returned a bare bool), and
+# then issued an INDEPENDENT SECOND DOM query to resolve the option index. The live
+# run measured 3 matching options on the first read and ZERO on the second, 22 ms
+# later, with an IFRAME holding focus at the next sampled instant: the index
+# resolved to None, the driver took the park branch, and ArrowDown/Enter were NEVER
+# DISPATCHED AT ALL. The city the engine wanted was on screen 22 ms before it
+# looked. The discriminator against an isolated probe that passes is ELAPSED TIME
+# on the page (~15 s vs ~208 s), by which time the form's third-party widgets have
+# loaded and can take focus; the bug is a race the easy path always wins.
+#
+# The fix has TWO halves, and the second is the load-bearing one:
+#   (a) the awaiter RETURNS what it observed (`_LocationObservation`) and the index
+#       is resolved from THAT observation by a PURE function (`_match_option_index`,
+#       no DOM access), so one read decides one outcome;
+#   (b) knowing the index is NOT sufficient to COMMIT. ArrowDown/Enter go through
+#       the FOCUS-FOLLOWING page keyboard, so if the menu has closed and focus has
+#       moved to an iframe they commit nothing while the driver believes it acted.
+#       Carrying the index alone would therefore convert an honest park into a
+#       SILENT WRONG STATE. `_location_committable` re-establishes focus on the
+#       input and re-verifies the live option set is STILL the observed one
+#       immediately before dispatch; when it is not, the attempt is abandoned and
+#       the search is re-established from scratch (BOUNDED, `_LOCATION_COMMIT_
+#       ATTEMPTS`). The authoritative post-condition is unchanged and unrelaxed:
+#       `_selected_location_ok` on the hidden selectedLocation. A residual
+#       sub-millisecond window between that re-verify and the keypress is
+#       irreducible for a focus-following keyboard, so it is GATED rather than
+#       eliminated -- it can only ever produce an honest park, never a false fill.
+#
 # OPTION SELECTOR (F-5, live probe palantir 2026-07-19). Typing "Bologna" populates
 # `<div class="dropdown-results ...">` with option nodes
 # `<div class="break-word dropdown-location ..." id="location-N">Bologna, ITA</div>`
@@ -1124,6 +1162,26 @@ _LOCATION_OPTION_CSS = "div.dropdown-results div.dropdown-location"
 # readback), so it can never hang the fill.
 _LOCATION_SETTLE_MS: tuple[int, ...] = (
     200, 500, 900, 1300, 1700, 2200, 2800, 3400, 4000)
+# BOUNDED commit attempts (P1-1). Attempt 1 is the ordinary drive; the retries exist
+# ONLY for the observed-but-not-committable race (the transient menu closed between
+# the observation and the keypress), and are never spent on a genuine geocoder
+# non-match -- a no-match breaks out immediately and parks by name, so a query the
+# geocoder answers with nothing still costs exactly one search. Worst case is 3
+# searches, each itself bounded by `_LOCATION_SETTLE_MS`; never an unbounded loop.
+_LOCATION_COMMIT_ATTEMPTS = 3
+
+
+class _LocationObservation(NamedTuple):
+    """What ONE await of the geocoded dropdown actually SAW, carried across the
+    check-then-use boundary instead of being discarded (P1-1). `texts` is the option
+    set as rendered at the observing instant; `no_results` records that the widget's
+    VISIBLE no-results node was the terminal that ended the wait. An empty `texts`
+    with `no_results` False means neither terminal was ever observed within the
+    bound -- a materially different fact from "the geocoder returned nothing", and
+    the park reason keeps the two apart (`_location_park_reason`)."""
+
+    texts: tuple[str, ...]
+    no_results: bool
 
 
 def _is_location_field(fv) -> bool:
@@ -1180,38 +1238,54 @@ def _drive_location_field(page, fv, readback_mismatches: list[dict],
     `_apply_native`, so the clear is explicit here) makes the geocoder see the clean
     city query. The location field is ALSO excluded from the generic text pass
     (`_is_location_field` routes it here, never to `_fill_field`), so it is never
-    double-driven; the pollution is the page pre-fill, which the clear handles."""
+    double-driven; the pollution is the page pre-fill, which the clear handles.
+
+    The search-and-commit runs as BOUNDED ATTEMPTS (P1-1, see the block comment
+    above): each attempt observes the dropdown ONCE, resolves the option index from
+    THAT observation rather than from a second independent query, and commits only
+    while the widget is still in a committable state. An attempt whose menu closed
+    under it is abandoned and the search re-established; a genuine non-match breaks
+    out on the FIRST attempt (retrying cannot make a geocoder answer differently)
+    and parks by name."""
     city = _location_city_query(fv.value)
     visible = _locate(page, fv)
-    _clear_text_field(visible)             # start clean: a page pre-fill would pollute the geocoder query
-    base.type_human(visible, city)
-    _await_location_dropdown(page)
-    index = _first_matching_option(page, city)
-    if index is None:
-        # No dropdown option matched the city (the widget showed no results, or no
-        # option contained the city token): park HONESTLY, never commit a
-        # non-matching option. selectedLocation stays empty, so a REQUIRED location
-        # surfaces as a genuine gap through kernel.resolve._completeness.
-        _press_location_key(page, visible, "Escape")
+    observation = _LocationObservation((), False)
+    # The option set of the last attempt that DID contain the city. Sticky across
+    # attempts: it is what separates "the geocoder had no match" from "the geocoder
+    # had a match and the menu closed before it could be committed" in the park
+    # reason, and a later attempt observing nothing must not erase that fact.
+    matched_texts: tuple[str, ...] = ()
+    for _ in range(_LOCATION_COMMIT_ATTEMPTS):
+        observation = _location_search(page, visible, city)
+        index = _match_option_index(observation.texts, city)
+        if index is None:
+            break                          # a genuine non-match: park, never retry
+        matched_texts = observation.texts
+        if not _location_committable(page, visible, observation.texts):
+            continue                       # the menu closed under us: re-establish
+        _commit_location_option(page, visible, index)
+        selected = _selected_location_value(page)
+        if _selected_location_ok(selected, city):
+            filled_keys.add(fv.key)
+            return
+        # An option was committed but the SUBMITTED value disagrees (empty, or a
+        # committed name that does not contain the city token): an honest mismatch,
+        # not a fill -- the visible input and the option text are never the gate.
+        # NOT retried: the widget answered, and it answered with the wrong place.
         _record_location_gap(
-            fv, readback_mismatches, extra_skips,
-            _selected_location_value(page), _readback_visible(visible),
-            f"geocoded location typeahead: no dropdown option matched the city "
-            f"{city!r} (selectedLocation left empty)")
+            fv, readback_mismatches, extra_skips, selected,
+            _readback_visible(visible),
+            "geocoded location did not commit: the submitted selectedLocation is "
+            "empty or does not name the city")
         return
-    _commit_location_option(page, visible, index)
-    selected = _selected_location_value(page)
-    visible_value = _readback_visible(visible)
-    if _selected_location_ok(selected, city):
-        filled_keys.add(fv.key)
-        return
-    # An option was committed but the SUBMITTED value disagrees (empty, or a
-    # committed name that does not contain the city token): an honest mismatch, not
-    # a fill -- the visible input and the option text are never the gate.
+    # Nothing was committed: park HONESTLY, never commit a non-matching option.
+    # selectedLocation stays empty, so a REQUIRED location surfaces as a genuine gap
+    # through kernel.resolve._completeness.
+    _press_location_key(page, visible, "Escape")
     _record_location_gap(
-        fv, readback_mismatches, extra_skips, selected, visible_value,
-        "geocoded location did not commit: the submitted selectedLocation is "
-        "empty or does not name the city")
+        fv, readback_mismatches, extra_skips,
+        _selected_location_value(page), _readback_visible(visible),
+        _location_park_reason(city, observation, matched_texts))
 
 
 def _record_location_gap(fv, readback_mismatches: list[dict],
@@ -1226,8 +1300,24 @@ def _record_location_gap(fv, readback_mismatches: list[dict],
     extra_skips.append((fv.key, reason))
 
 
+def _location_search(page, visible, city: str) -> _LocationObservation:
+    """ONE search of the geocoded typeahead: clear the input, type the city query,
+    await the dropdown, and return WHAT THE AWAIT OBSERVED.
+
+    Re-typing is also the deterministic RECOVERY from a menu that closed under a
+    previous attempt (P1-1). A bare re-focus is NOT enough: the widget clears its
+    results state when the input blurs, so the menu has to be re-established by a
+    fresh query, not merely re-shown. `_clear_text_field` and `type_human` both drive
+    the control through its own locator, which re-focuses it as a side effect of the
+    keystrokes -- so an attempt that lost focus to another element gets the keyboard
+    back here, before anything is observed."""
+    _clear_text_field(visible)             # start clean: a page pre-fill would pollute the geocoder query
+    base.type_human(visible, city)
+    return _await_location_dropdown(page)
+
+
 def _await_location_dropdown(page, settle_ms: tuple[int, ...] = _LOCATION_SETTLE_MS
-                             ) -> bool:
+                             ) -> _LocationObservation:
     """BOUNDED wait for the geocoded remote search to RESOLVE. Polls at the
     cumulative offsets (the same bounded shape `select_react_combobox`/the education
     typeahead use) and terminates on the POSITIVE render -- OPTION NODES appearing
@@ -1240,32 +1330,130 @@ def _await_location_dropdown(page, settle_ms: tuple[int, ...] = _LOCATION_SETTLE
     no-results node's COUNT -- returned instantly on the empty container and parked
     every location before any option rendered (~1.45s later). Awaiting the OPTION
     NODES (or the no-results node becoming VISIBLE) is what waits through the empty
-    container. Returns False once the whole bound is exhausted -- never an unbounded
-    poll, so a query the geocoder never answers falls through to the readback (which
-    reports the empty result honestly) rather than hanging."""
+    container. Returns an EMPTY observation once the whole bound is exhausted --
+    never an unbounded poll, so a query the geocoder never answers falls through to
+    the readback (which reports the empty result honestly) rather than hanging.
+
+    P1-1: it returns the option texts it OBSERVED rather than a bare bool. The
+    caller resolves the option index from this return value, so the observation that
+    decides the outcome is the one that was actually made, not a second independent
+    read taken an unbounded number of milliseconds later against a menu that may
+    already have closed."""
     elapsed = 0
     for mark in settle_ms:
         _wait_ms(page, mark - elapsed)
         elapsed = mark
-        if _location_option_texts(page) or _location_no_results(page):
-            return True
-    return False
+        texts = _location_option_texts(page)
+        if texts:
+            return _LocationObservation(tuple(texts), False)
+        if _location_no_results(page):
+            return _LocationObservation((), True)
+    return _LocationObservation((), False)
 
 
-def _first_matching_option(page, city: str):
-    """The index of the FIRST dropdown option whose text contains the city token,
-    or None when the widget shows no-results OR no option matches. None means park
-    (never commit a non-matching option); the returned index is navigated to by
-    keyboard in `_commit_location_option`."""
-    if _location_no_results(page):
-        return None
+def _match_option_index(texts: tuple[str, ...], city: str):
+    """The index of the FIRST observed option whose text contains the city token, or
+    None when none does. PURE: it reads the observation it is handed and touches no
+    DOM, which is precisely what closes the check-then-use gap (P1-1) -- the widget
+    cannot change under a decision made from an already-captured list. None means
+    park (never commit a non-matching option); the returned index is navigated to by
+    keyboard in `_commit_location_option`.
+
+    The no-results terminal needs no separate check here: it is recorded in the
+    observation, and an observation carrying it carries no option texts, so it
+    yields None through the ordinary path."""
     want = _normalize_name(city)
     if not want:
         return None
-    for i, text in enumerate(_location_option_texts(page)):
+    for i, text in enumerate(texts):
         if want in _normalize_name(text):
             return i
     return None
+
+
+def _location_committable(page, visible, texts: tuple[str, ...]) -> bool:
+    """True iff the widget is in a state where a focus-following keystroke can still
+    commit the option `texts` was observed at (P1-1, requirement (b)).
+
+    Knowing the index is NOT enough to commit. `_commit_location_option` dispatches
+    ArrowDown/Enter on the PAGE keyboard, which follows focus: if the transient menu
+    has closed and focus has moved (the live run measured an IFRAME holding focus
+    22 ms after a populated read), those keys land somewhere else and commit nothing
+    while this driver believes it committed. Acting on the carried index alone would
+    turn today's honest park into a SILENT WRONG STATE, which is strictly worse.
+
+    So: re-establish focus on the location input, THEN re-read the live option set
+    and require it to be IDENTICAL to what was observed. Establishing focus is
+    preferred over merely inspecting `document.activeElement`: it is deterministic
+    (it puts the keyboard back where the keys must go) rather than diagnostic, and it
+    needs no page-script evaluation. Reading the option set AFTER focusing is what
+    proves the menu survived both the interference and the focus call.
+
+    IDENTICAL, not merely non-empty: ArrowDown navigates the LIVE list, so an index
+    resolved against a different list would highlight a different place. A changed
+    list is treated as not-committable and the caller re-establishes the search
+    rather than guessing.
+
+    This re-read is NOT a second reintroduction of the check-then-use gap. It cannot
+    decide to PARK -- a failure here sends the caller into a bounded re-search, and
+    only the observation from `_await_location_dropdown` ever decides whether an
+    option matched. It is a guard on the carried decision, not a second decider."""
+    _focus_location_input(visible)
+    return tuple(_location_option_texts(page)) == tuple(texts)
+
+
+def _focus_location_input(visible) -> None:
+    """Put the keyboard back on the location input immediately before a commit. The
+    live failure trigger is another element (an embedded third-party widget iframe)
+    taking focus mid-drive; a focus-following keyboard then drives that element
+    instead. Best-effort: a locator without `.focus()` degrades to a no-op, and the
+    committability re-read still gates the commit, so a partial fake or a locator
+    that cannot focus can never turn into a false fill."""
+    focuser = getattr(visible, "focus", None)
+    if not callable(focuser):
+        return
+    try:
+        focuser()
+    except Exception:
+        return
+
+
+def _location_park_reason(city: str, observation: _LocationObservation,
+                          matched_texts: tuple[str, ...]) -> str:
+    """The recorded reason for an uncommitted location, distinguishing the four
+    materially different things that can have happened.
+
+    This matters beyond tidiness. The previous single reason -- "no dropdown option
+    matched the city X" -- was honest about what the driver SAW and actively
+    misleading about what HAPPENED: on the run that produced it, three options
+    naming the city were on screen 22 ms earlier. It read as proof that the geocoder
+    had returned nothing, and it sent four investigation rounds after a geocoding
+    problem that did not exist. A reader of a park log must be able to tell a
+    geocoder that answered NOTHING from a menu that closed before the commit."""
+    if matched_texts:
+        # Deliberately covers BOTH ways the widget can stop being committable: the
+        # menu closing (the live case) and the menu re-rendering into a different
+        # option set (which would make the observed index name a different place).
+        # `_location_committable` does not distinguish them, so this reason must not
+        # claim to either.
+        return (f"geocoded location typeahead: the geocoder DID return a matching "
+                f"option for the city {city!r} ({', '.join(matched_texts)}), but at "
+                f"each of the {_LOCATION_COMMIT_ATTEMPTS} commit attempts the "
+                f"dropdown was no longer the one that had been observed (closed, or "
+                f"re-rendered), so no option could be committed without guessing "
+                f"which one the keyboard would land on (selectedLocation left empty)")
+    if observation.no_results:
+        return (f"geocoded location typeahead: the geocoder returned NO location for "
+                f"the city {city!r} (the widget's no-results terminal was shown; "
+                f"selectedLocation left empty)")
+    if observation.texts:
+        return (f"geocoded location typeahead: the geocoder returned "
+                f"{len(observation.texts)} option(s), none naming the city {city!r} "
+                f"({', '.join(observation.texts)}; selectedLocation left empty)")
+    return (f"geocoded location typeahead: the dropdown never resolved for the city "
+            f"{city!r} within {_LOCATION_SETTLE_MS[-1]}ms -- no option and no "
+            f"no-results terminal was ever observed, so the geocoder's answer is "
+            f"UNKNOWN rather than empty (selectedLocation left empty)")
 
 
 def _location_option_texts(page) -> list[str]:
@@ -1347,8 +1535,14 @@ def _commit_location_option(page, visible, index: int) -> None:
     """Highlight the option at `index` and commit it via the keyboard: ArrowDown
     (index+1) times to reach it from the un-highlighted state, then Enter. A
     keyboard commit (not an option click) mirrors the react-select driver's own
-    proven mechanism; the visible input holds focus after typing, so a
-    focus-following page keyboard drives the widget's own key handler."""
+    proven mechanism.
+
+    CALL ONLY BEHIND `_location_committable`. This dispatches on the FOCUS-FOLLOWING
+    page keyboard, so it drives whatever holds focus. "The visible input holds focus
+    after typing" was the assumption this driver used to make, and the live full-form
+    run refuted it: another element held focus by the time the commit was reached.
+    The keys are therefore aimed by the caller's focus re-establishment, and the
+    result is still gated on selectedLocation afterwards."""
     for _ in range(index + 1):
         _press_location_key(page, visible, "ArrowDown")
     _press_location_key(page, visible, "Enter")

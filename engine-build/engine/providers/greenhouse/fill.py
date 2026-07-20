@@ -1068,6 +1068,36 @@ _TODO_PHONE_COUNTRY_WIDGET = (
 # `Escape` first, which would just close the menu with no selection). The
 # driver now presses `Enter` on the control's own input instead of clicking any
 # `div.select__option`, so the menu-lookup/option-click step is gone entirely.
+#
+# LIVE-DOM FIX #3 (2026-07-20, canonical/5569916 read-only probe; raw log
+# `auto/trackB/gh-probe.out`, analysis `T12a-gh-probe-report.md`). FIX #2 above
+# is RIGHT that react-select commits the FOCUSED row on Enter, and WRONG in the
+# assumption it silently carried: that the first filtered row IS the requested
+# option. On the live REQUIRED control `question_55255480` (intended value "2")
+# the menu filtered 11 rows down to 2 (`:12` vs `:30`) and the filter input did
+# hold the query (`:31`), so type-to-filter works. But the survivors were `1`
+# AND `2` IN THAT ORDER, so `select__option--is-focused` sat on `1` (`:34`,
+# `:36`, pre-Enter outerHTML `:46`), Enter committed `1` (`:50`, still `1` at
+# +250 ms `:56`), and the readback correctly refused it (`:59`).
+#
+# WHY `1` survives a filter for `2` is NOT established (the leading hypothesis
+# is react-select's default `createFilter` stringifying label plus value, so a
+# short numeric query matches an unrelated row through its numeric VALUE; an
+# attempt to confirm it against the boards API returned non-JSON). Nothing
+# below depends on that mechanism: the driver stops reasoning about WHICH row
+# react-select chose to focus and instead POSITIVELY IDENTIFIES the row whose
+# visible text matches, walks the focus ring onto it, re-reads to confirm it
+# got there, and only then presses Enter.
+#
+# The severity this closes is NOT an accounting error. The readback already
+# stopped a wrong value being COUNTED as filled; it cannot stop the wrong value
+# being COMMITTED. Live, `1` was left sitting in a REQUIRED question's widget
+# and would have been SUBMITTED. Exact-match-or-park keeps the wrong value out
+# of the form in the first place; a park is always better than a guess.
+#
+# The single-option controls that pass today (e.g. `question_44538607`,
+# `:69-:104`) filter to ONE row which is already focused, so the walk is zero
+# steps and their DOM interaction is byte-for-byte what it was before.
 
 
 def _combobox_control_selector(field_id: str) -> str:
@@ -1085,7 +1115,8 @@ def _combobox_control_selector(field_id: str) -> str:
 def select_react_combobox(page, field_id: str, option_text: str, *,
                           min_delay: float = 60, max_delay: float = 180,
                           poll_ms: tuple[int, ...] = (200, 500)) -> bool:
-    """Drive one react-select combobox: open, filter, commit, and confirm.
+    """Drive one react-select combobox: open, filter, commit the EXACT match,
+    and confirm.
 
     Sequence (fresh locators at every step; react-select recycles nodes):
       1. Click the field's control (scoped via `_combobox_control_selector`,
@@ -1094,16 +1125,18 @@ def select_react_combobox(page, field_id: str, option_text: str, *,
          the menu.
       2. `type_human` the option text into the control's own input to filter
          the menu (never fill()) -- also the long-country-list path.
-      3. Press `Enter` on that same input: react-select commits the
-         highlighted (first-filtered) option itself -- never a `div.select__
-         option` click, which does not reliably commit (see LIVE-DOM FIX #2
-         above).
+      3. `_commit_and_confirm`: identify the rendered row whose VISIBLE TEXT
+         exactly matches `option_text`, walk react-select's focus ring onto
+         THAT row, confirm on a fresh read that it got there, and only then
+         press `Enter` (still never a `div.select__option` click, which does
+         not reliably commit -- LIVE-DOM FIX #2). A menu that renders rows but
+         carries no exact match commits NOTHING and parks -- LIVE-DOM FIX #3.
       4. Poll `.select__single-value` (scoped to the field's control) at
          +200/+500 ms to confirm the value landed.
       5. Dismiss with Escape -- harmless (react-select already closed the menu
          on Enter-commit) but a safe no-op net for the case Enter had nothing
-         to commit (e.g. no option matched the filter). NEVER blur (a blur can
-         re-open / clear the widget).
+         to commit, and the deliberate exit for the parked case. NEVER blur (a
+         blur can re-open / clear the widget).
 
     Returns True iff the readback confirms the selection landed.
     """
@@ -1112,17 +1145,10 @@ def select_react_combobox(page, field_id: str, option_text: str, *,
     combo_input = _combobox_input(page, field_id)
     type_human(combo_input, option_text, min_delay=min_delay, max_delay=max_delay)
 
-    # Commit via a FOCUS-FOLLOWING keyboard Enter, not the filter input's own
-    # press: react-select re-renders (detaches) the filter input on each
-    # keystroke, so `combo_input.press("Enter")` hangs on Playwright's
-    # actionability wait for a now-stale node. The live input still holds
-    # focus, so the page keyboard commits the highlighted first-filtered option
-    # reliably. Live-DOM verified. Falls back to the locator's own press for
-    # the offline fake harness (no `page.keyboard`).
-    _keyboard_press(page, combo_input, "Enter")
-
-    landed = _poll_single_value(page, field_id, option_text, poll_ms)
-    # Dismiss the still-open menu (a no-op after an Enter-commit) without a blur.
+    landed = _commit_and_confirm(page, field_id, combo_input, option_text,
+                                 poll_ms)
+    # Dismiss the menu (a no-op after an Enter-commit; a genuine close after a
+    # park) without a blur.
     _keyboard_press(page, combo_input, "Escape")
     return landed
 
@@ -1220,6 +1246,185 @@ def _combobox_input(page, field_id: str):
     per control; react-select recycles the node, so this is re-resolved on
     every call rather than cached)."""
     return _combobox_control(page, field_id).locator("input")
+
+
+# The class react-select puts on the ONE row its focus ring currently sits on;
+# `Enter` commits that row and no other. Live-captured on two independent
+# controls of the same posting (`auto/trackB/gh-probe.out:46` and `:91`). The
+# sibling `remix-css-*-option` class carries a per-build hash and is never
+# matched (same reason `_combobox_control_selector` never matches a full class
+# string).
+_FOCUSED_OPTION_CLASS = "select__option--is-focused"
+
+# The most ArrowDown/ArrowUp presses `_focus_exact_option` will spend reaching
+# the matching row. react-select's focus ring WRAPS, so the walk is at most half
+# the rendered rows in the better direction; a filtered menu that still leaves
+# more than this between the focused row and the match is not a list a keyboard
+# walk should be brute-forcing, and parking is the honest outcome. It is never
+# reached on any control observed so far: the passing controls filter to a
+# single row (`gh-probe.out:77`) and the failing one to two (`:30`).
+_MAX_OPTION_NAV_STEPS = 40
+
+# Cumulative ms offsets for the post-walk focus re-read (same bounded-offset
+# shape as `_poll_single_value`). The first read is at +0: react-select moves
+# its focus ring synchronously on the keydown, so the common case costs no wait
+# at all, and the later marks only pay out when a render lags.
+_FOCUS_SETTLE_MS: tuple[int, ...] = (0, 60, 150)
+
+
+def _commit_and_confirm(page, field_id: str, combo_input, option_text: str,
+                        poll_ms: tuple[int, ...]) -> bool:
+    """Commit the option whose visible text matches `option_text`, then confirm.
+
+    Never commits a row it has not positively identified (LIVE-DOM FIX #3):
+    when the menu renders rows, `Enter` is pressed ONLY after the focus ring has
+    been walked onto the exactly-matching row and a fresh read confirms it is
+    there. Rows with no exact match press nothing at all and return False, so
+    the caller books an honest gap and the wrong value never enters the form.
+
+    UNENUMERABLE FALLBACK: an EMPTY row list means the menu could not be read
+    (an offline fake page, or a theme whose menu does not render under this
+    field's `-listbox` id), which is IGNORANCE, not evidence of "no option
+    matched" -- the two must never be conflated. That case falls through to the
+    bare `Enter` the driver has always pressed, and `_poll_single_value` remains
+    the gate, exactly as before this fix. Live that Enter has nothing to commit
+    anyway (no rendered row means no focused row), and the selector it depends
+    on is live-confirmed on the only markup we have (`_menu_option_selector`).
+    """
+    rows = _menu_options(page, field_id)
+    if rows and not _focus_exact_option(page, field_id, combo_input,
+                                        option_text, rows):
+        return False
+    # Commit via a FOCUS-FOLLOWING keyboard Enter, not the filter input's own
+    # press: react-select re-renders (detaches) the filter input on each
+    # keystroke, so `combo_input.press("Enter")` hangs on Playwright's
+    # actionability wait for a now-stale node. The live input still holds
+    # focus, so the page keyboard commits the FOCUSED option reliably.
+    # Live-DOM verified. Falls back to the locator's own press for the offline
+    # fake harness (no `page.keyboard`).
+    _keyboard_press(page, combo_input, "Enter")
+    return _poll_single_value(page, field_id, option_text, poll_ms)
+
+
+def _focus_exact_option(page, field_id: str, combo_input, option_text: str,
+                        rows: list[tuple[str, bool]]) -> bool:
+    """Walk react-select's focus ring onto the row whose visible text exactly
+    matches `option_text`; True only once a FRESH read confirms it is focused.
+
+    False (commit nothing) when: no row matches exactly, the match is ambiguous,
+    no row is focused at all (so the walk has no known origin and every step
+    count would be a guess), the walk is longer than `_MAX_OPTION_NAV_STEPS`, or
+    the re-read never shows the intended row focused. Every one of those is a
+    state in which pressing `Enter` would commit a row this driver cannot name.
+    """
+    target = _exact_option_index([text for text, _ in rows], option_text)
+    if target is None:
+        return False
+    focused = next((i for i, (_, is_focused) in enumerate(rows) if is_focused),
+                   None)
+    if focused is None:
+        return False
+    # The ring wraps at both ends, so both directions are legal; take the
+    # shorter one to keep the keypress count (and the re-render churn) minimal.
+    down = (target - focused) % len(rows)
+    up = (focused - target) % len(rows)
+    key, steps = ("ArrowDown", down) if down <= up else ("ArrowUp", up)
+    if steps > _MAX_OPTION_NAV_STEPS:
+        return False
+    for _ in range(steps):
+        _keyboard_press(page, combo_input, key)
+    return _focused_text_matches(page, field_id, option_text)
+
+
+def _focused_text_matches(page, field_id: str, option_text: str) -> bool:
+    """Bounded re-read of the focus ring: True as soon as the row react-select
+    reports as FOCUSED carries exactly the intended text.
+
+    This is the step that makes the walk verified rather than assumed -- the
+    whole defect being fixed is a step that trusted react-select's own choice of
+    focused row without ever reading it back. Biased toward False: a menu that
+    cannot be re-read returns no rows and therefore no match, so the caller
+    parks rather than committing blind."""
+    want = _normalize_name(option_text)
+    if not want:
+        return False
+    elapsed = 0
+    for mark in _FOCUS_SETTLE_MS:
+        _wait_timeout(page, mark - elapsed)
+        elapsed = mark
+        for text, is_focused in _menu_options(page, field_id):
+            if is_focused and _normalize_name(text) == want:
+                return True
+    return False
+
+
+def _exact_option_index(texts: list[str], option_text: str) -> int | None:
+    """The index of the ONE row whose visible text matches `option_text`; None
+    when nothing matches or the match is AMBIGUOUS (two rows reading the same).
+
+    MATCHING RULE: equality after `_normalize_name` -- lowercase, `*`
+    required-marker stripped, internal whitespace collapsed -- and EXACT, never
+    substring. Justification for each half:
+
+    - EXACT is load-bearing. The live failure is a menu whose FILTER is loose
+      (querying `2` left `1` AND `2`: `gh-probe.out:30-35`), so a loose MATCH
+      layered on a loose filter is how `2` picks `12`, or `10` picks `10+` out
+      of the live 11-row list at `:16-:26`. Substring matching cannot be made
+      safe on a numeric option list, and the readback downstream is itself a
+      substring test (`_poll_single_value`), so exactness here is what stops a
+      near-match sailing through BOTH gates.
+    - The `_normalize_name` normalisation is safe because it cannot merge two
+      DISTINCT rows: rows differing only in case, in required-marker asterisks,
+      or in how much whitespace the markup indents them with are not rows a
+      human reading the menu could tell apart either. It is also the SAME
+      normalisation `_poll_single_value` applies, so the commit gate and the
+      readback gate agree on what a name is, and a rule stricter than the
+      readback's (raw equality) would park fields the readback confirms today.
+    - AMBIGUITY parks. Two rows with identical visible text carry different
+      underlying values, and nothing visible says which was meant, so there is
+      no honest way to pick one.
+    """
+    want = _normalize_name(option_text)
+    if not want:
+        return None
+    hits = [i for i, text in enumerate(texts) if _normalize_name(text) == want]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _menu_options(page, field_id: str) -> list[tuple[str, bool]]:
+    """`(visible text, is-focused)` for every rendered row of the field's OPEN
+    menu, in DOM order.
+
+    Live-captured shape (`auto/trackB/gh-probe.out:46`, re-confirmed on a second
+    control at `:91`): each row is a `div.select__option` inside
+    `[id="react-select-<field_id>-listbox"]`, and the focused row carries the
+    additional `_FOCUSED_OPTION_CLASS`.
+
+    Reads text and focus in ONE pass (rather than a second query for the focused
+    row) so the two can never disagree about an index, which is what makes a
+    duplicate-text menu detectable instead of silently mis-navigated. Degrades
+    to an empty list on any missing method / query failure -- never a hang or a
+    raise; see `_commit_and_confirm` for what an empty list is taken to mean.
+    Kept separate from `_menu_option_count`, which answers a different question
+    (has the debounced search rendered ANYTHING yet) against pages that expose
+    only `.count()`."""
+    locator_fn = getattr(page, "locator", None)
+    if locator_fn is None:
+        return []
+    try:
+        rows = locator_fn(_menu_option_selector(field_id))
+        counter = getattr(rows, "count", None)
+        count = counter() if callable(counter) else 0
+        options: list[tuple[str, bool]] = []
+        for index in range(count):
+            row = rows.nth(index)
+            attr = getattr(row, "get_attribute", None)
+            classes = (attr("class") or "") if callable(attr) else ""
+            options.append((_locator_text(row),
+                            _FOCUSED_OPTION_CLASS in classes))
+        return options
+    except Exception:
+        return []
 
 
 def _poll_single_value(page, field_id: str, option_text: str,
@@ -1324,19 +1529,31 @@ def select_education_typeahead(page, field_id: str, option_text: str, *,
          rather than an empty/stale menu. Returns as soon as options appear;
          falls through when the bound is exhausted, so a query matching nothing
          still proceeds to an honest readback rather than hanging.
-      4. Commit via a FOCUS-FOLLOWING keyboard Enter (`_keyboard_press`), exactly
-         as the static driver does: react-select re-renders (detaches) the filter
-         input per keystroke, so the input's own `.press` would hang on a stale
-         node; the live input still holds focus, so the page keyboard commits the
-         highlighted first-filtered option reliably.
+      4. `_commit_and_confirm`, the SAME commit path as the static driver
+         (LIVE-DOM FIX #3): walk react-select's focus ring onto the returned row
+         whose visible text EXACTLY matches the SSOT value, confirm it got
+         there, and only then press a FOCUS-FOLLOWING keyboard Enter. A result
+         list carrying no exact match commits NOTHING.
       5. `_poll_single_value` readback via the persistent `-live-region`-anchored
          `.select__single-value`: True ONLY when the committed value CONTAINS the
          intended SSOT text (normalized). A value that did not take -- an empty
          readback, OR a committed option that does not correspond to the SSOT
-         value (a foreign row react-select happened to highlight) -- returns
-         False, so `fill()` records a readback mismatch / honest gap and NEVER
-         counts it filled. Never guesses an option.
+         value -- returns False, so `fill()` records a readback mismatch /
+         honest gap and NEVER counts it filled. Never guesses an option.
       6. Dismiss with Escape (never blur).
+
+    SEAL-GREENHOUSE NIT-2 (`education_degree` readback-mismatched on BOTH
+    censuses and was left blank) is fixed HERE, by step 4, and by the same named
+    root cause as P1-2 rather than a second theory: the settle in step 3 only
+    ever guaranteed that SOME row had rendered, and Enter then committed
+    whichever row the remote search happened to return FIRST. When that row was
+    not the SSOT degree, a wrong degree was committed into the widget and the
+    readback rejected it after the fact. Now nothing is committed unless it is
+    the row asked for. Whether Greenhouse's remote degree list contains an exact
+    counterpart for the SSOT degree string is UNPROVEN offline (no degree option
+    list has ever been captured) and stays a live-gate question; if it does not,
+    this parks by name instead of committing a near-miss, and the degree datum
+    still reaches the form through the free-text degree-result answer.
 
     Partial data across the three education fields is handled by the per-field
     fill loop, not here: each of School / Degree / Discipline is a separate
@@ -1352,8 +1569,8 @@ def select_education_typeahead(page, field_id: str, option_text: str, *,
     combo_input = _combobox_input(page, field_id)
     type_human(combo_input, option_text, min_delay=min_delay, max_delay=max_delay)
     _await_typeahead_options(page, field_id, settle_ms)
-    _keyboard_press(page, combo_input, "Enter")
-    landed = _poll_single_value(page, field_id, option_text, poll_ms)
+    landed = _commit_and_confirm(page, field_id, combo_input, option_text,
+                                 poll_ms)
     _keyboard_press(page, combo_input, "Escape")
     return landed
 
@@ -1384,8 +1601,18 @@ def _await_typeahead_options(page, field_id: str,
 def _menu_option_selector(field_id: str) -> str:
     """CSS for the field's OPEN react-select menu options, scoped by the
     per-field `-listbox` id so it counts only THIS field's options, never a
-    sibling education select's. Best-effort / live-unverified (see the block
-    comment above)."""
+    sibling education select's.
+
+    LIVE-CONFIRMED 2026-07-20 (this selector was written best-effort and is no
+    longer unverified): the captured pre-Enter menu markup on canonical/5569916
+    is `<div class="select__menu-list ..." role="listbox" id="react-select-
+    question_55255480-listbox"><div class="select__option ...">1</div>...`
+    (`auto/trackB/gh-probe.out:46`), re-confirmed on a second control of the
+    same posting at `:91`. Both the id shape and the option class match what
+    this builds. Still unverified against every Greenhouse THEME -- the same
+    caveat `_single_value_text` / `poll_upload_confirmed` carry -- which is why
+    `_commit_and_confirm` treats an unreadable menu as ignorance rather than as
+    evidence that nothing matched."""
     return f'[id="react-select-{field_id}-listbox"] div.select__option'
 
 
