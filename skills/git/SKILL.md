@@ -35,41 +35,70 @@ a human has explicitly requested this action this session.
 ## What the policy does
 
 The SOT is the guard, not this skill. The git-policy guard
-reads `~/.claude/config/git-policy` on every shell tool call. When the file says
-`disabled`, the guard mechanically BLOCKS any commit or push (git commit,
-commit-tree, cherry-pick, revert, am, rebase, merge, push, fast-import, and gh
-release create / pr merge / refs-writing api). Read-only git (status, log, diff,
-add) is unaffected.
+(`hooks/sc_hooks/handlers/git_policy.py`) runs on every Bash and PowerShell tool
+call and reads `~/.claude/config/git-policy`. The read is fail-open: the block
+applies only when the file exists, is readable, and says `disabled` (`false`,
+`off`, `0`, `no` are accepted spellings, case-insensitive). An absent file or any
+other content counts as `enabled`.
+
+While `disabled`, the guard BLOCKS, for every role (plain, meta, worker):
+
+- `git commit`, `commit-tree`, `push`, `rebase`, `merge`, `cherry-pick`, `revert`,
+  `am`, `fast-import`;
+- `git reset --hard` (the flag in any position);
+- `git tag` when it creates or deletes a tag;
+- `gh pr merge` and `gh release create`.
+
+These forms PASS while disabled:
+
+- read-only and staging git: `status`, `log`, `diff`, `show`, `add`, `fetch`,
+  `pull`, `stash`, `checkout`, `branch`, `reset` without `--hard`;
+- `git tag` with no arguments or with a listing option (`-l`, `--list`, `-n`,
+  `-v`, `--verify`, `--contains`, `--no-contains`, `--points-at`, `--merged`,
+  `--no-merged`, `--sort`, `--format`, `--column`);
+- `--abort` and `--quit` on `rebase`, `merge`, `cherry-pick`, `revert`, `am`, so
+  an agent can always back out of an operation in progress;
+- other `gh` subcommands (`pr view`, `pr list`, `pr create`, `release list`);
+- a verb that only appears inside a quoted string (`echo 'git commit'`).
 
 This skill writes only `~/.claude/config/git-policy`; it does not read or write
 `settings.json`. `settings.json` is owner-run-only (see rules/12-agent-hierarchy.md).
 
-This guard is a best-effort shell-string heuristic, NOT a shell parser and NOT a
-security boundary. Its purpose is to stop an agent's HABITUAL commit/push and
-self-unblock attempts, not to defeat a determined adversary deliberately crafting
-an evasion. A same-uid agent can still position the verb or the write target via
-constructs this heuristic does not model (command substitution, interpreter-driven
-git, `eval`, IFS / whitespace-valued variables, and in general arbitrary shell
-grammar). The real controls are the owner's manual review of commits and not
-granting agents push credentials; filesystem-level ownership would be the only
-complete mechanism.
+How the guard reads a command: it splits the string on `;`, `&&`, `||`, `|`, `&`
+and newlines (respecting quotes), rejoins backslash and backtick line
+continuations, skips harmless prefixes (`VAR=val`, `env`, `sudo`, `command`,
+`exec`, the PowerShell call operator `&`), accepts `git`, `git.exe` or a quoted
+full path to it, steps over git global options (`-C <dir>`, `-c <k=v>`,
+`--git-dir=...`), and looks up to two levels into the quoted argument of a
+wrapper (`bash -c`, `sh -c`, `pwsh -Command`, `powershell`, `cmd`, `eval`, `iex`).
 
-- Tested-and-blocked commit/push vectors: `git -C <dir>` / `-c <k=v>` / `--git-dir`
-  / `--work-tree` globals; a chained `cd <dir> && git commit`; the verb after a
-  `; && || |` or newline; `bash -c "..."` / `sh -c "..."` / `eval "..."` wrappers
-  carrying a literal verb; env-prefix `VAR=val git commit`; an inline
-  `-c alias.<name>=<verb>` definition; and a verb obfuscated by quoting, backslash,
-  a TAB, a backslash-newline continuation, or a leading redirection (`>f git
-  commit`). The companion flag-write check blocks these spellings of the flag path:
-  the absolute path, `~/`, `$HOME`/`${HOME}`, `//`, `cd`+relative, a
-  `f=<path>; > $f` (and split-var `${b}-policy`) indirection, and a TAB or
-  backslash-newline before the target.
-- Residual CLASSES it does NOT catch (by design): the verb or the path produced at
-  RUNTIME by command substitution (`git $(echo commit)`), `eval`, an
-  IFS/whitespace-valued variable (`git${IFS}commit`), or a value pulled from a
-  subshell / prior call / environment; an interpreter driving git (python/perl/node);
-  a wrapper binary named other than git/gh; and a pre-existing `~/.gitconfig` alias.
-  Anything not in the tested list above is a residual, not a promise.
+Flag-file write protection: independently of the flag state, a worker's shell
+command that targets the policy file is denied. This covers a redirection
+(`>`, `>>`, `>|`) and the common writer commands in both shells (`tee`, `cp`,
+`mv`, `rm`, `sed`, `dd of=`, `Set-Content`, `Add-Content`, `Out-File`,
+`Copy-Item`, `Move-Item`, `Remove-Item`, `New-Item` and their aliases), with the
+path spelled absolutely, through `~`, `$HOME`, `$env:USERPROFILE`, or relative to a
+preceding `cd` / `Set-Location`. Reading the flag is allowed. Meta and plain
+sessions are not restricted by this check; for them the unattended-context gate
+above is the control.
+
+This guard is a best-effort speed bump built on readable heuristics, NOT a shell
+parser and NOT a security boundary. Its purpose is to stop an agent's HABITUAL
+commit/push and self-unblock attempts, not to defeat a deliberately crafted
+evasion. Known residual gaps, by design:
+
+- variable indirection and anything produced at runtime: a verb or path held in
+  a variable, command substitution (`$(...)`, backticks), a quoted verb
+  (`git "commit"`);
+- aliases: an inline `-c alias.<name>=<verb>` definition or a pre-existing
+  `~/.gitconfig` alias, since the guard sees the alias name, not the verb;
+- `gh api` (refs-writing REST calls are not inspected) and any other `gh`
+  subcommand beyond the two listed above;
+- an interpreter or script driving git (python, node, a `.ps1` or `.sh` file),
+  and a wrapper binary named other than `git` / `gh`.
+
+The real controls are the owner's manual review of commits and not granting
+agents push credentials.
 
 The Write/Edit/MultiEdit route to the flag is covered separately by the
 write-ACL guard (those tools name the path as structured data).

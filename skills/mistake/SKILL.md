@@ -54,7 +54,7 @@ If a matching entry exists, reuse its `--name` slug (upsert updates in place). O
 
 For every upsert below: first write the body to `~/.claude/tmp/<slug>.md` with the Write tool, then pass it via `--text-file`.
 
-**Project mistakes/gotchas** (meta only — tier=shared, type=feedback for process gotchas / type=project for project-specific bugs):
+**Project mistakes/gotchas** (meta only — tier=shared-projects, type=feedback for process gotchas / type=project for project-specific bugs):
 
 Body (`~/.claude/tmp/<slug>.md`):
 ```markdown
@@ -62,7 +62,7 @@ Body (`~/.claude/tmp/<slug>.md`):
 ```
 
 ```
-mem upsert --tier shared --type feedback --name <slug-kebab-case> --description "<one-line summary>" --agent <project-name> --text-file ~/.claude/tmp/<slug>.md
+mem upsert --tier shared-projects --type feedback --name <slug-kebab-case> --description "<one-line summary>" --agent <project-name> --text-file ~/.claude/tmp/<slug>.md
 ```
 
 **Class dual-write** (tier=class, type=feedback; --agent=<class-name>):
@@ -89,7 +89,7 @@ Each `upsert` prints `upserted id=N` on success.
 
 If `Occurrences >= 2` (same pattern, different contexts):
 1. Promote to `rules/20-tool-conventions.md` via Edit tool
-2. Upsert a global-tier entry marking the pattern: `mem upsert --tier global --type feedback --name <slug> ...`
+2. Upsert a global-tier entry marking the pattern: `mem upsert --tier shared-global --type feedback --name <slug> ...`
 3. Update the source DB entries to note `[PROMOTED->rules]` in the body
 
 ### 6. Report
@@ -107,7 +107,7 @@ If `Occurrences >= 2` (same pattern, different contexts):
 
 ## Storage
 - All mistake/gotcha writes go through `mem upsert`.
-- Tier mapping: project-scoped mistake → `--tier shared --agent <project>`; class-level → `--tier class --agent <class>`.
+- Tier mapping: project-scoped mistake → `--tier shared-projects --agent <project>`; class-level → `--tier class --agent <class>`.
 - Type mapping: process gotchas / agent behavior mistakes → `--type feedback`; project-specific bugs / codebase gotchas → `--type project`.
 - Write scopes: rule 12. Class writes are layer 2 only. Promotion to global via `/lt-mem`.
 - Rules promotion (`rules/20-tool-conventions.md`) still uses Edit tool directly — that file is not in the DB.

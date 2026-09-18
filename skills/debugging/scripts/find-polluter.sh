@@ -5,6 +5,10 @@
 # Usage: find-polluter.sh <file_or_dir_to_check> <test_pattern>
 # Example: find-polluter.sh '.git' 'tests/**/*.py'
 # Example: find-polluter.sh '__pycache__/stale.pyc' 'src/**/*.test.ts'
+#
+# Su Windows va eseguito con Git Bash (strumento Bash), non da PowerShell.
+# L'interprete Python si sceglie con la variabile PYTHON (predefinito: python),
+# ad esempio: PYTHON="$HOME/.claude/.venv/Scripts/python.exe" find-polluter.sh ...
 
 if [ $# -ne 2 ]; then
   echo "Usage: $0 <file_to_check> <test_pattern>"
@@ -14,6 +18,7 @@ fi
 
 POLLUTION_CHECK="$1"
 TEST_PATTERN="$2"
+PYTHON="${PYTHON:-python}"
 
 echo "Searching for test that creates: $POLLUTION_CHECK"
 echo "Test pattern: $TEST_PATTERN"
@@ -53,7 +58,7 @@ for TEST_FILE in $TEST_FILES; do
   echo "[$COUNT/$TOTAL] Testing: $TEST_FILE"
 
   if [ "$RUNNER" = "pytest" ]; then
-    python3 -m pytest "$TEST_FILE" -x -q > /dev/null 2>&1 || true
+    "$PYTHON" -m pytest "$TEST_FILE" -x -q > /dev/null 2>&1 || true
   else
     $RUNNER "$TEST_FILE" > /dev/null 2>&1 || true
   fi
@@ -68,7 +73,11 @@ for TEST_FILE in $TEST_FILES; do
     ls -la "$POLLUTION_CHECK"
     echo ""
     echo "To investigate:"
-    echo "  $RUNNER $TEST_FILE"
+    if [ "$RUNNER" = "pytest" ]; then
+      echo "  $PYTHON -m pytest $TEST_FILE"
+    else
+      echo "  $RUNNER $TEST_FILE"
+    fi
     exit 1
   fi
 done

@@ -45,7 +45,7 @@ The per-criterion detail surfaces how many rows were skipped (`; exempt: N`).
 
 The final score is **renormalized over only the criteria that were actually scored**. The runner accumulates earned points alongside a `MAXPTS` total (each scored criterion adds its max; an N/A criterion adds neither), then `SCORE = round(earned / MAXPTS * 100)`. When all 6 criteria apply, `MAXPTS == 100` and this is identical to a straight sum.
 
-Criterion 6 goes **N/A** when `(julianday(MAX(updated)) - julianday(MIN(updated))) < STALE_DAYS`: a corpus whose entire edit-history is shorter than the staleness window structurally cannot contain a stale row, so awarding the full 10 would be a false free pass (the classic uniform-age freshly-migrated case). When N/A, the 10 pts are excluded from BOTH numerator and denominator (the remaining criteria carry honest weight — the score correctly stops being inflated), the row prints `| 6 | Staleness managed | N/A | edit-span <X>d < <STALE_DAYS>d — unmeasurable until timestamps diverge |`, and the v3 staleness trigger is suppressed. Force the scored branch for testing with `MEM_STALE_DAYS=0` (threshold 0 ⇒ span is never below it ⇒ criterion 6 scores numerically again).
+Criterion 6 goes **N/A** when `(julianday(MAX(updated)) - julianday(MIN(updated))) < STALE_DAYS`: a corpus whose entire edit-history is shorter than the staleness window structurally cannot contain a stale row, so awarding the full 10 would be a false free pass (the classic uniform-age freshly-migrated case). When N/A, the 10 pts are excluded from BOTH numerator and denominator (the remaining criteria carry honest weight — the score correctly stops being inflated), the row prints `| 6 | Staleness managed | N/A | edit-span <X>d < <STALE_DAYS>d - unmeasurable until timestamps diverge |`, and the v3 staleness trigger is suppressed. Force the scored branch for testing with `MEM_STALE_DAYS=0` (threshold 0 ⇒ span is never below it ⇒ criterion 6 scores numerically again).
 
 ## DB-health thresholds (replace MD line budgets)
 
@@ -147,7 +147,7 @@ trigger is suppressed while N/A.
 | 4 | vec store soundness| NN/15 | ... |
 | 5 | Metadata complete  | NN/15 | ... |
 | 6 | Staleness managed  | NN/10 OR N/A | ... |
-### v3 Triggers (informational — not scored)
+### v3 Triggers (informational - not scored)
 Scored NN/MM pts (renormalized to /100[; KK pts N/A excluded])
 SCORE: NN/100
 ```
@@ -155,7 +155,7 @@ The penultimate line surfaces the renormalization basis (earned over scorable MA
 criterion is N/A the excluded points are named so the dropped denominator is never silent.
 `--verbose` additionally appends the per-tier signal table from `memory/scan_mem_matrix.py`.
 
-## v3 Triggers (informational — appended by the runner if any fire)
+## v3 Triggers (informational - appended by the runner if any fire)
 
 Re-expressed against DB signals (parallel to the old MD-corpus triggers):
 

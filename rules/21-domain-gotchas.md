@@ -2,10 +2,10 @@
 
 Project-specific traps that apply only to certain technology stacks. Loaded as part of the rules tier (after `20-tool-conventions.md`). Cross-referenced from project memory when applicable.
 
-## Compose / Docker Test Hygiene
+## Test Working-Tree Hygiene
 
-- After any test run that uses compose volumes, restore host files dirtied by bind mounts. **Be selective** — `git checkout -- docs/` will also revert intentional edits (e.g., model.json). List specific paths instead of broad directories.
-- After compose test runs, ALWAYS clean `__pycache__` before running host tests — compose may produce bytecode with container-specific paths.
+- After any test run that regenerates or rewrites tracked files (generated docs, fixtures, snapshots), restore the files it dirtied. **Be selective**: `git checkout -- docs/` will also revert intentional edits (e.g., model.json). List specific paths instead of broad directories.
+- After test runs in another worktree or interpreter, ALWAYS clean `__pycache__` before re-running tests: stale bytecode carries paths from the other environment and causes phantom failures.
 
 ## Python Namespace Gotchas
 

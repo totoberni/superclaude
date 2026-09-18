@@ -6,10 +6,10 @@
 # blocked before they ship.
 #
 # Produced/consumed by: ~/.claude/scripts/experiment-harness.py
-#   record:  ~/.claude/.venv/bin/python ~/.claude/scripts/experiment-harness.py \
+#   record:  scpy experiment-harness.py \
 #              run --script train.py --seeds 1,2,3 \
 #              --claim-id table2_test_acc --passport passport.yaml
-#   verify:  ~/.claude/.venv/bin/python ~/.claude/scripts/experiment-harness.py \
+#   verify:  scpy experiment-harness.py \
 #              verify --passport passport.yaml --claims claims.txt
 #
 # -----------------------------------------------------------------------------

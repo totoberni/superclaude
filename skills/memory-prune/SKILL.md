@@ -32,8 +32,8 @@ stale entries with `mem prune --name <name>`.
 
 | Tier | DB filter | Budget |
 |------|-----------|--------|
-| Global LTM | `--tier global` | 60 rows |
-| Project memories | `--tier shared --type project` | 60 rows each project |
+| Global LTM | `--tier shared-global` | 60 rows |
+| Project memories | `--tier shared-projects --type project` | 60 rows each project |
 | Class MTM | `--tier class` | 40 rows per class |
 | Instance | `--tier instance` | 80 (meta), 30 (workers and other) |
 
@@ -49,7 +49,7 @@ Filter by tier or type to narrow scope:
 
 ```bash
 # Shared project memories only
-mem list --tier shared --type project
+mem list --tier shared-projects --type project
 ```
 
 ### 2. Search for Candidates by Symptom

@@ -22,6 +22,8 @@ Note sul port:
   - Lo "Step 0" dell'originale lanciava lo scan scartandone l'output (nessun
     effetto sul punteggio): e' stato rimosso. La tabella resta in --verbose.
   - Il motivo di indisponibilita' "sqlite3 absent" non esiste piu' (nessuna CLI).
+  - Unica differenza di formato: il separatore nelle righe di dettaglio e' un
+    trattino ASCII (" - ") e non il trattino lungo dell'originale.
 
 Criteri (dettagli in skills/mem-health/SKILL.md):
   1 Right-sized rows    20  righe non oversize (le budget-exempt non penalizzano)
@@ -42,9 +44,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import scan_mem_matrix as scan  # noqa: E402
 
-# Trattino lungo usato nelle righe di output dell'originale bash. Tenuto in un
-# solo punto: per un output solo ASCII basta sostituirlo con "-".
-DASH = chr(0x2014)
+# Separatore usato nelle righe di output. L'originale bash stampava un trattino
+# lungo; la regola del repo vieta i trattini lunghi, quindi qui e' ASCII puro.
+# Ogni uso e' gia' circondato da spazi, per cui le righe si leggono "a - b".
+DASH = "-"
 
 # Marcatore budget-exempt ancorato a inizio riga (inizio corpo o dopo un newline).
 EXEMPT_PRED = (

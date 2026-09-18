@@ -144,6 +144,14 @@ def iter_corpus_files(root):
     return sorted(paths)
 
 
+def rel_posix(path, root):
+    """Percorso relativo a root con le barre in avanti, anche su Windows.
+
+    Serve perche' le chiavi di POINTER_IGNORES e i messaggi usano sempre "/".
+    """
+    return os.path.relpath(path, root).replace(os.sep, "/")
+
+
 def line_of(text, offset):
     return text.count("\n", 0, offset) + 1
 
@@ -200,7 +208,7 @@ def check_defining_marker(root, rec, home_rel, corpus_paths, failures):
             if os.path.normpath(p) == home_abs:
                 found_in_home = True
             else:
-                hits.add((os.path.relpath(p, root), line_of(text, m.start())))
+                hits.add((rel_posix(p, root), line_of(text, m.start())))
     for rel, lineno in sorted(hits):
         failures.append(
             f"[{rec['id']}] defining_marker re-defined outside canonical_home: {rel}:{lineno}"
@@ -227,7 +235,7 @@ def check_forbidden_pattern(root, rec, home_rel, corpus_paths, failures):
             continue
         text = read_text(p)
         for m in rx.finditer(text):
-            hits.add((os.path.relpath(p, root), line_of(text, m.start())))
+            hits.add((rel_posix(p, root), line_of(text, m.start())))
     for rel, lineno in sorted(hits):
         failures.append(
             f"[{rec['id']}] forbidden_pattern hit outside canonical_home: {rel}:{lineno}"
@@ -346,7 +354,7 @@ def check_generic_pointers(root, corpus_paths, failures, stats):
                     continue
                 token = pm.group(1)
                 target = resolve_pointer_target(root, token, p, basename_index)
-                rel = os.path.relpath(p, root)
+                rel = rel_posix(p, root)
                 lineno = line_of(text, m.start())
                 if target is not None:
                     stats["resolved"] += 1

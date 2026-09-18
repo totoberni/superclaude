@@ -2,7 +2,8 @@
 """
 better_super_deps.py — unified dependency manifest CLI for superclaude.
 
-Parses ~/.claude/dependencies.yml (schema: 1) and provides:
+Parses ~/.claude/dependencies.yml (schema: 1), or the file given with --manifest
+(honoured by every command, --record included), and provides:
   --list          enumerate entries (optionally filtered by --type)
   --check         per-entry currency check (routes per dependency type)
   --record        append or update an entry (idempotent by (type, name))
@@ -13,8 +14,8 @@ Parses ~/.claude/dependencies.yml (schema: 1) and provides:
                   --dry-run  print the pip command and exit without running
 
 Network routing:
-  python  → PyPI JSON API (https://pypi.org/pypi/<name>/json) — sandbox-allowlisted
-  npm     → registry.npmjs.org — NOT sandbox-allowlisted → status: needs-network
+  python  → PyPI JSON API (https://pypi.org/pypi/<name>/json)
+  npm     → registry.npmjs.org lookup is not implemented → status: needs-network
 
 Used by /better-super --new (--record self-registration) and --update (--check + --export).
 Schema and CLI interface are stable; consuming skills reference this docstring as the contract.
@@ -64,7 +65,7 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict:
 def save_manifest(data: dict, path: Path = MANIFEST_PATH) -> None:
     inline_comment = {
         "python": "# pip; pinned; --export → requirements-format / --pip-install → venv; currency via PyPI JSON API",
-        "npm":    "# node; currency via registry.npmjs.org (external — not sandbox-allowlisted)",
+        "npm":    "# node; currency via registry.npmjs.org (lookup not implemented: reported as needs-network)",
     }
     with path.open("w", encoding="utf-8") as f:
         f.write(f"schema: {data['schema']}\n")
@@ -146,15 +147,14 @@ def check_python(entries: list) -> None:
 
 
 def check_npm(entries: list) -> None:
-    # registry.npmjs.org is NOT in the sandbox allowlist → needs-network
+    # La verifica su registry.npmjs.org non e' implementata: ogni voce esce come needs-network.
     print(f"{'name':<30} {'current':<15} {'latest':<15} {'status'}")
     print("-" * 75)
     for e in entries:
         scope = e.get("scope")
         pkg = f"@{scope}/{e['name']}" if scope else e["name"]
         current = e.get("version", "?")
-        # Real check: GET https://registry.npmjs.org/<pkg> → .dist-tags.latest
-        # Not sandbox-allowlisted — mark gracefully without crashing.
+        # Verifica reale (da fare): GET https://registry.npmjs.org/<pkg> → .dist-tags.latest
         print(f"{pkg:<30} {current:<15} {'?':<15} needs-network")
 
 
@@ -175,6 +175,8 @@ def cmd_check(args: argparse.Namespace, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_record(args: argparse.Namespace, data: dict) -> None:
+    # Si scrive sullo stesso file da cui si e' letto: --manifest vale anche qui.
+    manifest_path = Path(args.manifest) if getattr(args, "manifest", None) else MANIFEST_PATH
     dep_type = args.type
     name = args.name
     version = args.version
@@ -205,13 +207,13 @@ def cmd_record(args: argparse.Namespace, data: dict) -> None:
         if existing.get("name") == name:
             entries[i] = entry
             data["updated"] = date.today().isoformat()
-            save_manifest(data)
+            save_manifest(data, manifest_path)
             print(f"Updated {dep_type}/{name} in manifest.")
             return
 
     entries.append(entry)
     data["updated"] = date.today().isoformat()
-    save_manifest(data)
+    save_manifest(data, manifest_path)
     print(f"Recorded {dep_type}/{name} in manifest.")
 
 # ---------------------------------------------------------------------------

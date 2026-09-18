@@ -86,7 +86,7 @@ If 3 attempts fail with different approaches, STOP fixing. Report back to the sp
 
 ## When Invoked
 
-1. **Capture** — Get the full error output (don't truncate stack traces). When diagnosing test failures: first run the Test Cleanup Protocol — see `~/.claude/skills/test-cleanup-protocol/SKILL.md` (nukes stale `__pycache__`, restores compose-dirtied host files, checks `git status`). Many "phantom" test bugs are environmental.
+1. **Capture** — Get the full error output (don't truncate stack traces). When diagnosing test failures: first run the Test Cleanup Protocol — see `~/.claude/skills/test-cleanup-protocol/SKILL.md` (nukes stale `__pycache__`, restores test-dirtied tracked files, checks `git status`). Many "phantom" test bugs are environmental.
 2. **Locate** — Identify the origin file and line number
 3. **Check docs first** — Read known issues BEFORE theorizing:
    - Superclaude: memory DB, `mem search '<project> gotchas mistakes'` then `mem get --name <slug>` (Gotchas + Mistakes)

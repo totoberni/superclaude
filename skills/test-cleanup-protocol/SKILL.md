@@ -49,5 +49,5 @@ After cleanup, re-run the failing tests. If they pass after cleanup, the failure
 
 ## Cross-References
 
-- `~/.claude/rules/21-domain-gotchas.md`
+- `~/.claude/rules/21-domain-gotchas.md` § Test Working-Tree Hygiene
 - `~/.claude/agents/w-tester.md` and `~/.claude/agents/w-debugger.md` (which load this skill)

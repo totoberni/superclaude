@@ -55,6 +55,8 @@ When the marker is a heading, anchor it to the heading line itself
 (`^#{1,6}\s+Exact Heading Text`) rather than a bare substring, so other files citing that heading
 in prose are not mistaken for a competing definition.
 
-Bite tests: `scripts/tests/test-ssot-lint.sh` (self-contained, builds fixtures under `mktemp -d`,
-never touches `~/.claude`; covers clean pass, re-defined marker, forbidden-pattern hit, broken
-pointer, and ground-truth mismatch).
+Bite tests: `scripts/tests/test_ssot_lint.py` (pytest, self-contained, builds fixtures under
+`tmp_path`, never touches `~/.claude`; covers clean pass, re-defined marker, forbidden-pattern hit,
+broken pointer, ground-truth mismatch, and the `POINTER_IGNORES` exemption). `ground_truth`
+commands run under Git Bash `sh` (located through `CLAUDE_CODE_GIT_BASH_PATH`), so write them
+with `$HOME/...` paths.

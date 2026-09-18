@@ -13,6 +13,7 @@ This skill is loaded by the `w-debugger` agent. See `~/.claude/agents/w-debugger
 
 - `references/root-cause-tracing.md` — Trace bugs backward through call stack to find original trigger
 - `scripts/find-polluter.sh` — Bisection script to find which test creates unwanted state
+  - It is a bash script: run it through the Bash tool (Git Bash), never the PowerShell tool. Set `PYTHON` to pick the interpreter (default `python`), e.g. `PYTHON=~/.claude/.venv/Scripts/python.exe`.
 
 ## Quick Reference
 

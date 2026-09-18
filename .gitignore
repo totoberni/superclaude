@@ -144,16 +144,10 @@ settings.json.bak*
 settings.local.json.bak*
 
 # === Secrets env files — PUBLIC repo, never commit (.env.example stubs ARE committable) ===
-# Generalizes the original scripts/telegram-surface/.env rule (superclaude-v4 F3);
-# also covers services/firecrawl/.env (DIR-002 T2) and any future service .env.
+# Covers any service or script .env file, present or future.
 **/.env
 config/*.env
 
-# === Cockpit live scripts — peer-host-specific; .example counterparts are tracked ===
-scripts/cockpit/cockpit.bash
-scripts/cockpit/cockpit.fish
-bin/tsudo
-bin/tsh
 .last-cleanup
 
 # daemon auth runtime state (repo root, 2026-07-11)
@@ -161,7 +155,7 @@ daemon-auth-cooldown
 daemon-auth-status.json
 
 # /git policy flag (2026-07-16): live local state written by the /git skill and
-# read by hooks/guards/26-git-policy.sh. Machine-local like settings.json, so the
+# read by the git-policy guard (hooks/sc_hooks/handlers/git_policy.py). Machine-local like settings.json, so the
 # live file is never published; the guard treats an absent file as enabled.
 config/git-policy
 

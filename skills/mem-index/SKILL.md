@@ -4,14 +4,14 @@ description: "Use when browsing the memory DB by tier or type, with stats."
 model: haiku
 category: memory
 user-invocable: true
-argument-hint: "[--tier instance|shared|class|global] [--type feedback|project|reference|user] [--stats]"
+argument-hint: "[--tier instance|class|shared-projects|shared-global|archive] [--type feedback|project|reference|user] [--stats]"
 allowed-tools: Read, Write, Bash, Grep, Glob
 ---
 
 # Memory Index
 
-Browse the superclaude memory DB (v3). Memory is DB-resident: all tiers (instance, shared,
-class, global) are indexed in `~/.claude/agent-memory/.memory.db`. The legacy per-directory `MEMORY.md`
+Browse the superclaude memory DB (v3). Memory is DB-resident: all tiers (instance, class,
+shared-projects, shared-global, archive) are indexed in `~/.claude/agent-memory/.memory.db`. The legacy per-directory `MEMORY.md`
 index files are deprecated as the authoritative source — the DB is the single index.
 
 **Arguments**: $ARGUMENTS
@@ -24,7 +24,16 @@ index files are deprecated as the authoritative source — the DB is the single 
 mem stats
 ```
 
-Prints total rows, per-tier counts, per-type counts, and last-updated timestamp.
+Prints the three row totals, then per-tier counts, per-type counts, and the last-updated timestamp:
+
+```
+memories : N
+fts rows : N
+vec rows : N
+tiers    : instance=A, shared-global=B, shared-projects=C
+types    : feedback=W, project=X, reference=Y, user=Z
+updated  : <ISO timestamp>
+```
 
 ### Step 2: List entries
 
@@ -34,17 +43,19 @@ List all entries (optionally filtered):
 # All entries
 mem list
 
-# Filter by tier: instance | shared | class | global
-mem list --tier shared
+# Filter by tier: instance | class | shared-projects | shared-global | archive
+# (`shared` and `global` are accepted as input aliases for the two shared tiers)
+mem list --tier shared-projects
 
 # Filter by type: feedback | project | reference | user
 mem list --type project
 
 # Both filters combined
-mem list --tier shared --type feedback
+mem list --tier shared-projects --type feedback
 ```
 
-Each row shows: `id | name | tier | type | description (truncated)`.
+Each row shows: `name  tier=<tier>  type=<type>  path`. There is no id and no description column;
+use `mem get --name <name>` for the body.
 
 ### Step 3: Inspect a specific entry
 
@@ -65,28 +76,31 @@ mem get --name <name> --html
 ## Memory Index
 
 ### DB Stats
-- Total entries: N
-- Tiers: instance=A, shared=B, class=C, global=D
+- Total entries: N (fts rows: N, vec rows: N)
+- Tiers: instance=A, class=B, shared-projects=C, shared-global=D
 - Types: feedback=W, project=X, reference=Y, user=Z
 - Last updated: <timestamp>
 
 ### Entries (scope: <tier> / <type>)
-| id | name | tier | type | description |
-|----|------|------|------|-------------|
-| 1  | feedback_testing_real_db | shared | feedback | Integration tests must hit real DB… |
-| …  | …    | …    | …    | …           |
+| name | tier | type | path |
+|------|------|------|------|
+| feedback_testing_real_db | shared-projects | feedback | shared-projects/_/feedback_testing_real_db.md |
+| ...  | ...  | ...  | ...  |
 ```
 
 ## Tiered Model (preserved in DB columns)
 
 The tiered memory architecture is unchanged; tiers are now DB columns, not directory paths:
 
-| Tier | Old path | DB `tier` value |
-|------|----------|-----------------|
-| Instance | `agent-memory/instance/<name>/` | `instance` |
-| Class | `agent-memory/class/<class>/` | `class` |
-| Shared/project | `agent-memory/shared/projects/` | `shared` |
-| Global | `agent-memory/shared/global/` | `global` |
+| Tier | Old path | DB `tier` value | Accepted input alias |
+|------|----------|-----------------|----------------------|
+| Instance | `agent-memory/instance/<name>/` | `instance` | none |
+| Class | `agent-memory/class/<class>/` | `class` | none |
+| Shared/project | `agent-memory/shared/projects/` | `shared-projects` | `shared` |
+| Global | `agent-memory/shared/global/` | `shared-global` | `global` |
+| Archive | none | `archive` | none |
+
+The aliases are normalised on input only: the stored value, and what `mem list` and `mem stats` print, is always the canonical long name.
 
 ## When to Run
 

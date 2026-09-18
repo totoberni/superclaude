@@ -81,4 +81,4 @@ Bidirectional isolation rule — meta-tier agent memory must stay invisible from
 
 ## Domain-Specific Gotchas
 
-Moved to `21-domain-gotchas.md` (auto-loaded next). HDL/Verilog/Synopsys, Python namespace, Compose/Docker, large image handling.
+Moved to `21-domain-gotchas.md` (auto-loaded next). HDL/Verilog/Synopsys, Python namespace, test working-tree hygiene, large image handling.

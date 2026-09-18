@@ -15,5 +15,5 @@ python:   # pip; pinned; --export → requirements-format / --pip-install → ve
   - {name: markdown, version: 3.10.3, via: superclaude-win11, reason: Markdown to HTML rendering for plan/render_plan.py}
   - {name: pytest, version: 9.1.1, via: superclaude-win11, reason: test runner for scripts/tests}
 
-npm:   # node; currency via registry.npmjs.org (external — not sandbox-allowlisted)
+npm:   # node; currency via registry.npmjs.org (lookup not implemented: reported as needs-network)
   - {name: ccusage, scope: ryoppippi, install: npx-latest, version: latest, via: telemetry stopgap, reason: cost cross-check reference}

@@ -94,8 +94,9 @@ its precomputed embedding are all preserved — no dup, no re-embed, no delete).
 > (stripping the old leading tier segment), so there is NO `--path` to remember and NO way to
 > accidentally fork a duplicate. This removes the old footgun entirely: the previous mechanism
 > was `upsert --path <EXISTING-PATH> --tier <new>`, and OMITTING `--path` silently created a
-> SECOND row instead of moving the existing one. `retier` has no such trap. Still pass the
-> LITERAL stored tier string — `--tier shared-global` (not `--tier global`). `retier` guards
+> SECOND row instead of moving the existing one. `retier` has no such trap. Prefer the
+> canonical stored tier name (`--tier shared-global`); the short forms `global` and `shared` are
+> accepted input aliases and are normalised to the long names. `retier` guards
 > against a no-op (errors if the row is already in TARGET) and REJECTS `--tier archive` (use the
 > `archive` subcommand for that — archive needs an origin-encoded reversible path; see Step 3).
 > Fetch the slug/description first via `mem get --name <slug>` (or `list`) if unsure.

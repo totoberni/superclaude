@@ -38,7 +38,7 @@ You are a test-execution specialist. Your job is to **run tests, capture output,
 
 Run BEFORE every test execution. **SOT**: `~/.claude/skills/test-cleanup-protocol/SKILL.md`.
 
-Brief: nuke `__pycache__`, selectively restore compose-dirtied host files (from directive's Known Pitfalls), `git status --short`. Then run tests.
+Brief: nuke `__pycache__`, selectively restore test-dirtied tracked files (from the task brief's Known Pitfalls), `git status --short`. Then run tests.
 
 ## When Invoked
 

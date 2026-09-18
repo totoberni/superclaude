@@ -56,7 +56,7 @@ If a matching entry exists, reuse its `--name` slug. Otherwise derive a new keba
 
 For every upsert below: first write the body to `~/.claude/tmp/<slug>.md` with the Write tool, then pass it via `--text-file`.
 
-**Project wins** (meta only — tier=shared, scoped to project; technical wins → type=project, process wins → type=feedback):
+**Project wins** (meta only — tier=shared-projects, scoped to project; technical wins → type=project, process wins → type=feedback):
 
 Body (`~/.claude/tmp/<slug>.md`):
 ```markdown
@@ -64,10 +64,10 @@ Body (`~/.claude/tmp/<slug>.md`):
 ```
 
 ```
-mem upsert --tier shared --type project --name <slug-kebab-case> --description "<one-line summary>" --agent <project-name> --text-file ~/.claude/tmp/<slug>.md
+mem upsert --tier shared-projects --type project --name <slug-kebab-case> --description "<one-line summary>" --agent <project-name> --text-file ~/.claude/tmp/<slug>.md
 ```
 
-**Cross-project wins** (tier=global, type=project or reference):
+**Cross-project wins** (tier=shared-global, type=project or reference):
 
 Body (`~/.claude/tmp/<slug>.md`):
 ```markdown
@@ -75,7 +75,7 @@ Body (`~/.claude/tmp/<slug>.md`):
 ```
 
 ```
-mem upsert --tier global --type project --name <slug-kebab-case> --description "<one-line summary>" --text-file ~/.claude/tmp/<slug>.md
+mem upsert --tier shared-global --type project --name <slug-kebab-case> --description "<one-line summary>" --text-file ~/.claude/tmp/<slug>.md
 ```
 
 **Class dual-write** (tier=class, type=feedback or project; --agent=<class-name>):
@@ -94,7 +94,7 @@ Each `upsert` prints `upserted id=N` on success.
 ### 5. Check Promotion
 
 If `Reusable? = Yes` and seen in 2+ projects:
-1. Upsert to global tier: `mem upsert --tier global --type project --name <cw-slug> ...` (see Step 4 Cross-project block)
+1. Upsert to global tier: `mem upsert --tier shared-global --type project --name <cw-slug> ...` (see Step 4 Cross-project block)
 2. If tool pattern → promote to `rules/20-tool-conventions.md` via Edit tool
 3. Mark source entries as `Promoted`
 
@@ -111,7 +111,7 @@ If `Reusable? = Yes` and seen in 2+ projects:
 
 ## Storage
 - All writes go through `mem upsert`.
-- Tier mapping: project-scoped win → `--tier shared --agent <project>`; cross-project → `--tier global`; class-level → `--tier class --agent <class>`; instance → `--tier instance`.
+- Tier mapping: project-scoped win → `--tier shared-projects --agent <project>`; cross-project → `--tier shared-global`; class-level → `--tier class --agent <class>`; instance → `--tier instance`.
 - Type mapping: technical wins → `--type project`; process/convention wins → `--type feedback`.
 - Write scopes: rule 12. Class writes are layer 2 only. Promotion to global via `/lt-mem`.
 - Rules promotion (`rules/20-tool-conventions.md`) still uses Edit tool directly — that file is not in the DB.

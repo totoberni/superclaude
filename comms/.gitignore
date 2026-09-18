@@ -1,9 +1,7 @@
-.broker.db
-.broker.db-journal
-.broker.db-wal
-.broker.db-shm
-.comms.db
-.comms.db-journal
-.comms.db-wal
-.comms.db-shm
-.viewer/
+# Runtime state only: the spawn logs (_spawns.log, _spawns-rich.log, _outcomes.log)
+# are written here by the spawn-log hooks and are never published.
+_*.log
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

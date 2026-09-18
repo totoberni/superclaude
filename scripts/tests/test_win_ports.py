@@ -422,6 +422,34 @@ def test_deps_pip_install_targets_venv_python(monkeypatch, capsys):
     assert capsys.readouterr().out.startswith("%s -m pip install " % fake_py)
 
 
+def test_deps_record_honours_manifest(tmp_path):
+    # regressione: --record scriveva sempre ~/.claude/dependencies.yml ignorando --manifest
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    manifest = tmp_path / "custom-deps.yml"
+    manifest.write_text('schema: 1\nupdated: "2000-01-01"\n\npython: []\n\nnpm: []\n', encoding="utf-8")
+
+    def record(version):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "better_super_deps.py"), "--manifest", str(manifest),
+             "--record", "--type", "python", "--name", "demo-pkg", "--version", version,
+             "--via", "test", "--reason", "regression"],
+            env=_fake_home_env(home), capture_output=True, text=True, encoding="utf-8",
+        )
+
+    res = record("1.0")
+    assert res.returncode == 0, res.stderr
+    assert "Recorded python/demo-pkg" in res.stdout
+    res = record("1.1")                       # idempotente per (type, name): aggiorna, non duplica
+    assert res.returncode == 0 and "Updated python/demo-pkg" in res.stdout
+
+    import better_super_deps as bsd
+    entries = bsd.load_manifest(manifest)["python"]
+    assert [(e["name"], str(e["version"])) for e in entries] == [("demo-pkg", "1.1")]
+    # il manifest predefinito (sotto la home finta) non deve essere stato creato
+    assert not (home / ".claude" / "dependencies.yml").exists()
+
+
 def test_deps_venv_python_path_is_platform_correct():
     import better_super_deps as bsd
     tail = bsd.VENV_PYTHON.parts[-2:]

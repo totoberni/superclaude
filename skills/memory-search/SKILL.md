@@ -11,7 +11,7 @@ allowed-tools: Read, Grep, Glob, Bash
 # Memory Search
 
 Search across all superclaude memory files for a keyword or topic. Memory is DB-resident
-(v3): all tiers (instance, shared, class, global) are indexed in `~/.claude/agent-memory/.memory.db`.
+(v3): all tiers (instance, class, shared-projects, shared-global) are indexed in `~/.claude/agent-memory/.memory.db`.
 The canonical search tool is `mem` (the `memory_db.py` CLI shim).
 
 **Query**: $ARGUMENTS
@@ -41,7 +41,7 @@ Group results by tier:
 ```
 ## Results for "<query>"
 
-### shared / project
+### shared-projects / project
 - [workspace] "rubber-stamp diagnostic" — Occ=3, …
 - [vps] "db migration gotcha" — …
 
