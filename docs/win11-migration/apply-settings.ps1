@@ -16,7 +16,8 @@ param(
     [switch]$Revert,
     [switch]$Force,
     [switch]$NoPermissions,   # non modificare la sezione permissions
-    [switch]$NoStatusLine     # non impostare la statusline
+    [switch]$NoStatusLine,    # non impostare la statusline
+    [switch]$WithDenyList     # aggiunge anche l'elenco 'deny' (di default NON lo aggiunge)
 )
 $ErrorActionPreference = 'Stop'
 
@@ -154,7 +155,11 @@ if (-not $NoPermissions) {
         'PowerShell(Format-Volume*)', 'PowerShell(Clear-Disk*)'
     )
     if (-not ($json.PSObject.Properties.Name -contains 'permissions')) { Set-Prop $json 'permissions' ([pscustomobject]@{}) }
-    foreach ($pair in @(@('allow', $allow), @('deny', $deny))) {
+    # L'elenco 'deny' imitava la sandbox di WSL. Il proprietario lo ha tolto
+    # (relax-permissions.ps1): rieseguire questo script non deve rimetterlo.
+    $pairs = @(, @('allow', $allow))
+    if ($WithDenyList) { $pairs += , @('deny', $deny) }
+    foreach ($pair in $pairs) {
         $name, $wanted = $pair[0], $pair[1]
         $current = @()
         if ($json.permissions.PSObject.Properties.Name -contains $name) { $current = @($json.permissions.$name) }
