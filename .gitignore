@@ -161,3 +161,14 @@ config/git-policy
 
 # Windows instance: Claude Code managed dirs
 skills/synced/
+
+# Windows instance: runtime state introduced by the Python hooks and ports
+state/
+logs/
+tmp/
+.cost-refresh.stamp
+agents/_ephemeral/
+settings.json.bak-*
+settings.json.pre-probe.bak
+__pycache__/
+.pytest_cache/
