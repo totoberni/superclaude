@@ -164,3 +164,6 @@ daemon-auth-status.json
 # read by hooks/guards/26-git-policy.sh. Machine-local like settings.json, so the
 # live file is never published; the guard treats an absent file as enabled.
 config/git-policy
+
+# Windows instance: Claude Code managed dirs
+skills/synced/
