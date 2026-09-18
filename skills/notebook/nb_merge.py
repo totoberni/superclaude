@@ -36,7 +36,7 @@ def _resolve_jupytext(repo_root: Path) -> str:
     """
     jt_path_file = repo_root / ".notebook" / "jupytext_path"
     if jt_path_file.exists():
-        candidate = jt_path_file.read_text().strip()
+        candidate = jt_path_file.read_text(encoding="utf-8").strip()
         if candidate and Path(candidate).exists():
             return candidate
     found = shutil.which("jupytext")

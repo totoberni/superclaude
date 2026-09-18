@@ -2,7 +2,8 @@
 """jupytext-regen merge driver.
 
 Registered by `/notebook init` in .git/config:
-    git config merge.jupytext-regen.driver "python3 <skill>/templates/merge_regen.py %A %O %B %P"
+    git config merge.jupytext-regen.driver '"<venv python>" "<skill>/templates/merge_regen.py" %A %O %B %P'
+(absolute forward-slash paths: git runs the driver through its bundled `sh`, also on Windows)
 
 When git invokes this for a `.ipynb` conflict:
   1. The paired `.py` has been text-merged by git already (independent path).
@@ -13,9 +14,11 @@ Per W1's empirical recommendation. Avoids nbdime auto-merge silent-cell-deletion
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -41,7 +44,7 @@ def main() -> int:
     jt_path_file = Path.cwd() / ".notebook" / "jupytext_path"
     jupytext: str | None = None
     if jt_path_file.exists():
-        candidate = jt_path_file.read_text().strip()
+        candidate = jt_path_file.read_text(encoding="utf-8").strip()
         if candidate and Path(candidate).exists():
             jupytext = candidate
     if jupytext is None:
@@ -54,10 +57,22 @@ def main() -> int:
               file=sys.stderr)
         return 1
     # Regenerate the .ipynb from the (already text-merged) .py.
-    subprocess.run(
-        [jupytext, "--to", "ipynb", str(py), "-o", str(current)],
-        check=True, capture_output=True, text=True,
-    )
+    # jupytext >= 1.19 rifiuta un `-o` senza estensione `.ipynb` quando il .py e'
+    # accoppiato (%A si chiama `.merge_file_XXXXXX`): si genera in una cartella
+    # temporanea e poi si copia il contenuto su %A.
+    with tempfile.TemporaryDirectory(prefix="nb-merge-regen-") as td:
+        out = Path(td) / pathname.name
+        try:
+            subprocess.run(
+                [jupytext, "--to", "ipynb", str(py), "-o", str(out)],
+                check=True, capture_output=True, text=True,
+                env={**os.environ, "PYTHONUTF8": "1"},
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"[notebook merge-regen] jupytext failed: {e.stderr}", file=sys.stderr)
+            return 1
+        # jupytext su Windows scrive CRLF: l'.ipynb rigenerato deve restare LF.
+        current.write_bytes(out.read_bytes().replace(b"\r\n", b"\n"))
     print(f"[notebook merge-regen] regenerated {pathname} from {py}", file=sys.stderr)
     return 0
 

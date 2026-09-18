@@ -9,8 +9,101 @@ V1.1 — adds: --kernel-name (execute, warm), --no-probe-injection (init),
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 from pathlib import Path
+
+# I wrapper (notebook, notebook.cmd, notebook.ps1) non impostano PYTHONPATH:
+# la cartella dello skill entra in sys.path qui, una volta sola.
+_SKILL_DIR = str(Path(__file__).resolve().parent)
+if _SKILL_DIR not in sys.path:
+    sys.path.insert(0, _SKILL_DIR)
+
+_REEXEC_FLAG = "NB_SKILL_REEXEC"
+
+
+def _force_utf8() -> None:
+    """Le console Windows con code page legacy non sanno stampare `→` o `…`."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
+def _expand_home(args: list[str]) -> list[str]:
+    """PowerShell non espande `~` negli argomenti degli eseguibili nativi."""
+    home = str(Path.home())
+    out: list[str] = []
+    for arg in args:
+        head, sep, tail = arg.partition("=")
+        if arg == "~" or arg.startswith(("~/", "~\\")):
+            arg = home + arg[1:]
+        elif sep and head.startswith("--") and tail.startswith(("~/", "~\\")):
+            arg = f"{head}={home}{tail[1:]}"
+        out.append(arg)
+    return out
+
+
+def resolve_interpreter(argv: list[str], *, cwd: Path | None = None,
+                        environ: dict | None = None) -> Path | None:
+    """Interprete con cui deve girare la CLI, in ordine di priorita':
+
+    1. il `.venv` del progetto che contiene il notebook (o lo snapshot) passato
+       come argomento: gli agenti lavorano da `~/code/` senza entrare nel progetto;
+    2. `$VIRTUAL_ENV`, se attivo;
+    3. un `.venv` risalendo dalla directory corrente.
+
+    None significa "resta sull'interprete attuale".
+    """
+    from nb_io import find_project_python, venv_python
+    environ = os.environ if environ is None else environ
+    for arg in argv:
+        if arg.startswith("-") or not arg.lower().endswith(".ipynb"):
+            continue
+        py = find_project_python(Path(arg))
+        if py is not None:
+            return py
+    venv = environ.get("VIRTUAL_ENV")
+    if venv:
+        # venv_python si aspetta la radice del progetto, cioe' il padre di `.venv`
+        for cand in (Path(venv) / "Scripts" / "python.exe", Path(venv) / "bin" / "python"):
+            if cand.is_file():
+                return cand
+    return find_project_python(cwd or Path.cwd())
+
+
+def _bootstrap(argv: list[str]) -> int | None:
+    """Rilancia la CLI con l'interprete del venv di progetto e in modalita' UTF-8.
+
+    Restituisce l'exit code del processo figlio, oppure None se si puo'
+    proseguire nel processo corrente. La modalita' UTF-8 (PYTHONUTF8=1) evita
+    che la code page cp1252 corrompa il testo accentato nei file e nell'output
+    dei sottoprocessi (git, jupytext).
+    """
+    from nb_io import same_path
+    scripts_dir = str(Path(sys.executable).parent)
+    path_now = os.environ.get("PATH", "")
+    if not path_now.startswith(scripts_dir + os.pathsep):
+        # `jupytext` vive accanto all'interprete (Scripts/ o bin/): deve essere
+        # risolvibile anche quando il venv non e' stato attivato.
+        os.environ["PATH"] = scripts_dir + os.pathsep + path_now
+    if os.environ.get(_REEXEC_FLAG) == "1":
+        return None
+    target = resolve_interpreter(argv)
+    need_python = target is not None and not same_path(target, sys.executable)
+    need_utf8 = not sys.flags.utf8_mode
+    if not (need_python or need_utf8):
+        return None
+    exe = str(target) if need_python else sys.executable
+    env = dict(os.environ)
+    env[_REEXEC_FLAG] = "1"
+    env["PYTHONUTF8"] = "1"
+    env["PATH"] = str(Path(exe).parent) + os.pathsep + path_now
+    # subprocess e non os.execv: su Windows execv non aspetta il figlio e
+    # perde l'exit code.
+    return subprocess.call([exe, str(Path(__file__).resolve()), *argv], env=env)
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
@@ -18,6 +111,11 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8()
+    argv = _expand_home(list(sys.argv[1:] if argv is None else argv))
+    rc = _bootstrap(argv)
+    if rc is not None:
+        return rc
     p = argparse.ArgumentParser(prog="nb", description="/notebook skill CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -37,7 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     s_batch.add_argument("--plan", type=Path, required=True, help="YAML plan file")
     s_batch.add_argument("--lock-timeout", type=float, default=30.0)
     s_batch.add_argument("--dry-run", action="store_true")
-    s_batch.add_argument("--force-no-example-check", action="store_true")
+    s_batch.add_argument("--force-no-jl-check", "--force-no-example-check",
+                         dest="force_no_jl_check", action="store_true")
     s_batch.add_argument("--snapshot", action="store_true",
                         help="Save .notebook/snapshots/<stem>-<ts>.ipynb before mutation")
     s_batch.add_argument("--force", action="store_true",
@@ -96,7 +195,8 @@ def main(argv: list[str] | None = None) -> int:
     s_revert.add_argument("--target", type=Path, default=None,
                          help="Override the convention-based target resolution")
     s_revert.add_argument("--lock-timeout", type=float, default=30.0)
-    s_revert.add_argument("--force-no-example-check", action="store_true")
+    s_revert.add_argument("--force-no-jl-check", "--force-no-example-check",
+                         dest="force_no_jl_check", action="store_true")
 
     # regenerate
     s_regen = sub.add_parser("regenerate", help="Rebuild .ipynb from .py (loses IDs)")
@@ -182,6 +282,13 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("[notebook] interrupted", file=sys.stderr)
         return 130
+    except ModuleNotFoundError as e:
+        # Dipendenza dello skill assente nell'interprete risolto.
+        print(f"[notebook] missing dependency `{e.name}` in {sys.executable}. "
+              "Install the skill requirements into the PROJECT venv: "
+              f"uv pip install -r {Path(_SKILL_DIR) / 'templates' / 'requirements-skill.txt'}",
+              file=sys.stderr)
+        return 1
     except Exception as e:  # noqa: BLE001
         # V2-M4: translate SkillError (and its subclasses) to exit 1 with a
         # readable message. Other exceptions re-raise so tracebacks remain

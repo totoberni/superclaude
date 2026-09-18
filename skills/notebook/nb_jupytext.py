@@ -19,7 +19,7 @@ from pathlib import Path
 
 import nbformat
 
-from nb_io import atomic_write_ipynb, notebook_lock
+from nb_io import atomic_write_ipynb, normalize_lf, notebook_lock
 
 # V1-H13 + V2-L1: `# %%` literal in CODE cells silently splits on jupytext read.
 # We can't perfectly distinguish in-cell from cell-marker without parsing, but
@@ -100,6 +100,9 @@ def sync_from_ipynb(notebook: Path) -> None:
         )
     except subprocess.CalledProcessError as e:
         raise _surface_stderr(e, f"jupytext --sync {notebook}")
+    # jupytext su Windows scrive CRLF: si torna a LF (mtime conservato).
+    normalize_lf(py)
+    normalize_lf(notebook)
     post_ids = _ipynb_cell_ids(notebook)
     _warn_id_loss(pre_ids, post_ids, notebook)
 
@@ -124,6 +127,7 @@ def sync_from_py(notebook: Path) -> None:
         )
     except subprocess.CalledProcessError as e:
         raise _surface_stderr(e, f"jupytext --sync {py}")
+    normalize_lf(py)
     nb = nbformat.read(str(notebook), as_version=4)
     atomic_write_ipynb(notebook, nb)
     post_ids = _ipynb_cell_ids(notebook)

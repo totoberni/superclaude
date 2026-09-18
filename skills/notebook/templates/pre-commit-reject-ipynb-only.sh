@@ -22,20 +22,24 @@ for nb in $ipynb_changed; do
     # against HEAD's paired .py. If equal, .ipynb diff is outputs/metadata only.
     if [ -n "$jupytext_bin" ] && [ -x "$jupytext_bin" ] \
             && git cat-file -e "HEAD:$py" 2>/dev/null; then
-        tmp_staged=$(mktemp -t nbskill-staged.XXXXXX.py)
-        tmp_head=$(mktemp -t nbskill-head.XXXXXX.py)
-        trap 'rm -f "$tmp_staged" "$tmp_head"' EXIT
-        if git show ":$nb" 2>/dev/null \
-                | "$jupytext_bin" --to py:percent --from ipynb -o "$tmp_staged" - \
-                    >/dev/null 2>&1 \
-                && git show "HEAD:$py" > "$tmp_head" 2>/dev/null \
-                && diff -q "$tmp_staged" "$tmp_head" >/dev/null 2>&1; then
+        # Port Windows: l'ipynb in stage passa da un file temporaneo e non da
+        # stdin (jupytext >= 1.19 rifiuta `-` per i notebook accoppiati, e senza
+        # PYTHONUTF8 lo stdin verrebbe decodificato in cp1252). jupytext su
+        # Windows scrive CRLF, da cui --strip-trailing-cr nel confronto.
+        tmp_dir=$(mktemp -d -t nbskill.XXXXXX)
+        trap 'rm -rf "$tmp_dir"' EXIT
+        if git show ":$nb" > "$tmp_dir/staged.ipynb" 2>/dev/null \
+                && PYTHONUTF8=1 "$jupytext_bin" --to py:percent \
+                    -o "$tmp_dir/staged.py" "$tmp_dir/staged.ipynb" >/dev/null 2>&1 \
+                && git show "HEAD:$py" > "$tmp_dir/head.py" 2>/dev/null \
+                && diff -q --strip-trailing-cr "$tmp_dir/staged.py" "$tmp_dir/head.py" \
+                    >/dev/null 2>&1; then
             echo "[notebook] WARN: $nb has outputs-only changes vs HEAD; allowing." >&2
-            rm -f "$tmp_staged" "$tmp_head"
+            rm -rf "$tmp_dir"
             trap - EXIT
             continue
         fi
-        rm -f "$tmp_staged" "$tmp_head"
+        rm -rf "$tmp_dir"
         trap - EXIT
     fi
     echo "[notebook] REJECT: $nb staged without paired $py" >&2

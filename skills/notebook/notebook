@@ -2,29 +2,31 @@
 # /notebook skill — CLI entry point.
 # All subcommands route through nb_main.py via the skill's bundled Python.
 # Project venv is required: skill imports nbformat / jupytext / nbclient / nbdime / pylatexenc / psutil.
+#
+# Wrapper sottile (Git Bash e POSIX): sceglie solo un interprete di avvio.
+# L'interprete giusto (venv del progetto) lo risolve nb_main.py, che si rilancia da solo.
 
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PYTHONPATH="${SKILL_DIR}:${PYTHONPATH:-}"
 
-# Resolve interpreter: project-local .venv > shell python3
-PYTHON_BIN=""
-if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
-  PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
-elif [[ -n "${1:-}" && -d "${1}/.venv/bin" ]]; then
-  PYTHON_BIN="${1}/.venv/bin/python"
-else
-  # Walk up from CWD looking for a .venv
-  cur="$PWD"
-  while [[ "$cur" != "/" ]]; do
-    if [[ -x "$cur/.venv/bin/python" ]]; then
-      PYTHON_BIN="$cur/.venv/bin/python"
-      break
-    fi
-    cur="$(dirname "$cur")"
-  done
+BOOT=""
+for cand in \
+    "${VIRTUAL_ENV:-}/Scripts/python.exe" \
+    "${VIRTUAL_ENV:-}/bin/python" \
+    "$HOME/.claude/.venv/Scripts/python.exe" \
+    "$HOME/.claude/.venv/bin/python"; do
+  if [[ -f "$cand" ]]; then
+    BOOT="$cand"
+    break
+  fi
+done
+if [[ -z "$BOOT" ]]; then
+  BOOT="$(command -v python3 || command -v python || true)"
 fi
-[[ -z "$PYTHON_BIN" ]] && PYTHON_BIN="python3"
+if [[ -z "$BOOT" ]]; then
+  echo "[notebook] no Python interpreter found (expected ~/.claude/.venv)" >&2
+  exit 127
+fi
 
-exec "$PYTHON_BIN" "${SKILL_DIR}/nb_main.py" "$@"
+exec "$BOOT" "${SKILL_DIR}/nb_main.py" "$@"

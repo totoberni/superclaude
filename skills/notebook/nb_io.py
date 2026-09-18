@@ -17,7 +17,6 @@ V1.1 — addresses example-project-review-of-skill-v1.md issues:
 from __future__ import annotations
 
 import errno
-import fcntl
 import hashlib
 import json
 import os
@@ -33,6 +32,192 @@ try:
     import psutil
 except ImportError:
     psutil = None  # JL detector becomes mtime-only fallback
+
+IS_WINDOWS = os.name == "nt"
+
+if IS_WINDOWS:
+    import msvcrt
+else:
+    import fcntl
+
+
+# ---------------------------------------------------------------------------
+# Port Windows: helper di piattaforma (interprete del venv, percorsi, lock).
+# ---------------------------------------------------------------------------
+
+
+def venv_python(root: Path) -> Path | None:
+    """Interprete del venv di progetto: `.venv/Scripts/python.exe` su Windows,
+    `.venv/bin/python` su POSIX. Restituisce None se il venv non esiste."""
+    root = Path(root)
+    if IS_WINDOWS:
+        cand = root / ".venv" / "Scripts" / "python.exe"
+    else:
+        cand = root / ".venv" / "bin" / "python"
+    return cand if cand.is_file() else None
+
+
+def find_project_python(start: Path) -> Path | None:
+    """Risale da `start` verso la radice cercando un `.venv` di progetto."""
+    cur = Path(os.path.abspath(str(start)))
+    if not cur.is_dir():
+        cur = cur.parent
+    for d in (cur, *cur.parents):
+        py = venv_python(d)
+        if py is not None:
+            return py
+    return None
+
+
+def fwd(path: Path | str) -> str:
+    """Percorso con slash in avanti: l'unica forma sicura dentro i comandi
+    eseguiti dallo `sh` di Git (merge driver, hook) e in `.git/config`."""
+    return str(path).replace("\\", "/")
+
+
+def same_path(a: Path | str, b: Path | str) -> bool:
+    """Confronto di percorsi: su Windows ignora maiuscole e tipo di separatore."""
+    return (os.path.normcase(os.path.normpath(str(a)))
+            == os.path.normcase(os.path.normpath(str(b))))
+
+
+def _is_under(path: str, parent: str) -> bool:
+    # Si normalizza a mano (non con os.path) cosi' il confronto resta
+    # insensibile a maiuscole e separatori anche nei test eseguiti su POSIX.
+    p = path.replace("\\", "/").rstrip("/").lower()
+    par = parent.replace("\\", "/").rstrip("/").lower()
+    return bool(par) and (p == par or p.startswith(par + "/"))
+
+
+def onedrive_root_for(path: Path | str) -> str | None:
+    """Radice OneDrive che contiene `path`, oppure None. Le radici arrivano
+    dalle variabili d'ambiente impostate dal client OneDrive."""
+    candidates = [str(path)]
+    try:
+        candidates.append(str(Path(path).resolve()))
+    except OSError:
+        pass
+    for var in ("OneDrive", "OneDriveCommercial", "OneDriveConsumer"):
+        root = os.environ.get(var)
+        if root and any(_is_under(c, root) for c in candidates):
+            return root
+    return None
+
+
+def is_network_path(path: Path | str) -> bool:
+    """True per i percorsi UNC (anche nella forma `\\\\?\\UNC\\`) e per le
+    lettere di unita' mappate su una condivisione di rete."""
+    s = str(path).replace("/", "\\")
+    if s.upper().startswith("\\\\?\\UNC\\"):
+        return True
+    if s.startswith("\\\\"):
+        # `\\?\C:\...` e `\\.\...` sono prefissi locali, non di rete
+        return not s.startswith(("\\\\?\\", "\\\\.\\"))
+    if IS_WINDOWS and len(s) >= 2 and s[1] == ":":
+        try:
+            import ctypes
+            # 4 = DRIVE_REMOTE
+            return ctypes.windll.kernel32.GetDriveTypeW(s[:2] + "\\") == 4
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
+def path_hazards(path: Path | str) -> list[str]:
+    """Avvisi (mai rifiuti) per le posizioni problematiche su Windows."""
+    out: list[str] = []
+    od = onedrive_root_for(path)
+    if od:
+        out.append(
+            f"{path} is inside a OneDrive-synced folder ({od}). The sync client "
+            "can hold .ipynb/.py files open while uploading: expect sporadic "
+            "'file in use' errors on atomic replace, spurious mtime-drift "
+            "conflicts and conflict copies. Prefer a non-synced location "
+            "(e.g. ~/code/<project>) or pause OneDrive sync while working."
+        )
+    if is_network_path(path):
+        out.append(
+            f"{path} is on a network/UNC path. Byte-range locks and atomic "
+            "replace are unreliable over SMB and I/O is slow; prefer a local disk."
+        )
+    return out
+
+
+def _try_lock_fd(fd: int) -> bool:
+    """Lock esclusivo NON bloccante. Windows: `msvcrt.locking` su 1 byte
+    all'offset 0. POSIX: `fcntl.flock`. In entrambi i casi il sistema operativo
+    rilascia il lock alla chiusura dell'handle, quindi anche se il processo muore."""
+    if IS_WINDOWS:
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError as e:
+            # EACCES / EDEADLOCK: byte gia' bloccato da un altro handle
+            if e.errno in (errno.EACCES, errno.EAGAIN, getattr(errno, "EDEADLOCK", 36)):
+                return False
+            raise
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError as e:
+        if e.errno in (errno.EAGAIN, errno.EACCES):
+            return False
+        raise
+
+
+def _unlock_fd(fd: int) -> None:
+    if IS_WINDOWS:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass  # la chiusura dell'handle rilascia comunque il lock
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def replace_with_retry(src: str, dst: str, *, attempts: int = 20,
+                       delay: float = 0.1) -> None:
+    """`os.replace` con breve retry: su Windows fallisce con PermissionError se
+    un altro processo (antivirus, OneDrive, JupyterLab, indexer) tiene aperta
+    la destinazione."""
+    last: OSError | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as e:
+            last = e
+            if not IS_WINDOWS:
+                break
+            time.sleep(delay)
+    raise PermissionError(
+        f"could not replace {dst}: another process holds it open (editor, "
+        f"JupyterLab, antivirus or OneDrive sync?). Close it and retry. "
+        f"Original error: {last}"
+    ) from last
+
+
+def normalize_lf(path: Path) -> bool:
+    """Riporta a LF un file scritto da jupytext. Su Windows jupytext apre i file
+    in modalita' testo senza `newline`, quindi produce CRLF sia nel `.py` sia
+    nell'`.ipynb`: i diff di git e il pairing ne uscirebbero sporchi.
+    L'mtime viene conservato, perche' `jupytext --sync` sceglie la direzione in
+    base agli mtime. Restituisce True se il file e' stato riscritto."""
+    path = Path(path)
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    if b"\r\n" not in data:
+        return False
+    st = path.stat()
+    tmp = path.with_name(f".{path.name}.lf.tmp")
+    tmp.write_bytes(data.replace(b"\r\n", b"\n"))
+    replace_with_retry(str(tmp), str(path))
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    return True
 
 
 class NotebookConflict(RuntimeError):
@@ -129,45 +314,65 @@ def lock_path_for(notebook_path: Path) -> Path:
 
 @contextmanager
 def notebook_lock(notebook_path: Path, timeout: float = 30.0) -> Iterator[None]:
-    """Advisory `flock` on a sidecar `.ipynb.lock`.
+    """Exclusive non-blocking lock on a sidecar `.ipynb.lock`.
 
-    `flock` is auto-released by the kernel on SIGKILL — survives crashes.
-    On WSL2, prefer `flock` over `lockf` (see Bitcoin PR #18700).
+    `fcntl.flock` (POSIX) / `msvcrt.locking` (Windows) is auto-released by the
+    OS when the handle closes, so it survives crashes of the holder.
+
+    Formato del file: il byte 0 e' quello bloccato (su Windows il lock e'
+    obbligatorio e ne impedisce la lettura agli altri processi); il testo
+    `<pid> <epoch>` parte dall'offset 1.
     """
     lp = lock_path_for(notebook_path)
+    with file_lock(lp, timeout=timeout):
+        yield
+
+
+@contextmanager
+def file_lock(lp: Path, timeout: float = 30.0) -> Iterator[None]:
+    """Lock esclusivo su un file sentinella qualsiasi (vedi `notebook_lock`)."""
+    lp = Path(lp)
     lp.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
-    fd = os.open(str(lp), os.O_RDWR | os.O_CREAT, 0o644)
+    fd = os.open(str(lp), os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+    locked = False
     try:
         while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if _try_lock_fd(fd):
+                locked = True
                 os.ftruncate(fd, 0)
-                os.write(fd, f"{os.getpid()} {time.time():.0f}\n".encode())
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, f"\n{os.getpid()} {time.time():.0f}\n".encode())
                 break
-            except OSError as e:
-                if e.errno not in (errno.EAGAIN, errno.EACCES):
-                    raise
-                if time.monotonic() > deadline:
-                    holder = _read_lock_holder(lp)
-                    raise TimeoutError(
-                        f"lock held by {holder or '<unknown>'}: {lp} "
-                        f"(timeout {timeout}s; bump --lock-timeout to wait longer)"
-                    )
-                time.sleep(0.1)
+            if time.monotonic() > deadline:
+                holder = _read_lock_holder(lp)
+                raise TimeoutError(
+                    f"lock held by {holder or '<unknown>'}: {lp} "
+                    f"(timeout {timeout}s; bump --lock-timeout to wait longer)"
+                )
+            time.sleep(0.1)
         yield
     finally:
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            if locked:
+                _unlock_fd(fd)
         finally:
             os.close(fd)
 
 
 def _read_lock_holder(lp: Path) -> str | None:
+    # Si legge dall'offset 1: il byte 0 e' quello bloccato dal detentore.
     try:
-        return lp.read_text().strip()
+        fd = os.open(str(lp), os.O_RDONLY | getattr(os, "O_BINARY", 0))
     except OSError:
         return None
+    try:
+        os.lseek(fd, 1, os.SEEK_SET)
+        return os.read(fd, 256).decode("utf-8", "replace").strip() or None
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
 
 
 def assert_no_jl_writer(notebook_path: Path, baseline_mtime: float | None = None,
@@ -175,7 +380,7 @@ def assert_no_jl_writer(notebook_path: Path, baseline_mtime: float | None = None
     """Detect JupyterLab/server holding the notebook + mtime drift.
 
     V1-L9: ``mtime_eps`` raised from 1 ms to 100 ms — universal floor that
-    works on any FS (NTFS has ~10 ms granularity, WSL2 ext4 ~1 ns).
+    works on any FS (NTFS has ~10 ms granularity, ext4 ~1 ns).
 
     Hard-fails (raises) — orchs don't read prompts. Detector pair:
     - mtime drift: cheap, catches any external writer.
@@ -204,10 +409,10 @@ def assert_no_jl_writer(notebook_path: Path, baseline_mtime: float | None = None
             if "jupyter" not in name:
                 continue
             for of in proc.open_files():
-                if of.path == nb_str:
+                if same_path(of.path, nb_str):
                     raise NotebookConflict(
                         f"jupyter process pid={proc.info['pid']} ({name}) has "
-                        f"{nb_abs} open. Close it (or `kill {proc.info['pid']}`) and retry."
+                        f"{nb_abs} open. Close it (or stop pid {proc.info['pid']}) and retry."
                     )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -265,10 +470,11 @@ def assert_git_clean_or_force(notebook_path: Path, force: bool = False) -> None:
 
 
 def atomic_write_ipynb(path: Path, nb: dict, *, indent: int = 1) -> None:
-    """POSIX-atomic write of a notebook dict.
+    """Atomic write of a notebook dict.
 
-    Pattern: tempfile in same dir → flush → fsync → os.replace + dir-fsync.
-    Required on WSL2 ext4 (and works on /mnt/c NTFS via MoveFileEx).
+    Pattern: tempfile in same dir → flush → fsync → os.replace (+ dir-fsync on
+    POSIX). On Windows `os.replace` is MoveFileEx(REPLACE_EXISTING); it is
+    retried briefly when another process holds the target open.
     Always uses ``newline="\n"`` to suppress CRLF injection.
 
     DO NOT call ``nbformat.write(nb, path)`` directly — verified non-atomic
@@ -291,12 +497,14 @@ def atomic_write_ipynb(path: Path, nb: dict, *, indent: int = 1) -> None:
         tmp.flush()
         os.fsync(tmp.fileno())
         tmp.close()
-        os.replace(tmp.name, str(path))
-        dfd = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        replace_with_retry(tmp.name, str(path))
+        if not IS_WINDOWS:
+            # Su Windows una directory non si apre con os.open: niente dir-fsync.
+            dfd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
     except BaseException:
         tmp.close()
         Path(tmp.name).unlink(missing_ok=True)
@@ -327,5 +535,6 @@ def cmd_lock_status(args) -> int:
         if psutil.pid_exists(pid):
             print(f"[notebook] PID {pid} alive — lock is current.")
         else:
-            print(f"[notebook] PID {pid} DEAD — orphan lock; safe to delete: rm {lp}")
+            print(f"[notebook] PID {pid} DEAD: stale holder text (the OS already released "
+                  f"the lock); safe to delete: {lp}")
     return 0

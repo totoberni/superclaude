@@ -37,6 +37,9 @@ repos:
         args: [--sync]
         files: \.(py|ipynb)$
 
+  # Windows: questi due hook usano `bash`. Dentro `git commit` lo fornisce Git for
+  # Windows; per un `pre-commit run` manuale da PowerShell serve `bash` su PATH
+  # (Git\bin), altrimenti lanciarlo da Git Bash.
   - repo: local
     hooks:
       - id: notebook-validate

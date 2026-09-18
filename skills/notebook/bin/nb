@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Shim `nb` per Git Bash: da copiare in ~/.claude/bin (gia' su PATH) o da usare da qui.
+# Tutta la logica vive in nb_main.py; qui si sceglie solo l'interprete di avvio.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$HERE/.."
+[[ -f "$SKILL_DIR/nb_main.py" ]] || SKILL_DIR="$HOME/.claude/skills/notebook"
+exec "$SKILL_DIR/notebook" "$@"

@@ -5,7 +5,8 @@ Creates .notebook/ next to the notebook with skill state; appends to
 jupytext-regen merge driver in .git/config; installs the .git/hooks/pre-commit
 rejection hook; injects the runtime probe cell as cell 0 if absent.
 
-Refuses notebooks under /mnt/c/ (WSL hard rule) and bare repos.
+Refuses bare repos. Warns (does not refuse) for notebooks inside a
+OneDrive-synced folder or on a network/UNC path (Windows port).
 
 V1.1 — addresses example-project-review-of-skill-v1.md issues:
   - V1-B3: detects project `.venv` and registers `<project>-venv` kernelspec via
@@ -39,20 +40,32 @@ from pathlib import Path
 
 import nbformat
 
-from nb_io import atomic_write_ipynb, canonical_repo_root, notebook_lock
+from nb_io import (
+    atomic_write_ipynb,
+    canonical_repo_root,
+    fwd,
+    normalize_lf,
+    notebook_lock,
+    path_hazards,
+    venv_python,
+)
 
 SKILL_DIR = Path(__file__).resolve().parent
 TEMPLATES = SKILL_DIR / "templates"
-SKILL_VERSION = (SKILL_DIR / "version").read_text().strip()
+SKILL_VERSION = (SKILL_DIR / "version").read_text(encoding="utf-8").strip()
 
 
-def _refuse_mnt_c(path: Path) -> None:
-    p = str(path.resolve())
-    if p.startswith("/mnt/c/") or p.startswith("/mnt/d/"):
-        sys.exit(
-            f"[notebook] REFUSE: {path} is under /mnt — 9P, no inotify, "
-            "order-of-magnitude slower than ext4. Move project to /home."
-        )
+def _write_text_lf(file: Path, text: str) -> None:
+    """Scrive UTF-8 con fine riga LF: i file letti dallo `sh` di Git (hook,
+    `jupytext_path`) si rompono con CRLF, e cp1252 rovina il testo accentato."""
+    file.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _warn_path_hazards(path: Path) -> None:
+    """Port Windows: sostituisce il vecchio rifiuto di `/mnt/c` (regola WSL).
+    OneDrive e percorsi di rete ricevono un WARNING, mai un rifiuto."""
+    for msg in path_hazards(path):
+        print(f"[notebook] WARNING: {msg}", file=sys.stderr)
 
 
 def _refuse_bare_repo(repo_root: Path) -> None:
@@ -72,7 +85,7 @@ def _refuse_bare_repo(repo_root: Path) -> None:
 def _ensure_notebook_dir(nb_path: Path, force: bool, migrate: bool) -> Path:
     nbd = nb_path.parent / ".notebook"
     if nbd.exists() and not (force or migrate):
-        existing = (nbd / "version").read_text().strip() if (nbd / "version").exists() else "?"
+        existing = (nbd / "version").read_text(encoding="utf-8").strip() if (nbd / "version").exists() else "?"
         if existing != SKILL_VERSION:
             sys.exit(
                 f"[notebook] {nbd} already initialised at v{existing}; "
@@ -83,7 +96,7 @@ def _ensure_notebook_dir(nb_path: Path, force: bool, migrate: bool) -> Path:
         print(f"[notebook] already initialised at v{existing}; reasserting installs.",
               file=sys.stderr)
     nbd.mkdir(parents=True, exist_ok=True)
-    (nbd / "version").write_text(f"{SKILL_VERSION}\n")
+    _write_text_lf(nbd / "version", f"{SKILL_VERSION}\n")
     return nbd
 
 
@@ -97,12 +110,20 @@ def _copy_template(name: str, dest: Path, *, overwrite: bool = False) -> None:
 
 
 def _append_to_file_if_missing(file: Path, marker: str, content: str) -> None:
-    cur = file.read_text() if file.exists() else ""
+    # newline="" in lettura e scrittura: il file esistente non viene
+    # riconvertito (un .gitignore in CRLF resta CRLF, tutto il resto nasce LF).
+    cur = ""
+    if file.exists():
+        with file.open("r", encoding="utf-8", newline="") as f:
+            cur = f.read()
     if marker in cur:
         return
+    eol = "\r\n" if "\r\n" in cur else "\n"
     if cur and not cur.endswith("\n"):
-        cur += "\n"
-    file.write_text(cur + content)
+        cur += eol
+    content = content.replace("\r\n", "\n").replace("\n", eol)
+    with file.open("w", encoding="utf-8", newline="") as f:
+        f.write(cur + content)
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +132,8 @@ def _append_to_file_if_missing(file: Path, marker: str, content: str) -> None:
 
 
 def _resolve_project_venv(repo_root: Path) -> Path | None:
-    cand = repo_root / ".venv" / "bin" / "python"
-    if cand.exists():
-        return cand
-    return None
+    # `.venv/Scripts/python.exe` su Windows, `.venv/bin/python` su POSIX.
+    return venv_python(repo_root)
 
 
 def _install_kernelspec(repo_root: Path, project: str, nbd: Path) -> str | None:
@@ -127,12 +146,15 @@ def _install_kernelspec(repo_root: Path, project: str, nbd: Path) -> str | None:
     kn_file = nbd / "kernel_name"
     if py is None:
         if kn_file.exists():
-            return kn_file.read_text().strip() or None
-        print(f"[notebook] no `.venv/bin/python` at {repo_root}; "
+            return kn_file.read_text(encoding="utf-8").strip() or None
+        print(f"[notebook] no project `.venv` interpreter at {repo_root}; "
               "kernel will fall back to system `python3` (may lack project deps).",
               file=sys.stderr)
         return None
-    kernel_name = f"{project}-venv"
+    # I nomi dei kernelspec ammettono solo ASCII [A-Za-z0-9._-]: le cartelle
+    # con spazi o lettere accentate sono comuni su Windows.
+    kernel_name = re.sub(r"[^A-Za-z0-9._-]", "-", project).strip("-") or "project"
+    kernel_name = f"{kernel_name}-venv"
     display = f"Python ({kernel_name})"
     try:
         subprocess.run(
@@ -148,7 +170,7 @@ def _install_kernelspec(repo_root: Path, project: str, nbd: Path) -> str | None:
     except FileNotFoundError:
         print(f"[notebook] {py} not found; skipping kernelspec install.", file=sys.stderr)
         return None
-    kn_file.write_text(f"{kernel_name}\n")
+    _write_text_lf(kn_file, f"{kernel_name}\n")
     return kernel_name
 
 
@@ -219,7 +241,18 @@ def _detect_installed(py: Path) -> set[str]:
             text=True, stderr=subprocess.DEVNULL, timeout=15.0,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        return set()
+        # I venv creati con `uv venv` non contengono pip: si interroga
+        # importlib.metadata dentro l'interprete del progetto.
+        try:
+            out = subprocess.check_output(
+                [str(py), "-c",
+                 "import importlib.metadata as m, json; "
+                 "print(json.dumps([{'name': d.metadata['Name'] or ''} "
+                 "for d in m.distributions()]))"],
+                text=True, stderr=subprocess.DEVNULL, timeout=30.0,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+            return set()
     try:
         installed = json.loads(out)
     except json.JSONDecodeError:
@@ -241,14 +274,14 @@ def _generate_warm_py(repo_root: Path, nbd: Path) -> None:
     # the file is missing OR contains only the original V1 commented template
     # (signature: `# Uncomment the blocks your project needs`).
     if dest.exists():
-        cur = dest.read_text()
+        cur = dest.read_text(encoding="utf-8")
         if "# Uncomment the blocks your project needs" not in cur \
                 and "auto-generated" not in cur:
             print(f"[notebook] preserving hand-edited {dest}; "
                   "re-run `nb init --migrate --force` to regenerate.",
                   file=sys.stderr)
             return
-    dest.write_text(body)
+    _write_text_lf(dest, body)
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +296,13 @@ def _install_merge_driver(repo_root: Path, nbd: Path) -> None:
         driver_script.chmod(0o755)
     except OSError:
         pass
+    # Il driver viene eseguito dallo `sh` di Git (anche su Windows): interprete
+    # del venv e script con percorso assoluto, slash in avanti, tra virgolette.
+    driver_py = _resolve_project_venv(repo_root) or Path(sys.executable)
     try:
         subprocess.run(
             ["git", "-C", str(repo_root), "config", "merge.jupytext-regen.driver",
-             f"python3 {driver_script} %A %O %B %P"],
+             f'"{fwd(driver_py)}" "{fwd(driver_script)}" %A %O %B %P'],
             check=True, capture_output=True,
         )
         subprocess.run(
@@ -282,7 +318,7 @@ def _install_merge_driver(repo_root: Path, nbd: Path) -> None:
         print(f"[notebook] merge driver install failed: {e}", file=sys.stderr)
         return
     # V1-B4: per-worktree marker so `nb batch` can detect missing init.
-    (nbd / ".merge-driver-installed").write_text(f"{SKILL_VERSION}\n")
+    _write_text_lf(nbd / ".merge-driver-installed", f"{SKILL_VERSION}\n")
 
 
 def _install_pre_commit_hook(repo_root: Path) -> None:
@@ -303,7 +339,11 @@ def _install_pre_commit_hook(repo_root: Path) -> None:
         hooks_dir = repo_root / ".git" / "hooks"  # legacy fallback
     hooks_dir.mkdir(parents=True, exist_ok=True)
     hook = hooks_dir / "pre-commit"
-    content = template.read_text()
+    content = template.read_text(encoding="utf-8")
+    if not hook.exists() or hook.stat().st_size == 0:
+        # Git for Windows considera eseguibile un hook solo se inizia con `#!`
+        # (il bit di esecuzione non esiste su NTFS).
+        _write_text_lf(hook, "#!/bin/sh\n")
     _append_to_file_if_missing(hook, "# notebook-skill: reject ipynb without paired py", content)
     hook.chmod(0o755)
 
@@ -324,7 +364,9 @@ def _capture_jupytext_path(nbd: Path) -> None:
               "pre-commit hook may fail in subshells. Install jupytext "
               "and re-run `nb init --migrate`.", file=sys.stderr)
         return
-    (nbd / "jupytext_path").write_text(f"{resolved}\n")
+    # Slash in avanti e LF: il file viene letto con `cat` dallo `sh` di Git.
+    # resolve(): niente nomi corti 8.3 (`MARIO~1`) ne' `.EXE` maiuscolo da PATHEXT.
+    _write_text_lf(nbd / "jupytext_path", f"{fwd(Path(resolved).resolve())}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +386,7 @@ def _ensure_runtime_probe(nb_path: Path, *, skip: bool) -> bool:
         print(f"[notebook] skipping runtime probe injection (--no-probe-injection).",
               file=sys.stderr)
         return False
-    probe_md = (TEMPLATES / "runtime_probe.md").read_text()
+    probe_md = (TEMPLATES / "runtime_probe.md").read_text(encoding="utf-8")
     new_cell = nbformat.v4.new_code_cell(
         source=probe_md, metadata={"tags": ["notebook-runtime-probe"]}
     )
@@ -368,6 +410,9 @@ def _ensure_paired_py(nb_path: Path) -> None:
         )
     except subprocess.CalledProcessError as e:
         print(f"[notebook] jupytext --set-formats failed: {e.stderr}", file=sys.stderr)
+    # jupytext su Windows scrive CRLF in entrambi i file: si torna a LF.
+    normalize_lf(py)
+    normalize_lf(nb_path)
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +471,7 @@ def cmd_init(args) -> int:
     nb_path: Path = args.notebook.resolve()
     if not nb_path.exists():
         sys.exit(f"[notebook] not found: {nb_path}")
-    _refuse_mnt_c(nb_path)
+    _warn_path_hazards(nb_path)
     repo_root = canonical_repo_root(nb_path.parent)
     _refuse_bare_repo(repo_root)
 
@@ -447,7 +492,7 @@ def cmd_init(args) -> int:
         ga = repo_root / ".gitattributes"
         _append_to_file_if_missing(
             ga, "merge=jupytext-regen",
-            (TEMPLATES / "gitattributes-snippet").read_text(),
+            (TEMPLATES / "gitattributes-snippet").read_text(encoding="utf-8"),
         )
 
         # .gitignore (V1-H7).
@@ -507,5 +552,6 @@ def cmd_init(args) -> int:
     print(f"[notebook]   pre-commit hook   → installed at .git/hooks/pre-commit")
     print(f"[notebook]   kernelspec        → {kernel_name or 'system python3 (NOT RECOMMENDED)'}")
     print(f"[notebook]   warm.py           → auto-detected blocks: {nbd / 'warm.py'}")
-    print(f"[notebook] Next: `pip install -r {TEMPLATES / 'requirements-skill.txt'}`")
+    print(f"[notebook] Next: `uv pip install -r {fwd(TEMPLATES / 'requirements-skill.txt')}` "
+          "(into the project venv)")
     return 0

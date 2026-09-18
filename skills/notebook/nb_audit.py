@@ -49,7 +49,7 @@ def _load_savefig_patterns(nb_path: Path) -> tuple[re.Pattern[str], re.Pattern[s
     if not cfg.exists():
         return _DEFAULT_SAVEFIG_RE, _DEFAULT_DYNAMIC_SAVEFIG_RE
     pats = []
-    for ln in cfg.read_text().splitlines():
+    for ln in cfg.read_text(encoding="utf-8").splitlines():
         ln = ln.strip()
         if not ln or ln.startswith("#"):
             continue

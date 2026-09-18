@@ -161,7 +161,7 @@ def _forbidden_imports(nb_path: Path) -> list[str]:
     cfg = nb_path.parent / ".notebook" / "forbidden_imports.txt"
     if not cfg.exists():
         return []
-    forbidden = [ln.strip() for ln in cfg.read_text().splitlines()
+    forbidden = [ln.strip() for ln in cfg.read_text(encoding="utf-8").splitlines()
                  if ln.strip() and not ln.startswith("#")]
     if not forbidden:
         return []

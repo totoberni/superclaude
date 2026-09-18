@@ -5,16 +5,16 @@ category: workflow
 user-invocable: true
 disable-model-invocation: false
 argument-hint: "<subcommand> [options]"
-allowed-tools: Bash, Read, Edit, Write
+allowed-tools: Bash, PowerShell, Read, Edit, Write
 ---
 
 # /notebook — Notebook Skill
 
-Programmatic mutation, execution, validation, and multi-agent coordination for Jupyter notebooks. Replaces bespoke `append_t<N>.py` / `fix_group_<X>.py` / `init_notebook.py` patterns. Layered over `nbformat`, `jupytext`, `nbclient`, `nbdime`. Atomic-write + advisory lock + persistent kernel.
+Programmatic mutation, execution, validation, and multi-agent coordination for Jupyter notebooks. Replaces bespoke `append_t<N>.py` / `fix_group_<X>.py` / `init_notebook.py` patterns. Layered over `nbformat`, `jupytext`, `nbclient`, `nbdime`. Atomic-write + exclusive lock + persistent kernel. Runs natively on Windows 11 (Git Bash or PowerShell) and on POSIX.
 
-**Skill root**: `~/.claude/skills/notebook/`. **CLI entry**: `~/.claude/skills/notebook/notebook` (alias suggested: `nb`).
+**Skill root**: `~/.claude/skills/notebook/`. **CLI entry**: `nb <subcommand> ...` (identical from Git Bash, PowerShell and cmd; see "Launchers and interpreter resolution" below).
 
-**Status**: v1.4 (post AT1+AT2 + example-project-review-of-skill-v3 closeout + mandatory-final-sync rule). v1.0 BLOCKERs + HIGHs + MEDIUMs addressed; v1.2-patch closes V3-X1..X5 (linked-worktree paths, fig-binding, heartbeat configurability, output-only commits, nbdime list-source); v1.3 also lands UX-1 (`op: insert_block`), UX-2 (mixed `--cells` selectors), UX-3 (`nb merge-preview`), UX-4 (jupytext PATH capture for merge/pre-commit subshells); v1.4 adds mandatory final-sync rule (H-30).
+**Status**: v1.4 (post AT1+AT2 + example-project-review-of-skill-v3 closeout + mandatory-final-sync rule). v1.0 BLOCKERs + HIGHs + MEDIUMs addressed; v1.2-patch closes V3-X1..X5 (linked-worktree paths, fig-binding, heartbeat configurability, output-only commits, nbdime list-source); v1.3 also lands UX-1 (`op: insert_block`), UX-2 (mixed `--cells` selectors), UX-3 (`nb merge-preview`), UX-4 (jupytext PATH capture for merge/pre-commit subshells); v1.4 adds mandatory final-sync rule (H-30); v1.5 is the native Windows 11 port (see "Windows behaviour").
 
 ## Decision tree — when to invoke
 
@@ -40,28 +40,28 @@ Programmatic mutation, execution, validation, and multi-agent coordination for J
 ## Hard rules — DO and DON'T
 
 **DO**
-- **MANDATORY at end of implementation**: run `nb sync <nb>` and verify `<nb>.py` exists on disk before any `git add` / `git commit`. The pre-commit hook (installed by `nb init`) hard-rejects `.ipynb` staged without a paired `.py`. This applies whether the notebook will be committed locally OR pushed — assume commit will be attempted. `nb init` and `nb batch` BOTH attempt an internal `jupytext --sync`, but BOTH can silent-skip when `jupytext --set-formats` failed during init (e.g., read-only `~/.local/share/jupyter/` in sandbox/CI: exits 0 with WARN, paired `.py` never created, `nb validate` still passes). Explicit final sync is non-negotiable. See H-30.
+- **MANDATORY at end of implementation**: run `nb sync <nb>` and verify `<nb>.py` exists on disk before any `git add` / `git commit`. The pre-commit hook (installed by `nb init`) hard-rejects `.ipynb` staged without a paired `.py`. This applies whether the notebook will be committed locally OR pushed — assume commit will be attempted. `nb init` and `nb batch` BOTH attempt an internal `jupytext --sync`, but BOTH can silent-skip when `jupytext --set-formats` failed during init (e.g., read-only Jupyter data dir, `%APPDATA%\jupyter` on Windows, in CI: exits 0 with WARN, paired `.py` never created, `nb validate` still passes). Explicit final sync is non-negotiable. See H-30.
 - Edit `.py` (paired) for source-only changes, then `nb sync <nb>`.
 - Use `nb batch` for any structural change.
 - Run `nb validate` after edits, before commit.
 - Run `nb sync <nb>` immediately after `git pull` / branch switch (jupytext is mtime-based; stale-py-newer-than-ipynb causes silent reverse-sync per V1-H10/H13).
 - Tag figure-output cells with `metadata: { keep_output: true }` to preserve evidence across nbstripout AND across structural edits (V1-H9).
 - Address cells by `cell_id` or `cell_tag` (stable). Use `at_position` only when you've just read the live notebook (cell-shift after `nb init` will invalidate stale positions).
-- **NO skill-support files inside a user project workdir.** This is the strict superclaude v2 firewall rule, not a soft preference: agent-tier artefacts of any kind (plan YAMLs, the `.notebook/` dir itself, paired `.py` files, snapshots, kernel-name pointers, `jupytext_path` captures, `warm.py`, `version`, anything else the skill writes) MUST live under `~/.claude/` — typically `~/.claude/notebook/<project>/` — never anywhere under `~/projects/*/`. Plans specifically belong in `~/.claude/comms/<spawning-agent>/notebook-plans/<project>/<wave>.plan.yml` or `$TMPDIR/notebook-plans-<project>/<wave>.plan.yml`, and must be deleted after `nb batch` succeeds (the project's `.notebook/snapshots/` is NOT the rollback SoT under this rule — snapshots also move to `~/.claude/notebook/<project>/snapshots/`). See H-31 + H-32. **The skill in its current shape (v1.4) hard-codes `.notebook/` to the project root and therefore VIOLATES this rule on every `nb init`** — until v2 lands, agents must treat `.notebook/` as a transient working-set, immediately archive its contents under `~/.claude/notebook/<project>/`, and remove the project-side dir before any commit.
+- **NO skill-support files inside a user project workdir.** This is the strict superclaude v2 firewall rule, not a soft preference: agent-tier artefacts of any kind (plan YAMLs, the `.notebook/` dir itself, paired `.py` files, snapshots, kernel-name pointers, `jupytext_path` captures, `warm.py`, `version`, anything else the skill writes) MUST live under `~/.claude/` — typically `~/.claude/notebook/<project>/` — never anywhere under `~/code/*/`. Plans specifically belong in `~/.claude/plans/notebook-plans/<project>/<wave>.plan.yml` (or, for throwaway plans, `~/.claude/tmp/notebook-plans-<project>/<wave>.plan.yml`), and must be deleted after `nb batch` succeeds (the project's `.notebook/snapshots/` is NOT the rollback SoT under this rule — snapshots also move to `~/.claude/notebook/<project>/snapshots/`). See H-31 + H-32. **The skill in its current shape (v1.4) hard-codes `.notebook/` to the project root and therefore VIOLATES this rule on every `nb init`** — until v2 lands, agents must treat `.notebook/` as a transient working-set, immediately archive its contents under `~/.claude/notebook/<project>/`, and remove the project-side dir before any commit.
 
 **DON'T**
-- Edit `.ipynb` directly via `Edit` / `Write` / `NotebookEdit`. Banned and intercepted by `~/.claude/hooks/modules/30-notebook-guard.sh` (PreToolUse, hard-block).
+- Edit `.ipynb` directly via `Edit` / `Write` / `NotebookEdit`. Banned and intercepted by the notebook guard (PreToolUse, hard-block).
 - Write raw json on `.ipynb` files. Banned (pre-commit + PreToolUse hook).
 - Call the non-atomic notebook write directly. Use `nb_io.atomic_write_ipynb`.
 - Use marker-comment idempotence. Use cell tags + skill state.
 - Use try/except import for runtime detection. Use `"google.colab" in sys.modules` (in `nb init`'s emitted runtime probe).
 - Use cell tags for execution gating (`nbconvert --execute` ignores them — #1300). Gate in-cell with `if RUNTIME == "colab":`.
 - Auto-merge `.ipynb` via nbdime — silent cell-deletion (#597). Use `nbdime mergetool` (interactive) or skill's `jupytext-regen` merge driver.
-- Place project under `/mnt/c/` — 9P + no inotify + slow. Skill refuses at init.
+- Place project inside a OneDrive-synced folder or on a network/UNC path: the sync client holds files open (atomic replace fails, spurious mtime drift, conflict copies); SMB locks are unreliable. `nb init` WARNS loudly (does not refuse). Keep projects under `~/code/`.
 - Put a literal `# %%` line in code-cell source (any indentation) — silent cell-split. Skill rejects at write time AND on `nb sync .py → .ipynb`.
 - Use `nbstripout` as git filter (clean/smudge) — unresolvable-merge footgun. Use as pre-commit hook only.
 - Use `merge=union` for `.ipynb` in `.gitattributes` — invalid JSON. Use `merge=jupytext-regen`.
-- **Leave ANY skill-support file inside a user project workdir.** This goes beyond plan YAMLs: `<project>/.notebook/` (kernel name, jupytext_path, warm.py, snapshots/, version, forbidden_imports.txt, plan files, `.merge-driver-installed`, `.requirements.sha256`), the paired `<nb>.py`, and `<project>/plan.yml` are ALL banned under `~/projects/*/`. Per the strict superclaude v2 firewall rule, agent-tier artefacts of every category must live exclusively under `~/.claude/` (typically `~/.claude/notebook/<project>/` for skill state, `~/.claude/comms/<agent>/notebook-plans/<project>/` for plans). `nb init` writing to `<project>/.notebook/` is a v1.4 design defect, not a free pass — see H-31, H-32, and v2-roadmap. The CLI examples and walkthroughs further down the doc predate this rule and are wrong on this dimension; treat all workdir-relative paths in them (`--plan plan.yml`, `cat .notebook/kernel_name`, etc.) as referring to the `~/.claude/notebook/<project>/` mirror, not the project dir.
+- **Leave ANY skill-support file inside a user project workdir.** This goes beyond plan YAMLs: `<project>/.notebook/` (kernel name, jupytext_path, warm.py, snapshots/, version, forbidden_imports.txt, plan files, `.merge-driver-installed`, `.requirements.sha256`), the paired `<nb>.py`, and `<project>/plan.yml` are ALL banned under `~/code/*/`. Per the strict superclaude v2 firewall rule, agent-tier artefacts of every category must live exclusively under `~/.claude/` (typically `~/.claude/notebook/<project>/` for skill state, `~/.claude/plans/notebook-plans/<project>/` for plans). `nb init` writing to `<project>/.notebook/` is a v1.4 design defect, not a free pass — see H-31, H-32, and v2-roadmap. The CLI examples and walkthroughs further down the doc predate this rule and are wrong on this dimension; treat all workdir-relative paths in them (`--plan plan.yml`, `cat .notebook/kernel_name`, etc.) as referring to the `~/.claude/notebook/<project>/` mirror, not the project dir.
 
 ---
 
@@ -69,34 +69,39 @@ Programmatic mutation, execution, validation, and multi-agent coordination for J
 
 **One-time per project** — adapt for EXAMPLE_PROJECT, but the steps generalise:
 
-```bash
-# 0. Install skill deps into project venv (loose pinning per W4).
-cd $HOME/projects/example-course/example-project
-.venv/bin/pip install -r ~/.claude/skills/notebook/templates/requirements-skill.txt
+Commands below work unchanged in Git Bash and PowerShell. Agents stay in `~/code/` and pass absolute notebook paths (`nb` expands a leading `~/` itself; for other tools use `$HOME`, which both shells expand).
+
+```
+# 0. Install skill deps into the PROJECT venv (loose pinning per W4).
+uv pip install --python $HOME/code/example-project/.venv/Scripts/python.exe -r $HOME/.claude/skills/notebook/templates/requirements-skill.txt
 
 # 1. Initialise. This step:
-#    - Auto-detects .venv/bin/python and registers `<project>-venv` kernelspec
+#    - Auto-detects the project venv interpreter (.venv/Scripts/python.exe on
+#      Windows, .venv/bin/python on POSIX) and registers `<project>-venv` kernelspec
 #      (writes the kernel name to .notebook/kernel_name).
+#    - WARNS if the notebook sits in a OneDrive-synced folder or on a UNC path.
 #    - Auto-generates .notebook/warm.py with relevant pre-import blocks
 #      uncommented based on `pip list` (qiskit, qiskit-aer, torch, scipy, sklearn).
 #    - Appends *.ipynb.lock + .notebook/snapshots/ to .gitignore.
-#    - Registers the jupytext-regen merge driver in .git/config.
-#    - Captures absolute path of jupytext into .notebook/jupytext_path (UX-4).
+#    - Registers the jupytext-regen merge driver in .git/config (venv interpreter
+#      + merge_regen.py, absolute forward-slash paths, run by Git's bundled sh).
+#    - Captures absolute path of jupytext (jupytext.exe under .venv/Scripts on
+#      Windows) into .notebook/jupytext_path (UX-4).
 #    - Installs the `.git/hooks/pre-commit` rejection (ipynb-without-py),
 #      routed via `git rev-parse --git-path hooks` so linked worktrees work (V3-X1).
 #    - Injects the runtime-probe cell at index 0 (WARNS LOUDLY about cell shift).
 #    - Detects legacy scaffolders (scripts/*.py with raw json on .ipynb)
 #      and emits a deprecation hint.
-~/.claude/skills/notebook/notebook init example-project.ipynb
+nb init ~/code/example-project/example-project.ipynb
 
 # Read the warning carefully: cell indices have shifted by +1 if a probe
 # was injected. Address cells by `cell_id` or `cell_tag`, not `at_position`.
 # Use `nb find <pattern>` to discover cell IDs by content.
 
-# 2. (Optional) Inspect what got installed.
-cat .notebook/kernel_name           # e.g. "example-project-venv"
-cat .notebook/warm.py | head -20    # auto-detected blocks
-cat .notebook/forbidden_imports.txt # qiskit-deprecated providers shipped by default
+# 2. (Optional) Inspect what got installed, with the Read tool:
+#    .notebook/kernel_name            e.g. "example-project-venv"
+#    .notebook/warm.py                auto-detected blocks
+#    .notebook/forbidden_imports.txt  qiskit-deprecated providers shipped by default
 ```
 
 After init, the project is ready for the canonical agent workflow.
@@ -109,8 +114,9 @@ After init, the project is ready for the canonical agent workflow.
 
 Bootstraps a notebook for skill use. Idempotent re-run is safe (`--migrate` makes it explicit). `--force` overwrites existing `.notebook/` config. `--no-probe-injection` skips the runtime-probe cell-0 injection (use when migrating an already-set-up notebook OR when the probe is already present elsewhere).
 
+Warns (never refuses): notebook inside a OneDrive-synced folder (detected via the `OneDrive`, `OneDriveCommercial`, `OneDriveConsumer` env vars) or on a network/UNC path (including mapped network drives).
+
 Refuses:
-- Notebook under `/mnt/c/` or `/mnt/d/` (WSL hard rule).
 - Bare repo (notebook ops require working tree). Explicit refusal in both `nb_init` and `nb_io.canonical_repo_root` (defence-in-depth).
 
 ### `nb batch <notebook> --plan <plan.yml> [options]`
@@ -146,14 +152,14 @@ operations:
       - { type: markdown, source: "Q(i) …", tags: [t6] }
 ```
 
-`op: insert_block` is equivalent to N reverse-ordered `op: insert` ops with the same anchor — implemented once in the dispatcher so orchs don't have to predict fresh-UUID `after_id` values across chained inserts. `type` is accepted as alias for `cell_type`. Optional per-cell `id` honours user-supplied stable IDs (validated against nbformat 4.5+ regex).
+`op: insert_block` is equivalent to N reverse-ordered `op: insert` ops with the same anchor — implemented once in the dispatcher so agents don't have to predict fresh-UUID `after_id` values across chained inserts. `type` is accepted as alias for `cell_type`. Optional per-cell `id` honours user-supplied stable IDs (validated against nbformat 4.5+ regex).
 
 Options:
 - `--lock-timeout <sec>` — default 30 s.
 - `--dry-run` — print planned diff via nbdime, do NOT apply.
 - `--snapshot` — copy current `.ipynb` to `.notebook/snapshots/<stem>-<ts>.ipynb` before mutation (V1-H19).
 - `--force` — override the git-clean working-tree check (default: refuses if `notebook` or paired `.py` are dirty in git, V1-H21).
-- `--force-no-example-check` — bypass JupyterLab race detector (dangerous).
+- `--force-no-jl-check` (alias `--force-no-example-check`) — bypass JupyterLab race detector (dangerous).
 
 Pre-write sequence (V1-H8 + V1-M2): JL check → snapshot if requested → lock acquire → JL re-check → SHA capture (INSIDE lock) → apply plan in-memory → schema validate → SHA recheck just-before-write → atomic-replace → release lock → `jupytext --sync` to .py.
 
@@ -171,12 +177,12 @@ Cells selector grammar (V1-H2 + V1-M1 + UX-2):
 Options:
 - `--cell-timeout <sec>` — per-cell timeout, default 600 s.
 - `--lock-timeout <sec>` — default 600 s for execute.
-- `--warm-timeout <sec>` — kernel-startup timeout, default 60 s (WSL2 ZMQ binding).
+- `--warm-timeout <sec>` — kernel-startup timeout, default 60 s.
 - `--no-warm` — skip auto-warm (assumes kernel already imported the heavy deps).
 - `--kernel-name <name>` — override the kernelspec (default: read from `.notebook/kernel_name` written by `nb init`; falls back to system `python3` with WARN).
 - `--iopub-heartbeat-timeout <sec>` — V3-X3: default 30 s. Seconds of iopub silence before probing kernel liveness via ZMQ `kernel_info` (V2-C1 watchdog). Bump (e.g. `600`) for long Aer / Monte Carlo simulations whose cells emit no intermediate iopub messages — without this, V2-C1 kills the kernel after 30 s of legitimate silent compute.
 
-First call cold-starts kernel + runs `<dir>/.notebook/warm.py`. Prints `[notebook] cold-start: warming kernel + pre-importing heavy deps (~3 min)…`. Subsequent calls within the same `$CLAUDE_SESSION_ID` reuse the persistent kernel (V1-H1: kernel detached via `start_new_session=True` so it survives CLI exit).
+First call cold-starts kernel + runs `<dir>/.notebook/warm.py`. Prints `[notebook] cold-start: warming kernel + pre-importing heavy deps (~3 min)…`. Subsequent calls with the same session key reuse the persistent kernel (V1-H1: the kernel is detached so it survives CLI exit; see "Windows behaviour" for the key and the detach mechanics).
 
 ### `nb find <notebook> <pattern> [--in source|tags|metadata]`
 
@@ -204,14 +210,14 @@ Applies plan to a temp copy, runs nbdime textual diff to stdout. No mutation. Sa
 
 ### `nb merge-preview <notebook> <ours_branch> <theirs_branch> [--base-branch <ref>] [--diff3]`
 
-Pre-simulate `git merge` of two branches' `.ipynb` without engaging the real `jupytext-regen` merge driver or locking the working-tree index. (UX-3, formalises the manual `/tmp/*.py` workflow orchs were doing by hand.)
+Pre-simulate `git merge` of two branches' `.ipynb` without engaging the real `jupytext-regen` merge driver or locking the working-tree index. (UX-3, formalises the manual tempfile workflow agents were doing by hand.)
 
 Pipeline:
 1. Resolves `ours`, `theirs`, `base` (default `git merge-base ours theirs`) `.ipynb` blobs via `git show <ref>:<rel>` into a `tempfile.mkdtemp` directory.
 2. Converts each to py:percent via `jupytext --to py:percent` (resolved through `.notebook/jupytext_path` if present, else PATH; UX-4 inheritance).
 3. Runs `git merge-file [--diff3] ours.py base.py theirs.py` in the tempdir.
 4. Walks the merged file for `<<<<<<<` / `>>>>>>>` markers, captures line ranges + nearest preceding `# %% [id]` cell-anchor.
-5. Prints conflict count + per-conflict landmarks. Exit 0 = clean (auto-resolves), 1 = conflicts (tempdir retained for inspection — orch can `head` the markers, then deletes manually).
+5. Prints conflict count + per-conflict landmarks. Exit 0 = clean (auto-resolves), 1 = conflicts (tempdir retained for inspection — the agent reads the markers with the Read tool, then deletes that named directory).
 
 ### `nb audit <notebook> [--check <name>] [--warn]`
 
@@ -225,11 +231,11 @@ Escape hatch when sync produces divergence. Drops `.ipynb`, rebuilds from `.py` 
 
 ### `nb reset-kernel <notebook>`
 
-Drops the persistent KernelManager for the notebook's project, deletes connection file, ends ZMQ session. Next `nb execute` cold-starts. **Now requires the notebook arg** (V1-L3: project resolution is per-notebook, since agents run from `~/projects/cash/` per global rule).
+Drops the persistent KernelManager for the notebook's project, deletes connection file, ends ZMQ session. Next `nb execute` cold-starts. **Now requires the notebook arg** (V1-L3: project resolution is per-notebook, since agents run from `~/code/` per global rule).
 
 ### `nb lock-status <notebook>`
 
-Reports lock holder (PID + start-time) + liveness probe via psutil if any.
+Reports lock holder (PID + start-time) + liveness probe via psutil if any. The holder text can outlive the holder: the OS releases the lock itself when the holder's handle closes (also on crash), so a DEAD pid means the lock is free.
 
 ### `nb warm <notebook> [--warm-timeout <sec>] [--kernel-name <name>]`
 
@@ -277,49 +283,81 @@ Use case: a figure-output cell whose PNG was validated. Tag the cell with `keep_
 
 ---
 
-## Multi-orch worktree protocol (Acid Test 2 walkthrough)
+## Multi-agent worktree protocol (Acid Test 2 walkthrough)
 
-(D-3) Two orchs A and B work on non-overlapping cell ranges of the same notebook in separate `git worktree` directories. End state: both orchs' work merged cleanly with no JSON corruption.
+(D-3) Two agents A and B work on non-overlapping cell ranges of the same notebook in separate `git worktree` directories. End state: both agents' work merged cleanly with no JSON corruption.
 
-```bash
-# Setup (the user one-time, before dispatching orchs):
-cd $HOME/projects/example-course/example-project
-git worktree add ../example-project-t6 -b orch-t6
-git worktree add ../example-project-t7 -b orch-t7
+```
+# Setup (the user one-time, before dispatching agents):
+git -C $HOME/code/example-project worktree add ../example-project-t6 -b w-t6
+git -C $HOME/code/example-project worktree add ../example-project-t7 -b w-t7
 
 # Each worktree MUST run `nb init` (the merge-driver is registered in
 # .git/config which IS shared across worktrees by default, BUT the
 # .notebook/.merge-driver-installed marker is per-worktree as a defence-in-depth).
-cd ../example-project-t6 && ~/.claude/skills/notebook/notebook init example-project.ipynb --no-probe-injection
-cd ../example-project-t7 && ~/.claude/skills/notebook/notebook init example-project.ipynb --no-probe-injection
+nb init ~/code/example-project-t6/example-project.ipynb --no-probe-injection
+nb init ~/code/example-project-t7/example-project.ipynb --no-probe-injection
 # Use --no-probe-injection in worktrees to avoid re-injecting the probe — it's already there.
 
-# Each orch runs in its own worktree:
-# orch-t6 in ../example-project-t6/: appends T6 cells (tags: ["t6"])
-# orch-t7 in ../example-project-t7/: appends T7 cells (tags: ["t7"])
-# Skill's flock on <canonical-root>/<rel>.ipynb.lock serialises writes
-# to the same physical inode (same canonical-root regardless of worktree).
+# Each agent works on its own worktree:
+# w-t6 on ~/code/example-project-t6/: appends T6 cells (tags: ["t6"])
+# w-t7 on ~/code/example-project-t7/: appends T7 cells (tags: ["t7"])
+# Skill's exclusive lock on <canonical-root>/<rel>.ipynb.lock serialises writes
+# to the same notebook (same canonical-root regardless of worktree).
 
-# After both orchs complete, merge:
-cd $HOME/projects/example-course/example-project           # main worktree
-git merge orch-t6                              # text-merges .py + jupytext-regen drives .ipynb
-git merge orch-t7
-~/.claude/skills/notebook/notebook validate example-project.ipynb
+# After both agents complete, merge from the main worktree:
+git -C $HOME/code/example-project merge w-t6   # text-merges .py + jupytext-regen drives .ipynb
+git -C $HOME/code/example-project merge w-t7
+nb sync ~/code/example-project/example-project.ipynb      # MANDATORY after a merge (see note below)
+nb validate ~/code/example-project/example-project.ipynb
 ```
+
+Note: git invokes the merge driver BEFORE it writes the merged `.py` to the working tree, so the driver regenerates the `.ipynb` from the pre-merge `.py`. The `nb sync` right after the merge (already required after any pull / branch switch, H-9) is what carries the other branch's cells into the `.ipynb`.
 
 The `jupytext-regen` merge driver:
 - Drops the conflicting `.ipynb` content.
 - Calls `jupytext --to ipynb <merged.py> -o <merged.ipynb>`.
 - Exit 0 unconditionally (no manual conflict resolution needed).
-- UX-4: resolves `jupytext` via `<repo>/.notebook/jupytext_path` (captured by `nb init` from the user's PATH); falls back to `$PATH` lookup. Sidesteps git merge-driver subshell stripping `.venv/bin`.
+- UX-4: resolves `jupytext` via `<repo>/.notebook/jupytext_path` (captured by `nb init` from the user's PATH); falls back to `$PATH` lookup. Sidesteps git merge-driver subshell not having the venv's `Scripts/` (or `bin/`) on PATH.
 
 V3-X1: linked worktrees are now first-class — `nb init` from a linked worktree resolves `.git/hooks/` via `git rev-parse --git-path hooks` (which routes to the canonical hooks dir even when `<worktree>/.git` is a gitdir-pointer-file). Lock files use `relative_to(worktree_root)` for the rel path but live under the canonical root, preserving the shared-lock invariant across worktrees of the same notebook.
 
 V3-X4: post-execute commits with output-only `.ipynb` diffs (re-execution refresh of figures) no longer need `--no-verify` — the pre-commit hook compares the staged source-only py:percent view against `git show HEAD:<py>` and allows when equal.
 
-UX-3: orchs can `nb merge-preview <nb> <ours> <theirs>` BEFORE invoking the real `git merge` to inspect conflict topology in a tempdir without touching the working tree.
+UX-3: agents can `nb merge-preview <nb> <ours> <theirs>` BEFORE invoking the real `git merge` to inspect conflict topology in a tempdir without touching the working tree.
 
 This sidesteps `nbdime` auto-merge's silent-cell-deletion footgun (#597, open since June 2021).
+
+---
+
+## Windows behaviour (v1.5 port)
+
+### Launchers and interpreter resolution
+
+- Canonical command: `nb <subcommand> ...`. It behaves identically from Git Bash, PowerShell and cmd. The shims live in `~/.claude/skills/notebook/bin/` (`nb`, `nb.cmd`, `nb.ps1`); that directory (or copies of the three files in `~/.claude/bin/`) must be on PATH.
+- Without PATH: Git Bash `~/.claude/skills/notebook/notebook ...`, PowerShell `& $HOME/.claude/skills/notebook/notebook.ps1 ...`, cmd `%USERPROFILE%\.claude\skills\notebook\notebook.cmd ...`. Never call the extensionless `notebook` file from PowerShell: it is the bash script and Windows will not execute it.
+- All launchers are thin wrappers over `nb_main.py`. They only pick a bootstrap Python (`$VIRTUAL_ENV`, else `~/.claude/.venv`). `nb_main.py` then re-launches itself with the right interpreter, in this order: (1) the `.venv` of the project that contains the notebook argument (so agents can stay in `~/code/` and pass absolute paths), (2) `$VIRTUAL_ENV`, (3) a `.venv` found walking up from the current directory. The skill requirements live in the PROJECT venv, never in `~/.claude/.venv`.
+- The CLI forces UTF-8 mode (`PYTHONUTF8=1`) and prepends the interpreter's `Scripts/` (or `bin/`) to PATH, so `jupytext` resolves without activating the venv. A leading `~/` in any argument is expanded by `nb` itself (PowerShell does not expand it for native commands).
+
+### Text, encodings, line endings
+
+- Every notebook, paired `.py`, plan and skill state file is read and written as UTF-8. Accented text (`àèìòù`) round-trips byte-exact; the Windows cp1252 default is never used.
+- `.ipynb` and paired `.py` are always LF. jupytext on Windows writes CRLF, so the skill re-normalises both files to LF after every jupytext call (mtime preserved, because `jupytext --sync` picks its direction by mtime). The merge driver does the same.
+- Files read by Git's bundled `sh` (`.git/hooks/pre-commit`, `.notebook/jupytext_path`) are LF with forward-slash absolute paths. The hook gets a `#!/bin/sh` first line: Git for Windows treats a hook as executable only if it starts with a shebang.
+
+### Locations
+
+- `nb init` WARNS (does not refuse) when the notebook is inside a OneDrive-synced folder (`OneDrive`, `OneDriveCommercial`, `OneDriveConsumer` env vars) or on a network/UNC path or mapped network drive. Expect sync locks there; prefer `~/code/<project>`.
+- The kernelspec is named `<repo dir name>-venv` with every character outside `[A-Za-z0-9._-]` replaced by `-` (folders with spaces or accented letters are fine).
+- Long paths (>260 chars) are not enabled: kernel cache file names are sanitised and capped (`<project up to 40 chars>-<session up to 40 chars>.json`), lock files sit next to the notebook.
+
+### Kernel persistence
+
+- Session key, in order: `$CLAUDE_SESSION_ID`, `$CLAUDE_CODE_SESSION_ID` (the one Claude Code actually exports to commands), then a fallback. On POSIX the fallback is `sid-<os.getsid(0)>`. On Windows there is no session id and the parent pid changes on every call, so the fallback is a PER-PROJECT key `local-<8 hex of sha1(repo root)>`: outside Claude Code, every shell shares one kernel per project. Use `nb reset-kernel <nb>` to drop it.
+- Detach on Windows: `start_kernel(independent=True)` (otherwise ipykernel watches the CLI's process handle and exits with it) plus `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` (own hidden console, no Ctrl+C from the CLI's console). `DETACHED_PROCESS` is deliberately not used: Win32 ignores `CREATE_NO_WINDOW` when it is set, and every console subprocess of the kernel (`!pip ...`) would pop up a window. Handle inheritance is restricted with a `handle_list` (kernel stdio plus the interrupt event only): jupyter_client's default `close_fds=False` would let the kernel inherit the stdout/stderr pipes of the CLI, and the PowerShell or agent tool call that started the kernel would then hang until the kernel died (observed, fixed).
+- Transport is tcp on loopback (jupyter_client default on Windows). A second CLI invocation reconnects through the connection file; liveness is the `kernel_info` round-trip.
+- A sidecar `<project>-<session>.meta` stores the kernel pid and the Win32 interrupt-event handle. Interrupt after a cell timeout works across CLI invocations by duplicating that handle out of the kernel process and signalling it (ipykernel on Windows ignores `interrupt_request` messages). As in any Jupyter on Windows, a blocking C call such as `time.sleep` only sees the interrupt when it returns; if the kernel stays unresponsive, the next `nb execute` declares it stale, kills it and respawns (state lost, loud warning).
+- Shutdown and stale cleanup never use signals: `shutdown_request` on the control channel, then `psutil` terminate/kill of the kernel process tree (a venv `python.exe` on Windows is a launcher whose child is the real interpreter, so the tree matters). The pid is only trusted if its command line names our connection file. `nb reset-kernel` leaves no orphan process.
 
 ---
 
@@ -329,13 +367,13 @@ This sidesteps `nbdime` auto-merge's silent-cell-deletion footgun (#597, open si
 
 **Cell IDs**: nbformat 4.5 random-UUID per JEP-62 (assigned-on-create, stable post-creation). Anchor links use markdown HTML (`<a id="...">`) or cell tags — never IDs.
 
-**Atomicity**: every `.ipynb` write goes through `nb_io.atomic_write_ipynb` — `tempfile.NamedTemporaryFile(dir=path.parent, newline="\n")` → flush → fsync → `os.replace` + dir-fsync. POSIX-atomic on WSL2 ext4.
+**Atomicity**: every `.ipynb` write goes through `nb_io.atomic_write_ipynb` — `tempfile.NamedTemporaryFile(dir=path.parent, newline="\n")` → flush → fsync → `os.replace` (+ dir-fsync on POSIX). On Windows `os.replace` is `MoveFileEx(REPLACE_EXISTING)`; if another process holds the target open it is retried for ~2 s, then fails with a clear "another process holds it open" error and no mutation.
 
-**Concurrency**: cross-orch serialisation via `fcntl.flock(LOCK_EX|LOCK_NB)` on a sentinel sidecar file. Lock path: `relative_to(worktree_root)` (worktree-local) anchored at the canonical root (shared) so cross-worktree locks of the same notebook converge to the same file (V3-X1). Per-notebook granularity. `flock` auto-releases on SIGKILL. Lock files are auto-`.gitignore`d by `nb init` (V1-H7).
+**Concurrency**: cross-agent serialisation via one exclusive, non-blocking lock on a sentinel sidecar file: `msvcrt.locking(LK_NBLCK)` on byte 0 on Windows, `fcntl.flock(LOCK_EX|LOCK_NB)` on POSIX, behind the same context manager (`nb_io.notebook_lock`). Lock path: `relative_to(worktree_root)` (worktree-local) anchored at the canonical root (shared) so cross-worktree locks of the same notebook converge to the same file (V3-X1). Per-notebook granularity. The OS releases the lock when the holder's handle closes, so it auto-releases on crash or kill. Contention fails fast after `--lock-timeout` with an error naming the holder (`<pid> <epoch>`, stored from offset 1 of the lock file because byte 0 is the locked byte). Lock files are auto-`.gitignore`d by `nb init` (V1-H7).
 
-**Persistent kernel**: `jupyter_client.KernelManager` keyed by `(project, $CLAUDE_SESSION_ID)`. Connection file `~/.cache/notebook-skill/kernels/<project>-<session>.json`. Spawned with `start_new_session=True` (V1-H1) so the kernel survives the CLI process exit and persists across `nb execute` invocations within the orch session. Liveness via `client.kernel_info(reply=True, timeout=2)` ZMQ probe. Crash recovery: `cleanup_resources(restart=False)` + explicit `cf.unlink(missing_ok=True)` (jupyter_client #941: cleanup leaks). Connection file is chmod 600 from birth (V1-H11: umask before `start_kernel`).
+**Persistent kernel**: `jupyter_client.KernelManager` keyed by `(project, session key)`. Connection file `~/.cache/notebook-skill/kernels/<project>-<session>.json` (override the directory with `NB_SKILL_CACHE_DIR`). Spawned detached (V1-H1: `start_new_session=True` on POSIX; `independent=True` + `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` on Windows) so the kernel survives the CLI process exit and persists across `nb execute` invocations within the agent session. Liveness via `client.kernel_info(reply=True, timeout=2)` ZMQ probe. Crash recovery: `cleanup_resources(restart=False)` + explicit `cf.unlink(missing_ok=True)` (jupyter_client #941: cleanup leaks). On POSIX the connection file is chmod 600 from birth (V1-H11: umask before `start_kernel`); on Windows chmod is a no-op and the NTFS ACLs of `%USERPROFILE%` provide the restriction.
 
-**Multi-orch worktree merge**: text-merge `.py`, drop `.ipynb`, regenerate via `jupytext --sync` (custom git merge driver `jupytext-regen` installed by `nb init`). nbdime auto-merge is forbidden (silent cell-deletion #597 — open since 2021).
+**Multi-agent worktree merge**: text-merge `.py`, drop `.ipynb`, regenerate via `jupytext --sync` (custom git merge driver `jupytext-regen` installed by `nb init`). nbdime auto-merge is forbidden (silent cell-deletion #597 — open since 2021).
 
 **JupyterLab race detection**: `psutil.process_iter() + p.open_files()` to detect JL holding the file + mtime drift check (100 ms threshold for FS-granularity-blind). Detector runs PRE-lock AND POST-lock-acquire (V1-M2). Hard-fail with offending PID. JL 4.x writes `.ipynb` directly with no `.ipynb_checkpoints/` shadow — psutil is the canonical detector.
 
@@ -348,11 +386,11 @@ This sidesteps `nbdime` auto-merge's silent-cell-deletion footgun (#597, open si
 ## Banned-pattern enforcement layers
 
 - L1 — `SKILL.md` (this file): self-policing. Required reading by agents.
-- L2 — `~/.claude/hooks/modules/30-notebook-guard.sh` (PreToolUse, hard-block via `exit 2`):
+- L2 — the notebook guard (PreToolUse, hard-block):
   - `Edit`/`Write` with `file_path` ending `.ipynb` → block.
   - `NotebookEdit` tool call → block.
-  - `Bash` with `python -c|-m` invocation containing raw json on `.ipynb` → block.
-  - `Bash` with `jupyter nbconvert --inplace` on `.ipynb` → block.
+  - `Bash`/`PowerShell` with `python -c|-m` invocation containing raw json on `.ipynb` → block.
+  - `Bash`/`PowerShell` with `jupyter nbconvert --inplace` on `.ipynb` → block.
 - L3 — `<project>/.git/hooks/pre-commit` (installed by `nb init`):
   - Reject `.ipynb` staged without paired `.py`.
   - Grep staged files for forbidden-pattern strings.
@@ -365,64 +403,64 @@ This sidesteps `nbdime` auto-merge's silent-cell-deletion footgun (#597, open si
 
 ### Acid Test 1 — T5 polish-loop fix
 
-```bash
-cd $HOME/projects/example-course/example-project
-
-# 0. Install skill deps.
-.venv/bin/pip install -r ~/.claude/skills/notebook/templates/requirements-skill.txt
+```
+# 0. Install skill deps into the project venv.
+uv pip install --python $HOME/code/example-project/.venv/Scripts/python.exe -r $HOME/.claude/skills/notebook/templates/requirements-skill.txt
 
 # 1. Initialise. Auto-installs <project>-venv kernelspec, auto-detects qiskit
 #    in warm.py, injects runtime probe at cell 0 (WARNS — cells shift +1).
-~/.claude/skills/notebook/notebook init example-project.ipynb
+nb init ~/code/example-project/example-project.ipynb
 
 # 2. Discover the IDs of the (post-shift) T5 cells. Use the marker text from
 #    the existing scaffolder content as a search anchor:
-~/.claude/skills/notebook/notebook find example-project.ipynb "Gate teleportation"
+nb find ~/code/example-project/example-project.ipynb "Gate teleportation"
 # → yields the cell IDs of the T5 cells.
 
-# 3. Author plan.yml addressing each T5 cell BY cell_id (not at_position),
+# 3. Author the plan (OUTSIDE the project: ~/.claude/plans/notebook-plans/example-project/t5.plan.yml)
+#    addressing each T5 cell BY cell_id (not at_position),
 #    each op tagged ["t5"]. The polished content lives at:
-#      $HOME/projects/example-course/example-project/scripts/append_t5_gate_teleport.py:90-380
+#      ~/code/example-project/scripts/append_t5_gate_teleport.py:90-380
 #    Convert each `CELL_T5_*` constant into one `op: replace` with `tags: ["t5"]`.
 
 # 4. Preview.
-~/.claude/skills/notebook/notebook diff example-project.ipynb --plan plan.yml
+nb diff ~/code/example-project/example-project.ipynb --plan ~/.claude/plans/notebook-plans/example-project/t5.plan.yml
 
 # 5. Apply atomically with snapshot for rollback safety.
-~/.claude/skills/notebook/notebook batch example-project.ipynb --plan plan.yml --snapshot
+nb batch ~/code/example-project/example-project.ipynb --plan ~/.claude/plans/notebook-plans/example-project/t5.plan.yml --snapshot
 
 # 6. Execute T5 cells with project venv kernel + warm pre-import.
-~/.claude/skills/notebook/notebook execute example-project.ipynb \
-    --cells "tag:t5" \
-    --warm-timeout 240 \
-    --cell-timeout 600
+nb execute ~/code/example-project/example-project.ipynb --cells "tag:t5" --warm-timeout 240 --cell-timeout 600
 
 # 7. Validate.
-~/.claude/skills/notebook/notebook validate example-project.ipynb
+nb validate ~/code/example-project/example-project.ipynb
 
-# 8. Verify acid-test pass criterion.
-ls -lh report/img/s2_2_gate_teleport_fidelity.png
+# 8. Verify acid-test pass criterion: report/img/s2_2_gate_teleport_fidelity.png exists
+#    (Glob / Read tool).
+
+# 8b. MANDATORY final sync before any commit (H-30), then delete the plan file.
+nb sync ~/code/example-project/example-project.ipynb
 
 # 9. (Optional) audit fig-binding. Existing EXAMPLE_PROJECT cells use a `savefig(...)` helper
 #    NOT `plt.savefig(...)`. The default regex catches both. If the project has
 #    a custom helper, configure via .notebook/savefig_pattern.txt. Use --warn for
 #    grandfathered cells.
-~/.claude/skills/notebook/notebook audit example-project.ipynb --check fig-binding --warn
+nb audit ~/code/example-project/example-project.ipynb --check fig-binding --warn
 ```
 
 If something goes wrong: `nb revert <path-to-snapshot>` rolls back to pre-batch state.
 
-### Acid Test 2 — Two parallel orchs T6 + T7
+### Acid Test 2 — Two parallel agents T6 + T7
 
-See "Multi-orch worktree protocol" above.
+See "Multi-agent worktree protocol" above.
 
 ---
 
 ## Troubleshooting
 
-- "Lock held by another process": another orch is writing. `--lock-timeout <sec>` to increase wait. Default 30 s for edit, 600 s for execute. Use `nb lock-status <nb>` to see PID. (Lock files are gitignored by default.)
-- "JupyterLab has notebook open (PID X)": close JL or `kill <PID>`.
-- "Kernel cold-start timeout": bump `--warm-timeout` (default 60 s for WSL2 ZMQ binding).
+- "Lock held by another process": another agent is writing. `--lock-timeout <sec>` to increase wait. Default 30 s for edit, 600 s for execute. Use `nb lock-status <nb>` to see PID. (Lock files are gitignored by default.)
+- "JupyterLab has notebook open (PID X)": close JL (or stop that process, e.g. `Stop-Process -Id <PID>`).
+- "could not replace <nb>: another process holds it open": Windows file sharing. An editor, JupyterLab, antivirus or the OneDrive client has the `.ipynb` open. Close it and retry; nothing was written.
+- "Kernel cold-start timeout": bump `--warm-timeout` (default 60 s; antivirus scanning of a fresh venv can slow the first start).
 - "py-content-similarity below threshold; ID assignment unstable" OR "jupytext --sync lost N cell ID(s)": emitted on suspect sync (V1-H10). Inspect with `nb diff`; `nb regenerate --from-py` if confirmed divergence.
 - "Banned pattern detected at <file>:<line>": pre-commit / PreToolUse hook flagged. Replace per the banned-pattern table.
 - "Kernel died (exit code N)": `nb reset-kernel <nb>` then re-run. State lost; re-execute upstream cells.
@@ -438,9 +476,9 @@ See "Multi-orch worktree protocol" above.
 
 - Single-host only (no multi-host coordination).
 - Free Colab from agent = edit-only (skill writes Colab-ready cells, runs `nbconvert --execute` locally to validate); execution on Colab requires opt-in `claude-colab` bridge with manual bootstrap by the user.
-- Multi-orch worktree warm-cost: 2-4 min × N orchs cold-start (no shared-kernel pool — state-leak risk dominates). Acceptable since 3+ parallel-orch flows are rare on notebooks.
+- Multi-agent worktree warm-cost: 2-4 min × N agents cold-start (no shared-kernel pool — state-leak risk dominates). Acceptable since 3+ parallel-agent flows are rare on notebooks.
 - jupytext py:percent on code cells with literal `# %%` in source: hard reject at write time AND on `nb sync .py → .ipynb` (V1-H13). No silent-escape.
-- Schema validate enforces JSON schema only; semantic graph validation (broken cell-id refs, missing kernels) is the orch's responsibility.
+- Schema validate enforces JSON schema only; semantic graph validation (broken cell-id refs, missing kernels) is the agent's responsibility.
 - Random-UUID cell IDs are NOT content-addressable — agents needing "find the verify cell" should use cell tags (`tag:t5-verify`), `nb find <pattern>`, or content-hash the cell themselves.
 - IDs may be reassigned by jupytext on a content-mismatch fallback during `--sync`. The skill emits a WARN (V1-H10) but cannot recover lost IDs without manual intervention.
 - `--migrate` is a thin idempotent re-run of all install steps (v1.1 schema). True schema migrations (when v2 ships) will need chained migrators.
@@ -470,7 +508,7 @@ These were discovered during stress-test research (W1-W5) + example-project-meta
 - H-17: `nb execute --cells "tag:X"` reports "0 cells matched" loudly (V1-H5).
 - H-18: merge-driver registration is per-clone — written to shared `.git/config` (visible across worktrees) PLUS per-worktree `.notebook/.merge-driver-installed` marker (V1-B4).
 - H-19: jupytext `--sync` ID-loss detection — pre/post-set diff with WARN (V1-H10).
-- H-20: `nb execute` cold-start tax addressed via `start_new_session=True` detach — kernel persists across CLI invocations within the session (V1-H1).
+- H-20: `nb execute` cold-start tax addressed via kernel detach (`start_new_session=True` on POSIX, `independent=True` + creation flags on Windows) — kernel persists across CLI invocations within the session (V1-H1).
 - H-21: linked-worktree path resolution (V3-X1) — `lock_path_for` uses worktree-local `relative_to` anchored at canonical (shared lock); `assert_git_clean_or_force` runs `git status` against the worktree's index; `_install_pre_commit_hook` resolves hooks dir via `git rev-parse --git-path hooks`.
 - H-22: `fig-binding` audit canonicalises both `# fig:` comment and savefig-name to `Path(...).stem` so helper-form `savefig(fig, "foo")` matches `# fig: report/img/foo.png` (V3-X2).
 - H-23: `nb execute --iopub-heartbeat-timeout <sec>` — heartbeat watchdog is configurable for long-silent simulations (default 30s for V2-C1 fast-fail intent on dead kernels) (V3-X3).
@@ -478,15 +516,15 @@ These were discovered during stress-test research (W1-W5) + example-project-meta
 - H-25: `nb diff` source-list normalisation — list-form `cell.source` is `"".join`-ed on a `copy.deepcopy` before nbdime to avoid its `diff_strings_linewise` AssertionError (V3-X5).
 - H-26: `op: insert_block` (UX-1) — block insert with N cells after a single anchor; reverse-iterates internally so the public order in YAML matches the post-execution order (no UUID prediction needed).
 - H-27: mixed `--cells` selectors (UX-2) — `id:abc,id:def,tag:t5` works via top-level comma split + union; bare-ID-only and single-mode forms preserved (backward compat).
-- H-28: `nb merge-preview` (UX-3) — pre-simulate cross-branch `.ipynb` merges in a tempdir; tags conflicts with surrounding `# %% [id]` cell-anchors. Exit 1 retains the tempdir for orch inspection.
-- H-29: `.notebook/jupytext_path` (UX-4) — `nb init` captures the resolved absolute jupytext binary so the merge-driver and pre-commit-hook subshells (which don't inherit `.venv/bin` in PATH) can find it.
-- H-30: `nb init`'s `jupytext --set-formats` step silently exits 0 with WARN if `~/.local/share/jupyter/` is read-only (sandbox/CI). Subsequent `nb batch`'s internal `jupytext --sync` is a no-op (no format registered). The `.ipynb` passes `nb validate` cleanly but the paired `.py` is absent — the pre-commit hook then hard-rejects the commit with `REJECT: <nb>.ipynb staged without paired <nb>.py`. **Mitigation**: agents MUST run `nb sync <nb>` as a final step after all implementation is complete and verify `<nb>.py` exists on disk before staging. `// TODO consider: make nb init HARD-FAIL (exit non-zero) when jupytext --set-formats returns non-zero, rather than WARN-and-continue — the current silent-success contract is the root cause of this footgun.`
-- H-31: **Plan-file location footgun — skill predates the firewall.** `nb batch --plan <p>` accepts any path, and every example in this doc historically shows `--plan plan.yml` (workdir-relative) or `--plan .notebook/<wave>.plan.yml` — both VIOLATE the superclaude firewall (`~/.claude/rules/20-tool-conventions.md` §Superclaude ↔ Local Codebase Firewall, which bans agent-tier artefacts from user project workdirs). `nb init` only gitignores `.notebook/snapshots/`; plan files dropped alongside (`*.plan.yml`) get tracked and ride into the commit. **Mitigation**: agents put plan YAMLs in `~/.claude/comms/<spawning-agent>/notebook-plans/<project>/<wave>.plan.yml` or `$TMPDIR/notebook-plans-<project>/<wave>.plan.yml`, and delete after `nb batch` succeeds. The DO/DON'T section above is the canonical rule; the historical examples below it are wrong on this dimension and should be read with the plan path substituted. `// TODO consider: nb batch --plan SHOULD warn (or refuse) when the resolved plan path is under the project repo root; nb init SHOULD gitignore '.notebook/*.plan.yml' alongside snapshots/.`
-- H-32: **The `.notebook/` directory itself violates the firewall — v2 redesign required.** `nb init` writes ALL skill state to `<project>/.notebook/` (kernel name, warm.py, jupytext_path, snapshots/, version, forbidden_imports.txt, merge-driver marker, requirements sha). Per the strict superclaude v2 rule no agent-tier artefacts may populate user project workdirs — not just plans. The current `.gitignore` discipline (gitignoring `.notebook/snapshots/` and untracking `.notebook/*` cached files) only addresses what reaches REMOTE; the local presence is itself the violation. **Interim mitigation** (until v2 lands): after running `nb init` or `nb batch`, immediately `rsync -a <project>/.notebook/ ~/.claude/notebook/<project>/ && rm -rf <project>/.notebook` and similarly archive the paired `<nb>.py`. Subsequent `nb batch` / `nb sync` calls will recreate `.notebook/` — repeat the move each session, OR avoid the skill until v2. **v2 roadmap** (canonical task): refactor `nb_io.canonical_repo_root` + `nb_init` to resolve all state paths under `$XDG_DATA_HOME/notebook-skill/<project-hash>/` (or `~/.claude/notebook/<project>/`); the project dir holds only the user-authored `.ipynb`. Pre-commit hook, merge driver, lock files all need re-anchoring. Tracked as H-32; no version assigned yet.
+- H-28: `nb merge-preview` (UX-3) — pre-simulate cross-branch `.ipynb` merges in a tempdir; tags conflicts with surrounding `# %% [id]` cell-anchors. Exit 1 retains the tempdir for agent inspection.
+- H-29: `.notebook/jupytext_path` (UX-4) — `nb init` captures the resolved absolute jupytext binary so the merge-driver and pre-commit-hook subshells (which don't inherit the venv's `Scripts/` or `bin/` in PATH) can find it.
+- H-30: `nb init`'s `jupytext --set-formats` step silently exits 0 with WARN if the Jupyter data dir (`%APPDATA%\jupyter` on Windows) is read-only (CI). Subsequent `nb batch`'s internal `jupytext --sync` is a no-op (no format registered). The `.ipynb` passes `nb validate` cleanly but the paired `.py` is absent — the pre-commit hook then hard-rejects the commit with `REJECT: <nb>.ipynb staged without paired <nb>.py`. **Mitigation**: agents MUST run `nb sync <nb>` as a final step after all implementation is complete and verify `<nb>.py` exists on disk before staging. `// TODO consider: make nb init HARD-FAIL (exit non-zero) when jupytext --set-formats returns non-zero, rather than WARN-and-continue — the current silent-success contract is the root cause of this footgun.`
+- H-31: **Plan-file location footgun — skill predates the firewall.** `nb batch --plan <p>` accepts any path, and every example in this doc historically shows `--plan plan.yml` (workdir-relative) or `--plan .notebook/<wave>.plan.yml` — both VIOLATE the superclaude firewall (`~/.claude/rules/20-tool-conventions.md` §Superclaude ↔ Local Codebase Firewall, which bans agent-tier artefacts from user project workdirs). `nb init` only gitignores `.notebook/snapshots/`; plan files dropped alongside (`*.plan.yml`) get tracked and ride into the commit. **Mitigation**: agents put plan YAMLs in `~/.claude/plans/notebook-plans/<project>/<wave>.plan.yml` (or `~/.claude/tmp/notebook-plans-<project>/<wave>.plan.yml`), and delete after `nb batch` succeeds. The DO/DON'T section above is the canonical rule; the historical examples below it are wrong on this dimension and should be read with the plan path substituted. `// TODO consider: nb batch --plan SHOULD warn (or refuse) when the resolved plan path is under the project repo root; nb init SHOULD gitignore '.notebook/*.plan.yml' alongside snapshots/.`
+- H-32: **The `.notebook/` directory itself violates the firewall — v2 redesign required.** `nb init` writes ALL skill state to `<project>/.notebook/` (kernel name, warm.py, jupytext_path, snapshots/, version, forbidden_imports.txt, merge-driver marker, requirements sha). Per the strict superclaude v2 rule no agent-tier artefacts may populate user project workdirs — not just plans. The current `.gitignore` discipline (gitignoring `.notebook/snapshots/` and untracking `.notebook/*` cached files) only addresses what reaches REMOTE; the local presence is itself the violation. **Interim mitigation** (until v2 lands): after running `nb init` or `nb batch`, immediately copy the contents of `<project>/.notebook/` to `~/.claude/notebook/<project>/`, delete that one named `<project>/.notebook` directory, and similarly archive the paired `<nb>.py`. Subsequent `nb batch` / `nb sync` calls will recreate `.notebook/` — repeat the move each session, OR avoid the skill until v2. **v2 roadmap** (canonical task): refactor `nb_io.canonical_repo_root` + `nb_init` to resolve all state paths under `~/.claude/notebook/<project>/`; the project dir holds only the user-authored `.ipynb`. Pre-commit hook, merge driver, lock files all need re-anchoring. Tracked as H-32; no version assigned yet.
 
 ---
 
 ## See also
 
-- WSL gotchas: `~/.claude/skills/wsl-gotchas/`
-- Project memory (per project): query `memory_db.py search "<project> gotchas mistakes" -k 6` (shared-projects tier)
+- Windows gotchas: `/windows-gotchas`
+- Project memory (per project): `mem search "<project> gotchas mistakes" -k 6` (shared-projects tier)
