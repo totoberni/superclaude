@@ -1,7 +1,7 @@
 ---
 name: w-debugger
 description: "Diagnoses and fixes runtime errors by checking existing gotchas first, then hypothesizing, fixing minimally, and recording the fix. Use proactively when encountering errors."
-tools: Read, Edit, Bash, Grep, Glob, Skill
+tools: Read, Edit, Bash, PowerShell, Grep, Glob, Skill
 model: sonnet
 # Default per rules/13-worker-first-mandate.md § Per-Worker Defaults.
 # Single-file: sonnet/medium/think. Escalate to opus + think harder for multi-file race / state-mutation bugs (spawn with model: opus override).

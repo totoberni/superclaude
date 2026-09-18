@@ -1,7 +1,7 @@
 ---
 name: w-merger
 description: "Resolves git merge conflicts by analyzing both sides, understanding intent from commit history, and producing correct resolutions. Use when merging branches produces conflicts."
-tools: Read, Edit, Write, Bash, Grep, Glob, Skill
+tools: Read, Edit, Write, Bash, PowerShell, Grep, Glob, Skill
 model: sonnet
 # Default per rules/13-worker-first-mandate.md § Per-Worker Defaults.
 # Trivial conflicts: sonnet/medium/none. Escalate to opus + think hard for semantic conflicts (spawn with model: opus override).

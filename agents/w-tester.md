@@ -1,7 +1,7 @@
 ---
 name: w-tester
 description: "Runs project test suites, captures output, classifies failures, and proposes remediation routing. Read-only — does NOT fix code. Returns structured remediation requests for the spawning agent to route."
-tools: Read, Bash, Grep, Glob, Skill
+tools: Read, Bash, PowerShell, Grep, Glob, Skill
 disallowedTools: Edit, Write, NotebookEdit
 model: sonnet
 memory: project

@@ -1,7 +1,7 @@
 ---
 name: w-refactorer
 description: "Performs targeted refactoring operations — extract function, rename, inline, simplify — with minimal blast radius. Use when restructuring code safely."
-tools: Read, Edit, Grep, Glob, Bash, Skill
+tools: Read, Edit, Grep, Glob, Bash, PowerShell, Skill
 model: sonnet
 # Default per rules/13-worker-first-mandate.md § Per-Worker Defaults.
 # sonnet/medium/none. Escalate to opus only for semantic merge / cross-cutting refactors (spawn with model: opus override).

@@ -1,7 +1,7 @@
 ---
 name: w-implementer
 description: "Implements code from a spec — writes new functions, modifies files, adds features. Use when you have a clear spec and need code written. Distinct from w-refactorer (restructures existing code) and w-debugger (fixes broken code)."
-tools: Read, Edit, Write, Bash, Grep, Glob, NotebookEdit, Skill
+tools: Read, Edit, Write, Bash, PowerShell, Grep, Glob, NotebookEdit, Skill
 model: sonnet
 memory: project
 maxTurns: 50
