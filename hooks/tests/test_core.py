@@ -155,3 +155,23 @@ def test_fs_path_keeps_case_and_resolves_forms():
     assert str(core.fs_path("/c/Users/X/Proj/A.py")).replace("\\", "/") == "C:/Users/X/Proj/A.py"
     assert str(core.fs_path("src/A.py", cwd="/c/Users/X/Proj")).replace("\\", "/") == "C:/Users/X/Proj/src/A.py"
     assert core.fs_path("~/x.md") == Path.home() / "x.md"
+
+
+def test_dispatch_emits_full_updated_input_and_later_guards_see_it(monkeypatch, capsys):
+    """Una riscrittura arriva come `updatedInput` completo e le guardie successive la vedono."""
+    monkeypatch.setattr(core, "_REGISTRY", [])
+    seen = {}
+    core.on("PreToolUse", name="a-fix")(lambda c: core.Result.rewrite({**c.tool_input, "content": "clean"}, "fixed it"))
+    core.on("PreToolUse", name="b-look")(lambda c: seen.setdefault("content", c.tool_input["content"]) and None)
+    assert core.dispatch(_ctx(file_path="C:/x/a.md", content="dirty")) == 0
+    out = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert out["updatedInput"] == {"file_path": "C:/x/a.md", "content": "clean"}
+    assert out["additionalContext"] == "fixed it" and seen["content"] == "clean"
+    assert "permissionDecision" not in out          # la riscrittura non deve aggirare i permessi
+
+
+def test_rewrite_is_ignored_outside_pretooluse(monkeypatch, capsys):
+    monkeypatch.setattr(core, "_REGISTRY", [])
+    core.on("PostToolUse", name="late")(lambda c: core.Result.rewrite({"content": "x"}))
+    assert core.dispatch(_ctx(event="PostToolUse")) == 0
+    assert capsys.readouterr().out == ""

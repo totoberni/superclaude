@@ -13,15 +13,55 @@ def denied(res):
     return res is not None and bool(res.block)
 
 
-@pytest.mark.parametrize("dash", [EM, EN])
-def test_dash_blocked_in_every_write_shape(mk, home, dash):
+def fixed(res, key="content"):
+    """Testo corretto restituito dalla guardia, oppure None se non ha riscritto nulla."""
+    if res is None or res.updated_input is None:
+        return None
+    assert not res.block, "i trattini si correggono, non si bloccano"
+    return res.updated_input.get(key)
+
+
+def test_em_dash_becomes_semicolon_in_every_write_shape(mk, home):
     p = win(home / "notes.md")
-    text = f"alpha {dash} beta"
-    assert denied(content_scan.handle(mk("Write", file_path=p, content=text)))
-    assert denied(content_scan.handle(mk("Edit", file_path=p, old_string="a", new_string=text)))
-    assert denied(content_scan.handle(mk("MultiEdit", file_path=p, edits=[{"new_string": "ok"}, {"new_string": text}])))
-    assert denied(content_scan.handle(mk("NotebookEdit", notebook_path=p, new_source=text)))
-    assert denied(content_scan.handle(mk("Agent", prompt=text)))
+    text = f"alpha {EM} beta"
+    assert fixed(content_scan.handle(mk("Write", file_path=p, content=text))) == "alpha; beta"
+    assert fixed(content_scan.handle(mk("Edit", file_path=p, old_string="a", new_string=text)), "new_string") == "alpha; beta"
+    assert fixed(content_scan.handle(mk("NotebookEdit", notebook_path=p, new_source=text)), "new_source") == "alpha; beta"
+    res = content_scan.handle(mk("MultiEdit", file_path=p, edits=[{"new_string": "ok"}, {"old_string": "z", "new_string": text}]))
+    assert [e["new_string"] for e in fixed(res, "edits")] == ["ok", "alpha; beta"]
+    assert fixed(res, "edits")[1]["old_string"] == "z"          # il resto dell'edit resta intatto
+
+
+SUBSTITUTIONS = [
+    ("a {EM} b", "a; b"),                      # inciso con spazi
+    ("a{EM}b", "a; b"),                        # inciso senza spazi
+    ("end {EM}", "end;"),                      # in coda alla riga: niente spazio finale
+    ("x {EM} y {EM} z", "x; y; z"),
+    ("pages 10{EN}20", "pages 10-20"),         # intervallo numerico
+    ("a {EN} b", "a; b"),                      # trattino medio usato come inciso
+    ("north{EN}south", "north-south"),
+    ("keep\nline {EM} two\n", "keep\nline; two\n"),
+    ("crlf {EM} line\r\nnext", "crlf; line\r\nnext"),   # i fine riga CRLF restano CRLF
+]
+
+
+@pytest.mark.parametrize("src,want", SUBSTITUTIONS)
+def test_substitution_rules(mk, home, src, want):
+    src = src.format(EM=EM, EN=EN)
+    res = content_scan.handle(mk("Write", file_path=win(home / "n.md"), content=src))
+    assert fixed(res) == want
+
+
+def test_rewrite_keeps_other_fields_and_notes_the_model(mk, home):
+    p = win(home / "notes.md")
+    res = content_scan.handle(mk("Write", file_path=p, content=f"a {EM} b {EN} c"))
+    assert res.updated_input["file_path"] == p                   # input COMPLETO, non solo il campo cambiato
+    assert res.context and "replaced 2" in res.context[0]
+
+
+def test_agent_prompts_are_not_scanned(mk):
+    """Un prompt di dispatch non è un documento: nessuna riscrittura, nessun blocco."""
+    assert content_scan.handle(mk("Agent", prompt=f"review {EM} carefully")) is None
 
 
 def test_dash_only_in_old_string_is_fine(mk, home):
@@ -31,11 +71,10 @@ def test_dash_only_in_old_string_is_fine(mk, home):
 
 def test_hyphen_and_plain_text_pass(mk, home):
     assert content_scan.handle(mk("Write", file_path=win(home / "a.md"), content="a - b -- c")) is None
-    assert content_scan.handle(mk("Agent", prompt="review src/a.py")) is None
 
 
 @pytest.mark.parametrize("form", [win, msys, str])
-def test_write_over_existing_file_scans_only_added_lines(mk, home, form):
+def test_write_over_existing_file_fixes_only_added_lines(mk, home, form):
     f = home / "code" / "proj" / "old.md"
     f.write_text(f"title\nold {EM} line\n", encoding="utf-8")
     keep = f"title\nold {EM} line\nnew clean line\n"
@@ -43,22 +82,34 @@ def test_write_over_existing_file_scans_only_added_lines(mk, home, form):
     moved = f"old {EM} line\ntitle\n"
     assert content_scan.handle(mk("Write", file_path=form(f), content=moved)) is None
     added = f"title\nold {EM} line\nanother {EN} one\n"
-    assert denied(content_scan.handle(mk("Write", file_path=form(f), content=added)))
+    want = f"title\nold {EM} line\nanother; one\n"
+    assert fixed(content_scan.handle(mk("Write", file_path=form(f), content=added))) == want
     edited = f"title\nold {EM} line changed\n"
-    assert denied(content_scan.handle(mk("Write", file_path=form(f), content=edited)))
+    assert fixed(content_scan.handle(mk("Write", file_path=form(f), content=edited))) == "title\nold; line changed\n"
 
 
 def test_write_relative_path_resolves_against_cwd(mk, home):
     f = home / "code" / "proj" / "old.md"
     f.write_text(f"old {EM} line\n", encoding="utf-8")
     assert content_scan.handle(mk("Write", file_path="old.md", content=f"old {EM} line\nok\n")) is None
-    assert denied(content_scan.handle(mk("Write", file_path="new.md", content=f"old {EM} line\n")))
+    assert fixed(content_scan.handle(mk("Write", file_path="new.md", content=f"old {EM} line\n"))) == "old; line\n"
 
 
-def test_edit_never_gets_the_grandfather_diff(mk, home):
+def test_edit_preserves_lines_already_in_old_string(mk, home):
+    """Per Edit il confronto è con `old_string`, non con il file su disco."""
     f = home / "code" / "proj" / "old.md"
     f.write_text(f"old {EM} line\n", encoding="utf-8")
-    assert denied(content_scan.handle(mk("Edit", file_path=win(f), new_string=f"old {EM} line")))
+    same = mk("Edit", file_path=win(f), old_string=f"old {EM} line", new_string=f"old {EM} line\nadded")
+    assert content_scan.handle(same) is None                     # riga grandfathered, invariata
+    grown = mk("Edit", file_path=win(f), old_string=f"old {EM} line", new_string=f"old {EM} line\nnew {EM} one")
+    assert fixed(content_scan.handle(grown), "new_string") == f"old {EM} line\nnew; one"
+    assert fixed(content_scan.handle(mk("Edit", file_path=win(f), new_string=f"old {EM} line")), "new_string") == "old; line"
+
+
+def test_firewall_still_blocks_after_a_dash_rewrite(mk, home):
+    ctx = mk("Write", file_path=win(home / "code" / "proj" / "README.md"), content=f"see ~/.claude/rules {EM} internal")
+    res = content_scan.handle(ctx)
+    assert denied(res) and "firewall" in res.block
 
 
 FORBIDDEN = [

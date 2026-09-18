@@ -223,10 +223,18 @@ class Result:
     block: str | None = None                 # motivo del blocco (solo PreToolUse)
     context: list[str] = field(default_factory=list)   # testo per il modello
     name: str = ""
+    # Input corretto da passare allo strumento al posto dell'originale (solo
+    # PreToolUse). Correggere sul posto costa molto meno di un blocco, che
+    # obbliga il modello a rigenerare tutto l'output.
+    updated_input: dict[str, Any] | None = None
 
     @staticmethod
     def deny(reason: str) -> "Result":
         return Result(block=reason)
+
+    @staticmethod
+    def rewrite(tool_input: dict[str, Any], note: str = "") -> "Result":
+        return Result(updated_input=tool_input, context=[note] if note else [])
 
     @staticmethod
     def note(text: str) -> "Result":
@@ -324,6 +332,7 @@ def dispatch(ctx: Ctx) -> int:
     """Esegue gli handler dell'evento e scrive UNA risposta. Ritorna l'exit code."""
     blocks: list[str] = []
     notes: list[str] = []
+    rewritten = False
     for event, tools, name, fn in _REGISTRY:
         if event != ctx.event or (tools and ctx.tool not in tools):
             continue
@@ -337,6 +346,10 @@ def dispatch(ctx: Ctx) -> int:
             continue
         if not res:
             continue
+        if isinstance(res.updated_input, dict) and ctx.event == "PreToolUse":
+            # Le guardie successive devono ispezionare il testo già corretto
+            ctx.tool_input = res.updated_input
+            rewritten = True
         if res.block:
             if mode == "block" and ctx.event == "PreToolUse":
                 blocks.append(f"[{name}] {res.block}")
@@ -348,7 +361,12 @@ def dispatch(ctx: Ctx) -> int:
         # Exit 2 + stderr: il motivo torna al modello e lo strumento non parte
         sys.stderr.write("GUARD-BLOCK " + "\n".join(blocks) + "\n")
         return 2
-    if notes:
-        out = {"hookSpecificOutput": {"hookEventName": ctx.event, "additionalContext": "\n\n".join(notes)}}
-        sys.stdout.write(json.dumps(out, ensure_ascii=False))
+    if notes or rewritten:
+        specific: dict[str, Any] = {"hookEventName": ctx.event}
+        if rewritten:
+            # Sempre l'input COMPLETO: vale sia se Claude Code lo sostituisce sia se lo fonde
+            specific["updatedInput"] = ctx.tool_input
+        if notes:
+            specific["additionalContext"] = "\n\n".join(notes)
+        sys.stdout.write(json.dumps({"hookSpecificOutput": specific}, ensure_ascii=False))
     return 0
