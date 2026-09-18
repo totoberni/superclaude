@@ -615,6 +615,7 @@ def test_scan_module_api_with_explicit_path(empty_db):
 def test_init_creates_missing_parent_directory(tmp_path):
     """Prima installazione: la cartella del DB non esiste ancora e va creata."""
     import subprocess
+    from pathlib import Path
     import sys
     db = tmp_path / "fresh" / "nested" / ".memory.db"
     script = Path(__file__).resolve().parent / "memory_db.py"
