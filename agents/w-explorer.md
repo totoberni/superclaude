@@ -72,6 +72,6 @@ For single findings, concise prose with citations is fine:
 
 End with a verdict line: `FOUND` (with N hits), `PARTIAL` (some hits, some gaps), or `NOT_FOUND` (with patterns tried).
 
-## Report Contract (wf-skills)
+## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, budget) and `skills/_shared/verdict-schema.md` (token shapes).

@@ -21,8 +21,7 @@ index files are deprecated as the authoritative source — the DB is the single 
 ### Step 1: Show DB stats (always run first)
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py stats
+mem stats
 ```
 
 Prints total rows, per-tier counts, per-type counts, and last-updated timestamp.
@@ -33,20 +32,16 @@ List all entries (optionally filtered):
 
 ```bash
 # All entries
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list
+mem list
 
 # Filter by tier: instance | shared | class | global
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier shared
+mem list --tier shared
 
 # Filter by type: feedback | project | reference | user
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --type project
+mem list --type project
 
 # Both filters combined
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier shared --type feedback
+mem list --tier shared --type feedback
 ```
 
 Each row shows: `id | name | tier | type | description (truncated)`.
@@ -55,16 +50,13 @@ Each row shows: `id | name | tier | type | description (truncated)`.
 
 ```bash
 # By name (slug)
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py get --name <name>
+mem get --name <name>
 
 # By numeric id
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py get --id <N>
+mem get --id <N>
 
 # Rendered HTML (for rich text / markdown notation)
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py get --name <name> --html
+mem get --name <name> --html
 ```
 
 ## Output Format
@@ -100,7 +92,6 @@ The tiered memory architecture is unchanged; tiers are now DB columns, not direc
 
 - When you need to browse what memories exist without doing a keyword search
 - After bulk memory promotion via `/lt-mem` (verify entries appeared in DB)
-- Before `/super-health --complete` audit (ensures DB is populated)
 - Manually when you want an overview of memory coverage by tier or type
 
 ## Cross-References

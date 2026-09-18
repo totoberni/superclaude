@@ -63,10 +63,10 @@ Wait for explicit user approval before ANY implementation. If the user says "loo
 - **Incremental validation** — present design, get approval, then build
 - **No premature implementation** — the HARD-GATE is non-negotiable
 
-## Loop integration (converge)
+## Optional reviewer pre-screen
 
-`brainstorm` is a design-alignment skill whose convergence criterion is HUMAN APPROVAL, not an automated seal. A `/converge` SEAL must NEVER replace the user's explicit go-ahead at step 5: the HARD-GATE above is unconditional and outranks any converge binding.
+`brainstorm` is a design-alignment skill whose acceptance criterion is HUMAN APPROVAL, not an automated review. No reviewer verdict may EVER replace the user's explicit go-ahead at step 5: the HARD-GATE above is unconditional.
 
-The step-5 revise-and-re-present cycle may optionally route each proposal revision through one adversarial `w-reviewer` pre-screen, to sharpen the options before the user sees them. That pre-screen is advisory only and never gates anything; the terminal gate stays the user's explicit approval, full stop. `brainstorm` never emits or accepts a SEAL in place of human approval, and no VERDICT line from the optional pre-screen substitutes for that approval either.
+The step-5 revise-and-re-present cycle may optionally route a proposal revision through one adversarial `w-reviewer` pre-screen, to sharpen the options before the user sees them. That pre-screen is a single pass, advisory only, and never gates anything; the terminal gate stays the user's explicit approval, full stop. No `VERDICT:` line from the optional pre-screen substitutes for that approval.
 
-Loop orchestration (dispatching the optional pre-screen reviewer, per `/review-dispatch`) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention. This skill drives no loop of its own; its own `allowed-tools` cover only the design-presentation flow above.
+Dispatching the optional pre-screen reviewer happens in the caller's context (meta, or a session that can spawn workers). This skill's own `allowed-tools` cover only the design-presentation flow above.

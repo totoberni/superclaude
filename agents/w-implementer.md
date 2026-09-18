@@ -23,7 +23,7 @@ You are a focused implementation worker. You receive a spec and produce working 
 
 **Auto-detection**: count files in spec scope. If the spawn prompt under-specifies scope and you discover during step 2 that the change spans >5 files, **STOP and escalate** rather than continuing in small-scope mode. The spawning agent must re-dispatch with the larger model.
 
-**Escalation in spawn prompt**: when meta/orch knows the scope is large, the spawn prompt should specify the upgraded model + `effort:` (see `13-worker-first-mandate.md` § Critical Implementation Note for how depth reaches workers).
+**Escalation in spawn prompt**: when meta knows the scope is large, the spawn prompt should specify the upgraded model + `effort:` (see `13-worker-first-mandate.md` § Critical Implementation Note for how depth reaches workers).
 
 ## Core Philosophy
 
@@ -96,6 +96,6 @@ Update your instance memory with implementation lessons learned: surprising code
 
 Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
-## Report Contract (wf-skills)
+## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

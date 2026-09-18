@@ -160,6 +160,6 @@ Update your memory with codebase patterns and recurring issues you discover.
 
 Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
-## Report Contract (wf-skills)
+## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (VERDICT token, not STATUS; checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

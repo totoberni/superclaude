@@ -51,7 +51,7 @@ Brief: nuke `__pycache__`, selectively restore compose-dirtied host files (from 
 
 ## Failure Classification
 
-Every failure falls into exactly one bucket. **SOT for the 5-category schema** (referenced by `orch.md` § Test Failure Protocol § Step 4).
+Every failure falls into exactly one bucket. **SOT for the 5-category schema**.
 
 | Category | Signal | Route To |
 |----------|--------|----------|
@@ -109,6 +109,6 @@ In all three cases, return what you tried, the exact command output, and a one-l
 
 Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
-## Report Contract (wf-skills)
+## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

@@ -6,7 +6,7 @@ The skill does not hard-code per-project paths. Every subcommand operating on an
 
 1. **Project root**: the nearest ancestor directory of the caller's CWD containing a git repository, a `docs/` folder, or a `~/.claude/plans/<name>/plan.md` entry.
 
-2. **Project memory**: query the DB for accumulated traps: `memory_db.py search '<name> gotchas mistakes wins' -k 8` or `list --tier shared-projects`. A review/design/gap audit is the right moment to verify none were silently re-introduced. (For SELECTING a bounded briefing subset rather than a full recall, see [memory-distill.md](memory-distill.md).)
+2. **Project memory**: query the DB for accumulated traps: `mem search '<name> gotchas mistakes wins' -k 8` or `mem list --tier shared-projects`. A review/design/gap audit is the right moment to verify none were silently re-introduced. (For SELECTING a bounded briefing subset rather than a full recall, see [memory-distill.md](memory-distill.md).)
 
 3. **Markscheme**: prefer `~/.claude/plans/<project>/markscheme.md`, fall back to `<project-root>/docs/markscheme.md`, fall back to `--markscheme <path>`. None found -> mode defaults to A; state "no markscheme discovered" and apply only the principle-level gauntlet -- do not invent tier weights.
 

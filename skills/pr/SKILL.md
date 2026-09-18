@@ -4,7 +4,7 @@ description: "Use when creating a GitHub pull request with a structured summary"
 category: workflow
 user-invocable: true
 argument-hint: "[base-branch]"
-allowed-tools: Bash, Read
+allowed-tools: Bash, Read, Write
 ---
 
 # PR Workflow
@@ -20,9 +20,8 @@ Create a GitHub pull request for the current branch.
 5. Draft PR:
    - Title: under 70 chars, descriptive
    - Body: Summary bullets + Test plan checklist
-6. Create PR:
-   ```bash
-   gh pr create --title "<title>" --body "$(cat <<'EOF'
+6. Create PR. Write the body to `~/.claude/tmp/pr-body.md` with the Write tool:
+   ```markdown
    ## Summary
    <1-3 bullet points>
 
@@ -30,17 +29,17 @@ Create a GitHub pull request for the current branch.
    - [ ] ...
 
    Co-Authored-By: Claude <noreply@anthropic.com>
-   EOF
-   )"
+   ```
+   then pass it as a file (works identically in Git Bash and PowerShell):
+   ```bash
+   gh pr create --title "<title>" --body-file ~/.claude/tmp/pr-body.md
    ```
 7. Return the PR URL
 
-## Loop integration (converge)
+## Pre-publish self-check
 
-`pr` is a ONE-SHOT ACTION: a single invocation drafts and creates the pull request (steps 1-7 above). It has no round-by-round REWORK cycle and emits no SEAL; a full `/converge` loop does not apply to the act of publishing the PR itself.
+`pr` is a ONE-SHOT ACTION: a single invocation drafts and creates the pull request (steps 1-7 above). It has no REWORK cycle.
 
-Before running `gh pr create` (step 6), run ONE optional single self-check on the drafted description: does the Summary accurately reflect the actual diff gathered in step 3, and does the Test plan checklist cover the changed surface? This is a single pass, not a loop: one fresh look before publishing, no VERDICT/REWORK cycling.
+Before running `gh pr create` (step 6), run ONE optional single self-check on the drafted description: does the Summary accurately reflect the actual diff gathered in step 3, and does the Test plan checklist cover the changed surface? This is a single pass: one fresh look before publishing.
 
-Iterating the underlying CODE to a sealed quality bar is `/converge`'s job, run separately via `/fix-issue` or `/review`; `pr` itself only publishes what already exists and stays one-shot regardless.
-
-Loop orchestration (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention.
+Reviewing the underlying CODE is a separate job, run via `/fix-issue` or `/review`; `pr` itself only publishes what already exists.

@@ -35,7 +35,7 @@ Every refactoring must IMPROVE code health on at least one dimension: DRY, reada
 2. **Survey** — Find ALL references to the target across the codebase:
    - `grep -rn` with word boundaries for function/variable names
    - Check: imports, string references, comments, docs, tests, config files
-3. **Blast radius** — List every file that will change. If >5 files, confirm with orchestrator before proceeding
+3. **Blast radius** — List every file that will change. If >5 files, confirm with the spawning agent before proceeding
 4. **Plan** — Describe the transformation for each file before editing
 5. **Execute** — Make changes file by file, in dependency order (utilities first, callers last)
 6. **Test** — Run all tests that cover changed code after each file
@@ -89,7 +89,7 @@ Flag and address these violations:
 - **3 attempts then escalate**: if 3 different refactor approaches all failed (broken tests, scope creep, ambiguous intent), STOP and escalate
 
 Additional commit discipline:
-- If no tests exist, warn the orchestrator before proceeding
+- If no tests exist, warn the spawning agent before proceeding
 - Use `refactor:` conventional commit prefix — never mix with `feat:` or `fix:`
 - Prefer small, incremental commits over one large refactoring commit
 - If a refactoring reveals a bug, fix the bug in a separate `fix:` commit
@@ -130,6 +130,6 @@ STOP and escalate when:
 
 Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
-## Report Contract (wf-skills)
+## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

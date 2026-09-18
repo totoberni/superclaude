@@ -1,26 +1,26 @@
 ---
 name: sanity-check
-description: "Use when auditing an orch's changes for test-weakening or scope drift."
+description: "Use when auditing a worker's or swarm's changes for test-weakening or scope drift."
 category: meta
 user-invocable: true
-argument-hint: "<orch-name> [--loop]"
+argument-hint: "<repo-path> <branch-or-commit-range> [task-brief-path]"
 context: fork
 agent: w-reviewer
 ---
 
-Sanity-check the changes made by orch **$ARGUMENTS**.
+Sanity-check the changes identified by **$ARGUMENTS**.
 
 ## Setup
 
-1. Read `~/.claude/comms/$ARGUMENTS/bootstrap.md` to get the orch's repo path, branch, and file scope
-2. Read `~/.claude/comms/$ARGUMENTS/directives.md` to understand what the orch was told to do
-3. Read `~/.claude/comms/$ARGUMENTS/state.md` (the per-orch state file, colocated with the orch's directives and reports per rules/12) to see what the orch claims it did. If it is absent, fall back to the commit range in the directive and note the missing state file.
+1. Parse `$ARGUMENTS` for the absolute repo path and the branch or commit range under audit
+2. Read the task brief the worker (or swarm) was given, to understand what it was told to do and its declared file scope. If a brief path is supplied, read it; otherwise ask the caller for the brief or the declared scope
+3. Read the worker's `STATUS:` return (or its checkpoint file, if one was named) to see what it claims it did. If it is absent, fall back to the commit range and note the missing return.
 
 ## Identify the changes
 
-Determine the orch's fork point and diff:
-- If the orch is on a worktree branch: `git -C <repo> log --oneline <fork-commit>..HEAD` and `git -C <repo> diff <fork-commit>..HEAD`
-- If on the main branch: use the commit range from the state file
+Determine the fork point and diff:
+- If the work is on a worktree branch: `git -C <repo> log --oneline <fork-commit>..HEAD` and `git -C <repo> diff <fork-commit>..HEAD`
+- If on the main branch: use the supplied commit range
 
 ## Check each change against these criteria
 
@@ -31,9 +31,9 @@ Determine the orch's fork point and diff:
 - Parametrized test matrices with items removed
 
 ### 2. Scope Violations
-- Files modified outside the orch's declared file scope (from directive)
-- `conftest.py` touched by an orch that doesn't own it
-- Test files belonging to another orch modified
+- Files modified outside the declared file scope (from the task brief)
+- `conftest.py` touched by a worker that doesn't own it
+- Test files belonging to another worker modified
 
 ### 3. Generated File Pollution
 - `docs/architecture/`, `model.json`, `diagram.mmd`, `index.html` regenerated from a worktree (reflects worktree state, not real system)
@@ -45,16 +45,16 @@ Determine the orch's fork point and diff:
 - Comments weakened or removed
 
 ### 5. Behavioral Changes to Production Code
-- Source files under `services/` or `scripts/` modified when the directive only asked for test fixes
+- Source files under `services/` or `scripts/` modified when the task brief only asked for test fixes
 - New functionality added (scope creep)
 - Error handling changed
 
 ## Output Format
 
-Line 1 of the return is the machine-readable token, on every run, so a driver can decide the round even when the tail is truncated (verdict-first, `verdict-schema.md`):
+Line 1 of the return is the machine-readable token, on every run, so the caller can read the verdict even when the tail is truncated (verdict-first, `verdict-schema.md`):
 
 ```
-VERDICT: REWORK|CLEAN blocking=N major=N minor=N round=K
+VERDICT: REWORK|CLEAN blocking=N major=N minor=N
 ```
 
 The human-readable body follows beneath it. For each finding:
@@ -65,19 +65,11 @@ The human-readable body follows beneath it. For each finding:
   Verdict: <OK if justified, REVERT if wrong, INVESTIGATE if unclear>
 ```
 
-Severity levels: OK (correct change), CONCERN (needs justification), BAD (should be reverted), SCOPE (outside orch's mandate).
+Severity levels: OK (correct change), CONCERN (needs justification), BAD (should be reverted), SCOPE (outside the worker's mandate).
 
 End with a summary table and overall verdict (CLEAN / NEEDS_FIXES / BLOCK_MERGE).
 
-## Loop integration (converge)
-
-sanity-check is the `test-integrity` reviewer in `/review-dispatch`; the five-category checklist above is its rubric. This section states how it plugs into the `/converge` engine; the base one-shot reviewer behaviour above is unchanged. Loop orchestration (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the conductor's context (meta/orch, which holds Agent and Skill); sanity-check forks to w-reviewer as the per-round test-integrity reviewer only, never the loop driver, and never seals itself.
-
-### (a) As a reviewer (invoked each round by /converge)
-
-`/converge` and `/review-dispatch` resolve sanity-check as the `test-integrity` reviewer and dispatch it once per round against the current diff, isolated (artefact + diff + rubric only; never the producer's reasoning or a prior clean verdict) and re-examining the CURRENT state with fresh evidence THIS round (no pre-approval, `verdict-schema.md`).
-
-Every run emits the machine token on line 1 (see Output Format), in ADDITION to the human-readable per-finding blocks and summary table, so the loop is machine-decidable. The counts map onto the verdict-schema severity row:
+The counts map onto the verdict-schema severity row:
 
 | sanity-check verdict tier | token field |
 |---|---|
@@ -85,26 +77,14 @@ Every run emits the machine token on line 1 (see Output Format), in ADDITION to 
 | NEEDS_FIXES (e.g. a CONCERN awaiting justification) | `major` |
 | non-gating note | `minor` |
 
-`VERDICT: CLEAN` requires `blocking=0 major=0` (default bar); anything above emits `VERDICT: REWORK`. `round=K` is the loop round in progress (`round=1` for a one-shot review outside a loop). The conductor quotes the VERDICT line verbatim into the ledger; only sanity-check authors the token, never the conductor or the orch under review.
+`VERDICT: CLEAN` requires `blocking=0 major=0` (default bar); anything above emits `VERDICT: REWORK`.
 
-**Anti-hacking sweep.** Categories 1 (Test Weakening) and 4 (Semantic Drift) ARE the anti-hacking sweep that `verdict-schema.md` marks as an automatic `blocking` finding in any scope: test special-casing, weakened assertions, expected values matched to broken output, silently removed coverage. Any hit forces `VERDICT: REWORK` with `blocking>=1` regardless of the rest of the diff, and it runs every round without being asked.
+## Single-pass review
 
-### (b) --loop (conductor-driven shorthand)
+A sanity-check is one dispatch and one verdict. It is isolated (artefact + diff + rubric only; never the producer's reasoning or a prior clean verdict) and examines the CURRENT state with fresh evidence gathered in this review (no pre-approval, `verdict-schema.md`). The caller reads the `VERDICT:` line, addresses the findings, and stops; a re-review happens only if the owner or meta judges it necessary. Only sanity-check authors the token, never the caller or the worker under review; a caller that relays the result quotes the VERDICT line verbatim.
 
-**Authority: meta + orch only**, the same as `/converge`. A `w-*` worker cannot drive a loop, so `--loop` invoked from a worker is a no-op error; the base one-shot review carries no such restriction.
-
-sanity-check does NOT reimplement a bespoke self-sealing loop, and never seals itself. To iterate to CLEAN, the conductor (meta/orch) runs `/converge` with artifact-class `test-integrity`; sanity-check is the round reviewer each round (emitting its VERDICT line), and `/converge` supplies the terminal `SEAL: ACCEPTED` from a FRESH auditor of a different identity than any round reviewer (two-token protocol; sanity-check never seals itself). `--loop` is therefore a shorthand that prints the `/converge` test-integrity invocation for the conductor to run; it never self-arms (DEC-R2).
-
-The shorthand prints this, then STOPS:
-
-```
-/converge <diff-or-artefact under review> --binding B1
-```
-
-resolved with artifact-class `test-integrity`, which selects sanity-check as the per-round reviewer via `/review-dispatch`. `/converge` then owns every loop mechanic (rounds, ledger, the 8 loop rules, caps, goal-string emission) and emits the `/goal` block whose clause 1 requires a `SEAL: ACCEPTED blocking=0 major=0 minor=0` (nits=0 at the gate or strict bar) quoted verbatim from a FRESH holistic auditor whose identity differs from every round reviewer, never from sanity-check's own `VERDICT: CLEAN`.
+**Anti-hacking sweep.** Categories 1 (Test Weakening) and 4 (Semantic Drift) ARE the anti-hacking sweep that `verdict-schema.md` marks as an automatic `blocking` finding in any scope: test special-casing, weakened assertions, expected values matched to broken output, silently removed coverage. Any hit forces `VERDICT: REWORK` with `blocking>=1` regardless of the rest of the diff, and it runs on every review without being asked.
 
 ## Cross-References
 
 - Token protocol and severity map (BLOCK_MERGE/NEEDS_FIXES/CLEAN to blocking/major/minor): `~/.claude/skills/_shared/verdict-schema.md`
-- Convergence engine that consumes this verdict each round: `~/.claude/skills/converge/SKILL.md`
-- Reviewer resolution (`test-integrity` class to this rubric): `~/.claude/skills/review-dispatch/SKILL.md`

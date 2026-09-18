@@ -13,7 +13,7 @@ Every row carries a tier. Choose it with the Placement Rule below.
 | `instance/<agent>` | A single agent's own memory | Session recovery, agent-specific state |
 | `shared-projects` | One project, all agents | Project gotchas, wins, decisions |
 | `shared-global` | Cross-project, all agents | Cross-project lessons, tool patterns |
-| `class` | One agent class | Agent-class patterns (orch, meta, w-debugger, etc.) |
+| `class` | One agent class | Agent-class patterns (meta, w-debugger, other worker classes) |
 
 ## Types
 
@@ -37,7 +37,7 @@ Place a memory at the most specific tier that covers all its consumers:
 
 ## Access
 
-- **Query**: `memory_db.py search | get | similar | list`, or the `~/.claude/bin/mem` shorthand (`mem search|get|similar|list`). Search discipline and the get-by-name resolution ladder live in rules/12 § Memory Access, not here.
+- **Query**: `mem search | get | similar | list` (`mem` is the on-PATH shim for the `memory_db.py` CLI). Search discipline and the get-by-name resolution ladder live in rules/12 § Memory Access, not here.
 - **Write**: only through the memory skills, never by hand-editing the DB or any `.md` file.
 
   | Skill | Role |
@@ -55,9 +55,9 @@ Memories move in place, preserving the row and its embedding (no re-embed, no du
 
 | Operation | Effect |
 |-----------|--------|
-| `memory_db.py retier --tier <t>` | Deliberately move a row to a target tier |
-| `memory_db.py archive` | Move a row to the `archive` tier: excluded from default search and recall, still queryable via `--all` or `--tier archive`, reversible with `--unarchive` |
-| `memory_db.py prune` | Delete a row plus its FTS and vector entries |
+| `mem retier --name <slug> --tier <t>` | Deliberately move a row to a target tier |
+| `mem archive --name <slug>` | Move a row to the `archive` tier: excluded from default search and recall, still queryable via `--all` or `--tier archive`, reversible with `--unarchive` |
+| `mem prune --name <slug>` | Delete a row plus its FTS and vector entries |
 
 Archival replaces the old per-cell `archive/` subdirectories: an archived row is kept for context on past decisions, not deleted.
 

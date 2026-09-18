@@ -18,7 +18,7 @@ overlap (token-set Jaccard of the bodies). Use it to:
 - find rows that are **semantically related but worded differently** — which pure keyword
   (FTS/BM25) search misses.
 
-The logic lives entirely in `memory_db.py similar` (the SOT); this skill just invokes it.
+The logic lives entirely in `mem similar` (`memory_db.py`, the SOT); this skill just invokes it.
 
 **Args**: $ARGUMENTS
 
@@ -27,13 +27,12 @@ The logic lives entirely in `memory_db.py similar` (the SOT); this skill just in
 ### 1. Resolve the anchor
 
 The caller names the anchor memory by `--name <slug>` or `--id <n>`. If unknown, find the
-slug first with `memory-search` (or `memory_db.py search '<topic>'`), then pass its `--name`.
+slug first with `memory-search` (or `mem search "<topic>"`), then pass its `--name`.
 
 ### 2. Run `similar`
 
 ```bash
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  similar --name '<slug>' -k 8
+mem similar --name "<slug>" -k 8
 ```
 
 - `--id <n>` is accepted instead of `--name`.

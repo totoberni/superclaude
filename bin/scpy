@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Shim Git Bash: tutta la logica vive in sc_shim.py
+exec "$HOME/.claude/.venv/Scripts/python.exe" "$HOME/.claude/bin/sc_shim.py" scpy "$@"

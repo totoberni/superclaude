@@ -50,7 +50,7 @@ Criterion 6 goes **N/A** when `(julianday(MAX(updated)) - julianday(MIN(updated)
 ## DB-health thresholds (replace MD line budgets)
 
 These are the tunable constants behind the criteria above (env-overridable; kept in sync
-with `scan-mem-matrix.sh`). They are the DB analogue of the old per-tier LINE budgets.
+with `memory/scan_mem_matrix.py`). They are the DB analogue of the old per-tier LINE budgets.
 
 | Constant | Default | Env override | Meaning |
 |----------|---------|--------------|---------|
@@ -65,37 +65,36 @@ with `scan-mem-matrix.sh`). They are the DB analogue of the old per-tier LINE bu
 > is below `STALE_DAYS`, criterion 6 is reported **N/A** and excluded from the renormalized
 > score (see "N/A renormalization" above) rather than awarded a free 10. Once organic
 > writes spread the `updated` timestamps past `STALE_DAYS`, the criterion becomes scorable.
-> The `memory_db.py stats` row counts are the ground truth to sanity-check against.
+> The `mem stats` row counts are the ground truth to sanity-check against.
 
 ## Procedure
 
 ## Implementation (canonical runner)
 
-`bash ~/.claude/scripts/mem-health.sh $ARGUMENTS` is the authoritative deterministic
-implementation of all 6 criteria below (it calls `scan-mem-matrix.sh` for Step 0 and queries
+`scpy memory/mem_health.py $ARGUMENTS` is the authoritative deterministic
+implementation of all 6 criteria below (it calls `memory/scan_mem_matrix.py` for Step 0 and queries
 the DB directly for every scored signal — no MD files read). It supports `--quick` (skips the
 near-dup scan, awards criterion 3 full) and `--verbose` (appends the per-tier signal table),
 prints a per-criterion breakdown, prints the v3-trigger lines informationally (they do NOT
 change the 6-criterion /100), and emits a final `SCORE: <int>/100` line. Run it and present
 its output. The criteria and threshold tables above document what the script implements.
 
-Fast path: bash + sqlite3 CLI only — NO python, NO embedding model — so it stays fail-safe
-under `set -uo pipefail` and degrades (not crashes) when sqlite3 or the DB is absent.
+Fast path: Python standard-library `sqlite3` module only — NO embedding model, NO `sqlite_vec`
+extension — so it stays fail-safe and degrades (not crashes) when the DB is absent.
 
 **Memory storage (v3)**: all memory is DB-resident at `~/.claude/agent-memory/.memory.db`.
-Use `memory_db.py stats` to confirm DB population before interpreting health scores — a low
-score may indicate the DB needs an init/sync rather than that memories are genuinely missing.
+Use `mem stats` to confirm DB population before interpreting health scores — a low
+score may indicate the DB needs an init rather than that memories are genuinely missing.
 `stats` is also the authoritative `memories == fts == vec` triple check (it loads `sqlite_vec`,
-which plain sqlite3 cannot):
+which the plain `sqlite3` module cannot):
 
-```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py stats
+```
+mem stats
 ```
 
 ### Step 0: Collect (DB signals)
-```bash
-bash ~/.claude/scripts/scan-mem-matrix.sh --budgets
+```
+scpy memory/scan_mem_matrix.py --budgets
 ```
 Emits per-tier rows/bytes/biggest/fat/stale + an FTS-cohesion + vec-presence integrity line.
 This replaces the old per-file LOC scan; the denominator for ratio criteria is `COUNT(*) FROM memories`.
@@ -110,7 +109,7 @@ cap used to give. The denominator stays all rows; exempt rows are reported via `
 Full 20 iff `COUNT(*) FROM memories == COUNT(*) FROM memories_fts_docsize`, else proportional.
 DB analogue of "no broken refs": every content row must have exactly one indexed doc.
 `memories_fts` is external-content (`content='memories'`) so its `COUNT(*)` is vacuous —
-`memories_fts_docsize` is the falsifiable check (mirrors `super-health.sh`).
+`memories_fts_docsize` is the falsifiable check.
 
 ### Step 3: No near-duplicate rows (20 pts)
 Skip if `--quick` (award 20). Near-dup = two bodies whose lowercased word-set token-Jaccard is
@@ -121,9 +120,9 @@ DB analogue of "no cross-cell dupes" — surfaces consolidation candidates for `
 > so same-numbered IDs in different rows do NOT false-trigger.
 
 ### Step 4: vec store soundness (15 pts)
-Full 15 iff `memories_vec` exists in `sqlite_master`, else 0. It is a vec0 VIRTUAL table — plain
-sqlite3 cannot `COUNT(*)` it, so PRESENCE is the fail-safe check. DB analogue of "load-order paths
-valid": the vector-search plumbing is wired. For the actual row count, use `memory_db.py stats`.
+Full 15 iff `memories_vec` exists in `sqlite_master`, else 0. It is a vec0 VIRTUAL table — the plain
+`sqlite3` module cannot `COUNT(*)` it, so PRESENCE is the fail-safe check. DB analogue of "load-order paths
+valid": the vector-search plumbing is wired. For the actual row count, use `mem stats`.
 
 ### Step 5: Metadata complete (15 pts)
 `(rows - malformed) / rows * 15`, where malformed = empty/NULL `name`, `description`, or `type`.
@@ -154,7 +153,7 @@ SCORE: NN/100
 ```
 The penultimate line surfaces the renormalization basis (earned over scorable MAXPTS); when a
 criterion is N/A the excluded points are named so the dropped denominator is never silent.
-`--verbose` additionally appends the per-tier signal table from `scan-mem-matrix.sh`.
+`--verbose` additionally appends the per-tier signal table from `memory/scan_mem_matrix.py`.
 
 ## v3 Triggers (informational — appended by the runner if any fire)
 
@@ -164,7 +163,7 @@ Re-expressed against DB signals (parallel to the old MD-corpus triggers):
 |---------|-----------|--------|
 | Corpus too large | total `SUM(LENGTH(text))` > `CORPUS_BYTES_MAX` (default 1.5 MB) | Run `/lt-mem --quick all` |
 | Oversized rows present | any **non-exempt** row `LENGTH(text) > OVERSIZE_BYTES` (budget-exempt rows excluded) | `/lt-mem --compact` to consolidate |
-| FTS index desync | `memories != memories_fts_docsize` | Rebuild via `memory_db.py init` |
+| FTS index desync | `memories != memories_fts_docsize` | Rebuild via `mem init` |
 | Stale rows accumulating | stale fraction > 10% (**suppressed when criterion 6 is N/A**) | `/lt-mem` archive pass |
 
 If none fire: "v3 Triggers: None. DB within thresholds."

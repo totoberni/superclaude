@@ -4,14 +4,14 @@ Consumed by: /good-idea, /mistake (Step 1 "Detect Agent Class + Gather Evidence"
 
 ## Step 1: Detect Agent Class + Gather Evidence
 
-Infer class from the caller's identity: `o-`/`orch` -> `orch`, `scaf` -> `scaf`, `meta` -> `meta`, `w-<type>-N` -> `w-<type>`. Check whether the class tier already has entries (`memory_db.py list --tier class` filtered to your class) -- if so, dual-write to class tier too.
+Infer class from the caller's identity: `meta` -> `meta`, `w-<type>-N` -> `w-<type>`. Check whether the class tier already has entries (`mem list --tier class` filtered to your class) -- if so, dual-write to class tier too.
 
 Read in parallel, varying the query by what the retrospective hunts for:
 
-| Consumer | git query | comms query (broker) | semantic fallback |
-|---|---|---|---|
-| /good-idea (wins) | `log --oneline -20` + `diff --stat HEAD~5..HEAD` | `kind='RPT'`, look for DONE / smooth completions | `comms_db.py search "DONE completed smooth"` |
-| /mistake (failures) | `log --oneline -20` + `reflog --oneline -30` (reverts, fixups) | `kind IN ('RPT','ESC')`, look for BLOCKED / retries | `comms_db.py search "BLOCKED retry failed"` |
+| Consumer | git query |
+|---|---|
+| /good-idea (wins) | `log --oneline -20` + `diff --stat HEAD~5..HEAD` |
+| /mistake (failures) | `log --oneline -20` + `reflog --oneline -30` (reverts, fixups) |
 
 Also read plan state (`~/.claude/plans/*/state*.md`): tasks that finished faster than estimate (wins) or stalled (mistakes).
 
@@ -19,10 +19,8 @@ Also read plan state (`~/.claude/plans/*/state*.md`): tasks that finished faster
 
 Before writing ANY entry, search first to find a matching entry to update rather than duplicating:
 
-```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  search '<summary in a few words>' -k 3
+```
+mem search "<summary in a few words>" -k 3
 ```
 
 - Match found: reuse its `--name` slug. `upsert` updates in place -- a stable `--name` prevents near-duplicate snapshots from piling up.
@@ -33,4 +31,4 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 ## Cross-references
 
 - Tier/scope rules (who writes shared vs class vs instance) differ per consumer -- see each skill's own "Scope + Dedup" section; not generalized here.
-- The `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py` prefix is the one constant across all three consumers' storage calls.
+- The `mem` shim is the one constant across all three consumers' storage calls. Bodies are always authored as a file under `~/.claude/tmp/` with the Write tool and passed via `--text-file`.

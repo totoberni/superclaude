@@ -4,13 +4,13 @@ description: "Use when the user explicitly toggles agent git commit and push per
 category: workflow
 user-invocable: true
 argument-hint: "{true|false}"
-allowed-tools: Bash
+allowed-tools: Read, Write
 ---
 
 # Git Policy Toggle
 
 Enable or disable ALL agent git commit and push for every agent, by writing the
-policy state file that the `26-git-policy` guard reads.
+policy state file that the git-policy guard reads.
 
 **Argument**: $ARGUMENTS (`true` = commit and push allowed, `false` = both blocked)
 
@@ -20,8 +20,7 @@ separate `/commit` (which used to also stage and execute commits) and `/push`
 draft-only (it drafts a conventional commit message and stops; it does not
 commit or gate anything, see `skills/commit/SKILL.md`), and `/push` is removed.
 The legacy `settings.json` `Bash(git push*)` deny this skill used to coexist
-with is retired by the owner-run `~/projects/apply-git-consolidation.sh`
-apply-script, so `26-git-policy.sh` is the sole mechanical gate on git commit
+with is retired, so the git-policy guard is the sole mechanical gate on git commit
 and push for every agent.
 
 ## Unattended-context gate
@@ -35,8 +34,8 @@ a human has explicitly requested this action this session.
 
 ## What the policy does
 
-The SOT is the guard, not this skill. `~/.claude/hooks/guards/26-git-policy.sh`
-reads `~/.claude/config/git-policy` on every Bash tool call. When the file says
+The SOT is the guard, not this skill. The git-policy guard
+reads `~/.claude/config/git-policy` on every shell tool call. When the file says
 `disabled`, the guard mechanically BLOCKS any commit or push (git commit,
 commit-tree, cherry-pick, revert, am, rebase, merge, push, fast-import, and gh
 release create / pr merge / refs-writing api). Read-only git (status, log, diff,
@@ -73,7 +72,7 @@ complete mechanism.
   Anything not in the tested list above is a residual, not a promise.
 
 The Write/Edit/MultiEdit route to the flag is covered separately by the
-`20-write-acl` guard (those tools name the path as structured data).
+write-ACL guard (those tools name the path as structured data).
 
 When blocked, an agent must ask the owner to run `/git true`; the owner manages
 git manually (rules/00 Git Discipline; the owner reviews changes before they enter
@@ -87,19 +86,15 @@ it.
 
 ### `/git true` (enable commit and push)
 
-```bash
-mkdir -p ~/.claude/config && \
-printf 'enabled\n' > ~/.claude/config/git-policy && \
-echo "git policy is now: $(cat ~/.claude/config/git-policy)"
-```
+Write `~/.claude/config/git-policy` with the Write tool (parents are created
+automatically). The file content is the single word `enabled` followed by a
+newline. Then Read the file back and report "git policy is now: enabled".
 
 ### `/git false` (disable commit and push)
 
-```bash
-mkdir -p ~/.claude/config && \
-printf 'disabled\n' > ~/.claude/config/git-policy && \
-echo "git policy is now: $(cat ~/.claude/config/git-policy)"
-```
+Write `~/.claude/config/git-policy` with the Write tool. The file content is the
+single word `disabled` followed by a newline. Then Read the file back and report
+"git policy is now: disabled".
 
 ### Confirm
 

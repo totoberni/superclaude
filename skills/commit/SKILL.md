@@ -37,4 +37,3 @@ run at all; see `skills/git/SKILL.md`).
 ## Guards
 
 - Flag if the diff appears to touch .env, credentials, or secret files (informational only; this skill does not block or stage anything)
-- Flag WSL permission-only diffs (`git diff --cached --summary` showing mode changes with 0 insertions/deletions) so the caller knows to exclude them when they stage

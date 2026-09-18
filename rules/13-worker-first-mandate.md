@@ -1,12 +1,12 @@
 # Worker-First Mandate
 
-Applies to ALL spawn-capable agents (meta, orch, scaf). NOT applied to `w-*` themselves (they cannot spawn children — wasted tokens).
+Applies to ALL spawn-capable agents (meta). NOT applied to `w-*` themselves (they cannot spawn children — wasted tokens).
 
 ## The Mandate
 
-**Default delegation pattern**: Meta+w-swarm. Ork handoff is the EXCEPTION, reserved for work that genuinely benefits from persistent multi-hour state.
+**Delegation pattern**: Meta+w-swarm. It is the only delegation pattern.
 
-Infra edits (rules, hooks, skills, CLAUDE.md, wrappers) are handled by meta-supervised w-* swarms by default; scaf is legacy/optional (see rules/12).
+Infra edits (rules, hooks, skills, CLAUDE.md, wrappers) are handled by meta-supervised w-* swarms (see rules/12).
 
 ### Pre-Action Trigger
 
@@ -20,33 +20,6 @@ If NO (only retain ownership when):
 - Surgical edit ≤50 lines AND no new content/research required
 - Single-shot decision needing your full context (architecture, plan synthesis, design call)
 - Non-delegatable side effect (writing this canonical SOT itself)
-
-## Decision Boundary: Meta+Swarm vs Ork Handoff
-
-Use **Meta + w-swarm** when ALL of:
-
-```
-✓ Estimated wall-clock ≤4 hr (Meta overestimation bias accounted for)
-✓ Distinct subtasks <8 with clean independent scopes
-✓ No persistent compile-gate ↔ edit-loop coupling required
-✓ Total context for synthesis <1M tokens
-✓ Single-project scope (no cross-repo coordination needed)
-```
-
-Use **Ork (handoff)** when ANY of:
-- Multi-day campaign (HPC training, ACM-style multi-hour assembly)
-- Persistent compile-gate ↔ edit-loop coupling (LaTeX rebuild every change with iterative state)
-- Multi-orch parallelism in same repo (already needs ork-tier coordination)
-- Multi-session continuity required (ork preserves identity across hard-blocks)
-- HW EDA pipelines (full DC synth → gate-sim → example-tool loop)
-
-**Override**: explicit one-line reason in plan.md or chat justifying the deviation.
-
-### Driver vs In-Session Convergence (owner ruling 2026-07-13)
-
-Sequential convergence waves run IN-SESSION: the supervising agent (meta/orch) drives produce, review, and seal rounds itself via `/swarm-dispatch` + the `/converge` protocol, dispatching `w-*` workers through the Agent tool. Rationale (owner): CC-native subagents are directly monitorable by the owner; a detached driver process is not. This holds for any workload whose concurrent worker slots fit the 5-per-batch Agent-tool cap, INCLUDING several waves run as phase-locked parallel batches (N producers, then N reviewers, then N seals, N <= 5).
-
-The autonomous converge driver (`/wf-auto` + `scripts/swarm/converge_auto.py`) becomes meaningful ONLY at wave scale: multiple concurrent n-by-5 swarms whose combined producer/reviewer/seal slots exceed what one supervising session can hold, or genuinely unattended runs the owner explicitly requests. When the driver IS warranted, R-5 is enforced mechanically (see `40-swarm-quality-gates.md`); in-session rounds enforce R-5 by fresh reviewer dispatch per round. Authority unchanged: meta + orch only, same spawn-adjacent boundary as `/converge`. Launch authority when warranted: the 2026-07-10 standing grant (meta launches and supervises).
 
 ## Model × Effort × Thinking Matrix (SOT)
 
@@ -78,6 +51,7 @@ This supersedes the prior "embed the keyword in the spawn prompt" guidance, whic
 | `w-merger` (trivial conflicts) | sonnet | medium | none | Semantic conflict ⇒ opus + `think hard` |
 | `w-reviewer` (light style/lint) | sonnet | medium | none | Architecture review ⇒ opus + `think hard` |
 | `w-reviewer` (`--scathingly-deep`) | opus | high | `think harder` | Irreversible ⇒ `ultrathink` |
+| `w-hostile-reviewer` (one-shot adversarial, returns `VERDICT:`) | opus | max | n/a | n/a |
 | `w-design-reviewer` | sonnet | medium | none | Cross-page consistency ⇒ opus |
 | `w-tester` | sonnet | medium | none | Failure root-cause ⇒ delegate to w-debugger |
 | `w-planner` (single phase) | opus | high | `think hard` | 3+ phase plan ⇒ `think harder` |
@@ -129,12 +103,12 @@ After spawning Worker K, immediately dispatch its reviewer with `run_in_backgrou
 ### Pattern W-7: Mixed-Type Batch
 Up to 5 helpers of different types in parallel: e.g., 3 web research (general-purpose) + 1 code recon (Explore) + 1 reviewer (w-reviewer). **4× speedup**; reviewer catches issues in the parallel synthesis.
 
-### Pattern W-11: Meta-Direct Polish on Orch-DONE
-After ork reports DONE, Meta does small polish rounds directly (≤6 files, reversible, no new files, no architecture change). **Saves ~5 hrs** vs another orch dispatch.
+### Pattern W-11: Meta-Direct Polish on Swarm-DONE
+After a swarm reports DONE, Meta does small polish rounds directly (≤6 files, reversible, no new files, no architecture change). **Saves ~5 hrs** vs another swarm dispatch.
 
 ## Critical Rules
 
-**SOT**: `~/.claude/rules/40-swarm-quality-gates.md` (R-1 schema spec, R-2 baseline-stash, R-3 worker verification, R-4 fleet expansion, R-5 no pre-approval).
+**SOT**: `~/.claude/rules/40-swarm-quality-gates.md` (R-1 schema spec, R-2 baseline-stash, R-3 worker verification, R-4 fleet expansion).
 
 ## Autocommission Protocol Summary
 
@@ -144,11 +118,11 @@ After ork reports DONE, Meta does small polish rounds directly (≤6 files, reve
 3. Spawns the agent via `Agent({subagent_type: "<ephemeral-name>", ...})` — direct custom-name dispatch (v2.1.63+ Agent tool capability)
 4. After task done: cleans up the ephemeral file (DEC-005 Q1: immediate)
 
-Authority: meta + orch only (DEC-005 Q2). Cap: unlimited at this stage (DEC-005 Q3).
+Authority: meta only (DEC-005 Q2). Cap: unlimited at this stage (DEC-005 Q3).
 
 ## Trigger Escaping (Author-Time)
 
-Three triggers auto-fire on owner's machine the instant their literal token appears in text the CLI or an agent processes: the `.workflow` keyword, the `/.deep-research` command, and the `.ultracode` effort level (shown here dot-escaped; the live tokens omit the leading dot). A stray occurrence in a spawn prompt, directive, report, memory file, plan, or any authored text can fire a costly autonomous run (up to ~1000 agents). **Rule**: whenever you author text another agent or the CLI will process — spawn prompts, comms, memory, plans, skills — keep these three tokens DOT-ESCAPED (leading dot retained) so they never fire. They are strictly owner-opt-in, manual, prompt-level; never bake them into agent defs, skills, or comms.
+Three triggers auto-fire on owner's machine the instant their literal token appears in text the CLI or an agent processes: the `.workflow` keyword, the `/.deep-research` command, and the `.ultracode` effort level (shown here dot-escaped; the live tokens omit the leading dot). A stray occurrence in a spawn prompt, report, memory file, plan, or any authored text can fire a costly autonomous run (up to ~1000 agents). **Rule**: whenever you author text another agent or the CLI will process — spawn prompts, memory, plans, skills — keep these three tokens DOT-ESCAPED (leading dot retained) so they never fire. They are strictly owner-opt-in, manual, prompt-level; never bake them into agent defs or skills.
 
 ## CCPM Task-Graph Metadata (Phase 5)
 
@@ -171,5 +145,5 @@ Convention: `[parallel: true]` declares safe-to-parallelize, `[depends_on: T*]` 
 - Hierarchy table: `12-agent-hierarchy.md` (write scopes)
 - Context management: `25-context-management.md` (delegation reduces parent context burn)
 - Programming principles: `15-programming-principles.md` (DRY/KISS govern w-* design)
-- Skills: `/autocommission`, `/swarm-dispatch`, `/topology-producer-reviewer`, `/super-health`, `/wf-auto`, `/swarm-observe`
-- Plan: `plans/swarm-first-v2/plan.md`, `plans/wf-autonomy/plan.md`
+- Skills: `/autocommission`, `/swarm-dispatch`
+- Plan: `plans/swarm-first-v2/plan.md`

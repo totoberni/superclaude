@@ -3,7 +3,7 @@ name: pleh
 description: "Use when spawning parallel helper agents for self or cross-agent help"
 category: orchestration
 user-invocable: true
-argument-hint: "[target-agent]"
+argument-hint: "[target]"
 allowed-tools: Read, Glob, Grep, Agent, Bash
 ---
 
@@ -11,10 +11,10 @@ allowed-tools: Read, Glob, Grep, Agent, Bash
 
 Spawn sub-agents to help with the current (or a target agent's) task. "pleh" = help backwards — help arrives from behind.
 
-**Arguments**: $ARGUMENTS — optional target agent name
+**Arguments**: $ARGUMENTS — optional target name (the plan or campaign another session is working on)
 
 - If empty: **self-pleh** (2x on current task)
-- If agent name provided: **cross-pleh** (3x on target's task)
+- If a target name is provided: **cross-pleh** (3x on the target's task)
 
 ## Self-Pleh (no target)
 
@@ -23,7 +23,7 @@ Double your throughput on the current task by spawning a read-only helper.
 ### Steps
 
 1. Identify your current task from your state file:
-   - Glob `~/.claude/plans/*/state*.md` for files matching your orch name
+   - Glob `~/.claude/plans/*/state*.md` for the plan you are working on
    - Read the active task section
 2. Decide what aspect is most parallelizable:
    - Code exploration / understanding a module
@@ -56,35 +56,33 @@ Help with: [specific aspect you identified]
 4. Continue working on your part while the sub-agent runs
 5. When the sub-agent returns, integrate its findings
 
-## Cross-Pleh (target agent specified)
+## Cross-Pleh (target specified)
 
 Create a 3x force multiplier: target keeps working + your helper + helper's sub-agent.
 
 ### Steps
 
-1. Parse the target agent name from $ARGUMENTS
+1. Parse the target name from $ARGUMENTS
 2. Read the target's context (in parallel):
-   - `~/.claude/comms/<target>/directives.md` — their current directive
    - Glob `~/.claude/plans/*/state*.md` for files matching the target name
    - Query the memory DB for the target's recovery context (run separately — may return nothing):
-     ```bash
-     HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-       search "<target> recovery context" -k 4
-     # Then fetch full body of any hit: memory_db.py get --name <slug>
      ```
+     mem search "<target> recovery context" -k 4
+     ```
+     Then fetch the full body of any hit: `mem get --name <slug>`
 3. Spawn **1 helper sub-agent** via the Agent tool with this prompt template:
 
 ```
-You are a helper for agent `<target-name>`. You are READ-ONLY but you CAN spawn your own sub-agent.
+You are a helper for the session working on `<target-name>`. You are READ-ONLY but you CAN spawn your own sub-agent.
 
-## Target's Directive
-[paste relevant DIR from directives.md]
+## Target's Plan
+[paste the current phase section from the target's plan.md]
 
 ## Target's Current State
 [paste active task section from state file]
 
 ## Target's Memory (if available)
-[paste or summarize results from: memory_db.py search "<target> recovery context" -k 4]
+[paste or summarize results from: mem search "<target> recovery context" -k 4]
 
 ## Your Job
 1. Analyze the target's current task and identify what research/exploration would help
@@ -109,12 +107,9 @@ Return findings in ≤300 words. Focus on actionable insights."
 ```
 
 4. When the helper returns (with its sub-agent's findings integrated):
-   - If you are **meta**: summarize findings and tell the user the results
-   - If you are **meta** and want to relay to the target: append an addendum to `~/.claude/comms/<target>/directives.md` (NOT a new DIR — just a note under the current DIR)
-   - If you are **any other agent**: present findings to the user for relay
+   - Summarize the findings and present them to the user, who relays them to the target session
 
 ## Examples
 
 - `/pleh` → self-help: spawn 1 helper for your current task (2x)
-- `/pleh orch-<project>-p3` → cross-help: spawn helper + helper's sub for orch-<project>-p3's task (3x)
-- `/pleh scaf` → cross-help: spawn helper chain for scaf's current work (3x)
+- `/pleh <project>` → cross-help: spawn helper + helper's sub for the session working on `<project>` (3x)

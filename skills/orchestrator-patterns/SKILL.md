@@ -14,7 +14,7 @@ Templates and conventions for orchestrated projects. Two patterns exist:
 
 | Context | Pattern | Location |
 |---------|---------|----------|
-| Project managed by superclaude agents (`meta`, `orch-*`) | **Superclaude** | `~/.claude/plans/<project>/` |
+| Project managed by superclaude agents (`meta` plus `w-*` workers) | **Superclaude** | `~/.claude/plans/<project>/` |
 | Standalone project (no superclaude involvement) | **In-project** | `<repo>/.orchestrator/` |
 
 **Rule**: Never create `.orchestrator/` inside a repo that is superclaude-managed. The SOT for all agent infrastructure is `~/.claude/`.
@@ -24,19 +24,13 @@ Templates and conventions for orchestrated projects. Two patterns exist:
 ```
 ~/.claude/plans/<project>/
   plan.md          # Implementation plan — SOT for what to build (Meta-owned)
-  state*.md        # Mutable state — updated by orch during execution (Orch-owned)
+  state*.md        # Mutable state — updated by meta during execution (Meta-owned)
   context.md       # Project spec — pointers to repo, key files
   decisions.md     # Executive decision log (DEC-NNN format)
   reference/       # Frozen reference docs
 
-# Wins, Mistakes, Gotchas — accessible to ALL orch instances (shared-projects tier)
-  # Query: memory_db.py search "<project> gotchas mistakes" -k 8
-
-~/.claude/comms/<orch-name>/
-  directives.md    # Meta → Orch (DIR-NNN)
-  bootstrap.md     # Meta → Orch (cold-start context)
-  reports.md       # Orch → Meta (RPT-NNN)
-  escalations.md   # Orch → Meta/the user (ESC-NNN)
+# Wins, Mistakes, Gotchas — accessible to ALL sessions (shared-projects tier)
+  # Query: mem search "<project> gotchas mistakes" -k 8
 ```
 
 ## In-Project Pattern (standalone only)
@@ -93,4 +87,4 @@ Templates and conventions for orchestrated projects. Two patterns exist:
 **Alternatives rejected:** [what else was considered and why not]
 ```
 
-Key principles: see rules 10 + 12 (auto-loaded) and `orch.md` § Delegating to Workers.
+Key principles: see rules 10 + 12 + 13 (auto-loaded).

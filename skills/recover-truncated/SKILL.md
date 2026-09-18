@@ -9,9 +9,9 @@ allowed-tools: Read, Bash, Grep, Glob
 
 # /recover-truncated — WORKER-TRUNCATED Recovery Helper
 
-Handles the recovery flow for the `WORKER-TRUNCATED` failure tag (added in V-001 rubric § 3.5). When a worker did substantial work but its output was cut off before a closing report, this skill helps the parent (meta/orch) re-dispatch a **narrower synthesizing worker** with the prior output as hand-off context.
+Handles the recovery flow for the `WORKER-TRUNCATED` failure tag (added in V-001 rubric § 3.5). When a worker did substantial work but its output was cut off before a closing report, this skill helps the parent (meta or a plain session) re-dispatch a **narrower synthesizing worker** with the prior output as hand-off context.
 
-**Critical convention**: this skill is **advisory** — it produces the re-dispatch prompt + recommended Agent payload. The caller (meta/orch) actually invokes the Agent tool with the produced prompt. Skills are not auto-executing dispatch tools per `/swarm-dispatch` and `/handoff` conventions.
+**Critical convention**: this skill is **advisory** — it produces the re-dispatch prompt + recommended Agent payload. The caller (meta or a plain session) actually invokes the Agent tool with the produced prompt. Skills are not auto-executing dispatch tools per `/swarm-dispatch` conventions.
 
 ---
 
@@ -47,20 +47,13 @@ Claude Code writes each spawn's output to disk under the current session directo
 
 If you already know the `agentId` or `task_id` (visible in your own conversation, from the spawn that just got truncated), address that file directly; this is the reliable path. Otherwise, resolve `--recent` / `<description-fragment>` against the candidates in the current session's directories:
 
-```bash
-SESSION_DIR="$HOME/.claude/projects/<project-slug>/<session-id>"
+`--recent` (also the default when no fragment is given): take the most recently modified artifact in the relevant directory. Glob `~/.claude/projects/<project-slug>/<session-id>/subagents/agent-*.jsonl` (the agent file) and `~/.claude/projects/<project-slug>/<session-id>/tasks/*.output` (the task file); Glob returns matches sorted by modification time, so take the first of each.
 
-# --recent (also the default when no fragment is given): most recently
-# modified artifact in the relevant directory.
-AGENT_FILE=$(ls -t "$SESSION_DIR"/subagents/agent-*.jsonl 2>/dev/null | head -1)
-TASK_FILE=$(ls -t "$SESSION_DIR"/tasks/*.output 2>/dev/null | head -1)
+Then extract a compact, LLM-safe summary. Never paste raw JSONL into a prompt; both modes below hard-cap their output. Run whichever applies:
+
 ```
-
-Then extract a compact, LLM-safe summary. Never paste raw JSONL into a prompt; both modes below hard-cap their output:
-
-```bash
-[ -n "$AGENT_FILE" ] && ~/.claude/scripts/swarm/recover-worker.sh agent "$AGENT_FILE"
-[ -n "$TASK_FILE" ]  && ~/.claude/scripts/swarm/recover-worker.sh task "$TASK_FILE"
+scpy swarm/recover_worker.py agent <agent-file>
+scpy swarm/recover_worker.py task <task-file>
 ```
 
 The printed result (last assistant text or final result, tool_use count, touched-file list) is the `<PRIOR-WORKER-OUTPUT>` content for Step 4. Combine it with what you already know about the spawn (parent, subagent_type, description, timestamp) to fill in that template.
@@ -138,7 +131,7 @@ Output: markdown report with sections ## Verification, ## Files changed, ## Diff
 
 ## Notes / pitfalls
 
-- **Skills are advisory.** This skill prints the dispatch payload but does NOT call the Agent tool itself. The caller (meta/orch) executes the dispatch, then verifies the result per R-3 (`~/.claude/rules/40-swarm-quality-gates.md`).
+- **Skills are advisory.** This skill prints the dispatch payload but does NOT call the Agent tool itself. The caller (meta or a plain session) executes the dispatch, then verifies the result per R-3 (`~/.claude/rules/40-swarm-quality-gates.md`).
 - **Truncation is not failure.** A truncated worker typically did 70-90% of the work — re-dispatching the **same prompt** wastes that effort. Always narrow scope to "verify + complete the missing portion".
 - **Pasting prior output is the key step.** Without the prior worker's visible output, the recovery worker has no anchor and may redo work or pick the wrong file. The skill's prompt template enforces this.
 - **`--writes` mode requires R-3 verification.** When you allow the recovery worker to edit files, run `git diff --stat` after it returns and confirm only expected files changed.
@@ -153,13 +146,11 @@ Output: markdown report with sections ## Verification, ## Files changed, ## Diff
 - V-001 retro: `~/.claude/plans/swarm-first-v2/validations/V-001.md` (4+ truncation events documented)
 - Discipline note: `~/.claude/rules/13-worker-first-mandate.md` (worker-truncation discipline; supersedes the pre-cutover swarm-lessons memo)
 - Spawn telemetry source: `~/.claude/comms/_spawns.log`
-- Outcome telemetry (sister): `~/.claude/comms/_outcomes.log` (populated by `hooks/modules/42-agent-outcome.sh`)
+- Outcome telemetry (sister): `~/.claude/comms/_outcomes.log` (populated by the spawn-log hooks)
 - Sister skills: `/swarm-dispatch` (initial batch dispatch), `/autocommission` (ephemeral worker spawn)
 
-## Loop integration (converge)
+## Verification
 
-`recover-truncated` is an advisory, ONE-SHOT recovery-dispatch generator: it locates a truncated or failed worker's output and prints a narrow re-dispatch prompt for the caller to paste into the Agent tool. It drives no convergence loop and emits no VERDICT or SEAL.
+`recover-truncated` is an advisory, ONE-SHOT recovery-dispatch generator: it locates a truncated or failed worker's output and prints a narrow re-dispatch prompt for the caller to paste into the Agent tool. It emits no VERDICT.
 
-The load-bearing step is Step 2 (verify state via git): after the RE-DISPATCHED worker returns, the caller MUST verify on-disk state before trusting the result, not just the worker's own report, per R-3 (`~/.claude/rules/40-swarm-quality-gates.md`). A "failed" status can still carry a complete edit underneath (opus truncates report-only, per `~/.claude/rules/13-worker-first-mandate.md` § Worker model split), while a genuinely partial edit needs cleanup before any redo; treat this git-diff check as the single verification pass that closes a recovery, and note it pairs with `/converge` whenever the recovered work is one round inside a larger loop.
-
-Loop orchestration itself (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention. This skill drives no loop of its own; its own `allowed-tools` cover only the single locate-and-prompt invocation above.
+The load-bearing step is Step 2 (verify state via git): after the RE-DISPATCHED worker returns, the caller MUST verify on-disk state before trusting the result, not just the worker's own report, per R-3 (`~/.claude/rules/40-swarm-quality-gates.md`). A "failed" status can still carry a complete edit underneath (opus truncates report-only, per `~/.claude/rules/13-worker-first-mandate.md` § Worker model split), while a genuinely partial edit needs cleanup before any redo; treat this git-diff check as the single verification pass that closes a recovery.

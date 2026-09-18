@@ -18,7 +18,7 @@ layered comprehension: the main body introduces and contextualises;
 appendices provide the derivations that are genuinely specific to
 the project (Principle 9).
 
-### Setup (Anti IDE / VS Code on WSL, one-time per project)
+### Setup (Anti IDE / VS Code with LaTeX Workshop, one-time per project)
 
 Before the first save of any LaTeX file in a subdir (e.g. `sections/`),
 disable `latexindent` format-on-save at the workspace root. The
@@ -30,7 +30,7 @@ succeeds, but the noisy error masks real failures and pollutes the
 output channel. A second adjacent failure mode: a Ctrl+S during an
 in-flight latexmk run can leave `main.aux` corrupted with null bytes
 (`./main.aux:1: Text line contains an invalid character`); recovery
-is `latexmk -C && latexmk -pdf` from the directory containing
+is `latexmk -C` followed by `latexmk -pdf` from the directory containing
 `main.tex`, but the root cause is the same auto-formatter race that
 this setup defuses.
 
@@ -60,9 +60,10 @@ the first directory inside the workspace (so `%WS1%/report/` means
 workspace root contains `report/` directly). User-level Antigravity
 settings can override workspace settings; if the bug persists after
 a reload, mirror the same block into
-`Ctrl+Shift+P -> Preferences: Open User Settings (JSON)`. Applies to
-Anti IDE and VS Code on WSL; native macOS/Linux installs may not
-exhibit the path mismatch but the setting is harmless there.
+`Ctrl+Shift+P -> Preferences: Open User Settings (JSON)`. Some
+installs may not exhibit the path mismatch but the setting is
+harmless there. `latexmk` is installed natively and runs from either
+shell.
 
 ### Principles
 
@@ -296,9 +297,9 @@ exhibit the path mismatch but the setting is harmless there.
 
 ### Workflow
 
-0. **TOUCH-zone scan** (Principle 13): on the first bash action of
-   any LaTeX edit task, run `grep -nE "% TOUCH HERE|% STOP TOUCH"
-   <target-file>`. Record every pair. If the planned edit falls
+0. **TOUCH-zone scan** (Principle 13): on the first action of
+   any LaTeX edit task, search `<target-file>` with the Grep tool for
+   `% TOUCH HERE|% STOP TOUCH`. Record every pair. If the planned edit falls
    outside every pair, stop and surface the conflict in chat (see
    Principle 13). If no markers are present, continue with the
    normal workflow below. This step precedes all other reads so that

@@ -19,12 +19,13 @@ Closes R-4 (per `~/.claude/rules/40-swarm-quality-gates.md`): when an autocommis
 
 ### Step 1: Read the ledger
 
-```bash
-# Retrieve the autocommission patterns ledger from the DB (shared-global tier)
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  search "autocommission patterns occurrences" --mode fts -k 20
-# If no results: echo "No autocommission patterns in DB - nothing to promote"; exit 0
+Retrieve the autocommission patterns ledger from the DB (shared-global tier):
+
 ```
+mem search "autocommission patterns occurrences" --mode fts -k 20
+```
+
+If no results: report "No autocommission patterns in DB - nothing to promote" and stop.
 
 The ledger is maintained by `/autocommission` (Step 7 - log pattern) per its SKILL.md. Format expected:
 
@@ -48,16 +49,10 @@ Use the DB query results from Step 1, filtering by occurrence count >= threshold
 
 Skip entries with `status: TRACKING`, `status: PROMOTED`, or `status: DEPRECATED` — only `READY-TO-PROMOTE` (or no status field, treated as eligible if occurrences >= threshold) should produce drafts. TRACKING entries are pre-registered patterns awaiting actual `/autocommission` events to increment their count.
 
-```bash
-THRESHOLD=3
-[[ "$ARGUMENTS" =~ --threshold[[:space:]]+([0-9]+) ]] && THRESHOLD="${BASH_REMATCH[1]}"
-
-# Retrieve full bodies for each candidate found in Step 1, then filter locally:
-# - parse occurrences field from body text
-# - skip status: TRACKING / PROMOTED / DEPRECATED
-# - keep only entries with occurrences >= THRESHOLD
-# Use: memory_db.py get --name <slug> to fetch each candidate's full body
-```
+Retrieve full bodies for each candidate found in Step 1 (`mem get --name <slug>`), then filter locally:
+- parse the occurrences field from the body text
+- skip status: TRACKING / PROMOTED / DEPRECATED
+- keep only entries with occurrences >= threshold (3 unless `$ARGUMENTS` carries `--threshold <N>`)
 
 ### Step 3: Draft for each candidate
 
@@ -67,14 +62,7 @@ For each promotion candidate, draft a permanent `~/.claude/agents/_pending_promo
 - Cross-reference to the DB entry (shared-global tier, pattern key)
 
 If `--dry-run`: print drafts to stdout, do NOT write files.
-Default: write drafts to `~/.claude/agents/_pending_promotion/<name>.md` (NOT to `agents/` directly - Meta reviews and moves).
-
-```bash
-PENDING_DIR="$HOME/.claude/agents/_pending_promotion"
-DRY_RUN=false
-[[ "$ARGUMENTS" == *--dry-run* ]] && DRY_RUN=true
-$DRY_RUN || mkdir -p "$PENDING_DIR"
-```
+Default: write drafts to `~/.claude/agents/_pending_promotion/<name>.md` with the Write tool (NOT to `agents/` directly - Meta reviews and moves). The directory is created automatically by the first write.
 
 Draft template per candidate:
 
@@ -104,7 +92,7 @@ tools: <recommended-tools>
 
 ## Escalation
 
-[When to escalate to orch / meta.]
+[When to escalate to meta.]
 
 ## Provenance
 
@@ -130,15 +118,15 @@ If zero candidates: output `No promotion candidates (threshold=N).`
 
 ## Authority
 
-Meta only. Orchs and workers cannot promote (requires cross-session pattern observation).
+Meta only. Workers cannot promote (requires cross-session pattern observation).
 
 ## Constraints
 
 - NEVER write directly to `~/.claude/agents/` - drafts go to `_pending_promotion/`
 - NEVER promote without >=3 occurrences (R-4 strict criterion)
 - NEVER infer `recommended-model` - must be in the DB entry body. If missing, skip the candidate and report a malformed-entry warning.
-- After Meta promotes (manually `mv` from `_pending_promotion/` to `agents/`), upsert the DB entry with `promoted: true` in the body (via `/remember` or `memory_db.py upsert`).
-- The `~/.claude/agents/_pending_promotion/` directory is auto-created on first promotion run; never check it into permanent agent listings or health scans.
+- After Meta promotes (manually `mv` from `_pending_promotion/` to `agents/`), upsert the DB entry with `promoted: true` in the body (via `/remember` or `mem upsert`).
+- The `~/.claude/agents/_pending_promotion/` directory is auto-created on first promotion run; never check it into permanent agent listings.
 
 ## Post-Promotion Activation (v2.1.63+)
 

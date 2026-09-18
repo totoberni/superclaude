@@ -1,6 +1,6 @@
 ---
 name: verify
-description: "Use when enforcing evidence-before-claims before writing an RPT."
+description: "Use when enforcing evidence-before-claims before reporting completion."
 category: workflow
 user-invocable: false
 ---
@@ -51,15 +51,15 @@ If you catch yourself using ANY of these words before running verification:
 
 ALL of these mean: STOP. Run the verification command. THEN speak.
 
-## Integration with Orch Protocol
+## Integration with the Completion Report
 
-Before writing ANY RPT:
-1. Re-read the directive's success criteria
+Before returning ANY `STATUS:` line or completion report:
+1. Re-read the task brief's success criteria
 2. For each criterion: run the verification command
-3. Paste evidence in the RPT (command + output summary)
+3. Paste evidence in the report (command + output summary)
 4. Only then mark status as DONE
 
-This gate enforces the Pre-Report Compliance Check in `orch.md`. Fresh evidence means run in THIS session — not "it passed earlier" or "the worker said it passed."
+Fresh evidence means run in THIS session — not "it passed earlier" or "the worker said it passed."
 
 ## Anti-Rationalization
 

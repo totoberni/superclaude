@@ -1,10 +1,10 @@
 # _shared/memory-distill.md: pitfall auto-selection for briefings (SOT)
 
-Consumed by: /rb (bootstrap "Known Pitfalls" section). Reusable by any directive/bootstrap generator needing a "Known Pitfalls" or "Watch out for" briefing section.
+Reusable by any worker-briefing generator needing a "Known Pitfalls" or "Watch out for" briefing section.
 
 ## Selection algorithm
 
-From the project's memory (gotchas + mistakes, queried via `memory_db.py search '<project> gotchas mistakes' -k 8` or `list --tier shared-projects`), select the top 3-5 pitfalls by priority:
+From the project's memory (gotchas + mistakes, queried via `mem search "<project> gotchas mistakes" -k 8` or `mem list --tier shared-projects`), select the top 3-5 pitfalls by priority:
 
 1. **Gotchas section entries** -- always relevant, always included first.
 2. **Mistakes with Occurrences >= 2** -- recurring, high signal.
@@ -24,8 +24,7 @@ Render as a numbered list under a `## Known Pitfalls` heading:
 
 ## Where this applies
 
-- **Bootstraps** (`/rb`): embedded directly in the generated `bootstrap.md`.
-- **Directive "Known Pitfalls" sections**: same algorithm, same 3-5 cap, when a meta/orch drafts a directive touching a project with existing memory entries.
+- **Worker briefing "Known Pitfalls" sections**: same algorithm, same 3-5 cap, when meta drafts a worker briefing touching a project with existing memory entries.
 
 ## Cross-reference
 

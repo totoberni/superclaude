@@ -13,8 +13,8 @@ Scan memory matrix cells for stale, broken, or obsolete entries. **Advisory only
 findings for human decision. Deletion is explicit and per-entry via the DB CLI.
 
 Memory is DB-resident (v3): all tiers are indexed in `~/.claude/agent-memory/.memory.db`.
-Find candidates with `memory_db.py search` or `memory_db.py list`, then remove confirmed
-stale entries with `memory_db.py prune --name <name>`.
+Find candidates with `mem search` or `mem list`, then remove confirmed
+stale entries with `mem prune --name <name>`.
 
 **Scope**: $ARGUMENTS (default: all)
 
@@ -35,24 +35,21 @@ stale entries with `memory_db.py prune --name <name>`.
 | Global LTM | `--tier global` | 60 rows |
 | Project memories | `--tier shared --type project` | 60 rows each project |
 | Class MTM | `--tier class` | 40 rows per class |
-| Instance | `--tier instance` | 80 (meta), 40 (orch), 30 (other) |
+| Instance | `--tier instance` | 80 (meta), 30 (workers and other) |
 
 ## Procedure
 
 ### 1. Enumerate All Entries
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list
+mem list
 ```
 
 Filter by tier or type to narrow scope:
 
 ```bash
 # Shared project memories only
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list \
-  --tier shared --type project
+mem list --tier shared --type project
 ```
 
 ### 2. Search for Candidates by Symptom
@@ -60,9 +57,7 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 Use semantic + keyword search to surface likely-stale entries:
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  search '<topic or symptom>' -k 10 --mode hybrid
+mem search "<topic or symptom>" -k 10 --mode hybrid
 ```
 
 Use `--mode fts` for exact strings (e.g., a deleted file path, a resolved error message).
@@ -70,8 +65,7 @@ Use `--mode fts` for exact strings (e.g., a deleted file path, a resolved error 
 ### 3. Inspect Candidates
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py get --name <name>
+mem get --name <name>
 ```
 
 Read the full entry text. Apply staleness criteria from the table above.
@@ -79,12 +73,12 @@ Read the full entry text. Apply staleness criteria from the table above.
 ### 4. Scan for Broken Paths
 
 For each suspicious entry's `text`, verify any `~/.claude/` or backtick-quoted paths still
-exist with `test -f`/`test -d`. Flag entries whose referenced paths are gone.
+exist (check each with the Glob or Read tool). Flag entries whose referenced paths are gone.
 
 ### 5. Check Dead Projects
 
 ```bash
-git -C <repo> log -1 --format=%ci 2>/dev/null
+git -C <repo> log -1 --format=%ci
 ```
 
 Flag project-type entries where the repo has no commits in >60 days.
@@ -112,27 +106,23 @@ Flag project-type entries where the repo has no commits in >60 days.
 After human confirmation — remove one entry at a time:
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py prune --name <name>
+mem prune --name <name>
 ```
 
 Or by numeric id:
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py prune --id <N>
+mem prune --id <N>
 ```
 
 ## Key Principle
 
 **Never delete automatically.** Memory entries may look stale but encode hard-won lessons.
 Present findings with context so the user (or Meta) can make informed decisions. When in
-doubt, keep. `memory_db.py prune` is only invoked after explicit human sign-off.
+doubt, keep. `mem prune` is only invoked after explicit human sign-off.
 
-## Loop integration (converge)
+## Self-check
 
-memory-prune is a ONE-SHOT advisory scan: a single invocation runs the seven steps above and presents flagged candidates for human decision; it has no round-by-round REWORK cycle and emits no SEAL. `/converge`'s iterate-to-seal loop does not apply here, and the Step 7 human-confirmation gate before any deletion is NEVER replaced by an automated seal.
+memory-prune is a ONE-SHOT advisory scan: a single invocation runs the seven steps above and presents flagged candidates for human decision. The Step 7 human-confirmation gate before any deletion is NEVER replaced by an automated approval.
 
-Before presenting the Step 6 report, run ONE optional adversarial false-positive pass over the flagged table: re-examine each stale/broken/dead candidate against fuller context (recent references, active-project signals, near-duplicate coverage) to catch a memory that looks stale but is still load-bearing. This is a single self-review pass, not a converge loop; the human still confirms every deletion at Step 7.
-
-Loop orchestration (dispatching producers, invoking `/review-dispatch`, printing the `/goal` block, spawning the fresh seal auditor) runs in the conductor's context (meta/orch, which holds Agent and Skill), per `converge/SKILL.md`'s Conductor context convention. This skill drives no loop of its own; its own `allowed-tools` cover only the single scan-and-report invocation above.
+Before presenting the Step 6 report, run ONE optional adversarial false-positive pass over the flagged table: re-examine each stale/broken/dead candidate against fuller context (recent references, active-project signals, near-duplicate coverage) to catch a memory that looks stale but is still load-bearing. This is a single self-review pass, not a review loop; the human still confirms every deletion at Step 7.

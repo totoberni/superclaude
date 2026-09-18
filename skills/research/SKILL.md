@@ -137,7 +137,7 @@ or working notes.
    CWD that contains a git repository, a `docs/` folder, or a
    `~/.claude/plans/<name>/plan.md` entry.
 
-2. **Project memory**: query the DB for accumulated traps: `HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py search '<name> gotchas mistakes wins' -k 8` or `list --tier shared-projects`. A review, design, or gap audit is the right moment to verify none have been silently re-introduced.
+2. **Project memory**: query the DB for accumulated traps: `mem search '<name> gotchas mistakes wins' -k 8` or `mem list --tier shared-projects`. A review, design, or gap audit is the right moment to verify none have been silently re-introduced.
 
 3. **Markscheme**:
    - Prefer `~/.claude/plans/<project>/markscheme.md` (the current
@@ -169,7 +169,7 @@ or working notes.
 6. **Prior reviews and decision logs**:
    - `<project-root>/docs/phase*-hostile-review.md`,
      `<project-root>/docs/*review*.md`,
-     `~/.claude/comms/*hrev*/review.md`.
+     `~/.claude/plans/<project>/hostile-review-*.md`.
    - If a decision log exists (in `state.md`, `context.md`, or a
      dedicated `decisions.md`), read it to understand the
      pre-registered choices the subcommand must respect.
@@ -204,8 +204,8 @@ reference this section rather than restating.
   project directory (`<project-root>/...`), grep the draft for
   superclaude identifiers before writing: `~/.claude/`,
   `agent-memory`, `MEMORY.md`, `mtm.md`, `ltm.md`, `.memory.db`,
-  `.comms.db`, `.broker.db`, `memory_db.py`, `comms_db.py`,
-  `MM-\d+`, `GM-\d+`, `M-\d+`, internal orch names, internal
+  `memory_db.py`,
+  `MM-\d+`, `GM-\d+`, `M-\d+`, internal agent names, internal
   project-memory filenames. Paraphrase hits as external
   references before save. Paths under `~/.claude/` are exempt
   from decontamination but should still paraphrase where portable.
@@ -233,7 +233,7 @@ reference this section rather than restating.
   violates. Opinions without evidence are dropped, not downgraded.
 
 - **Respect project git policy**: check `config/git-policy` (the
-  `/git` toggle, enforced by `hooks/guards/26-git-policy.sh`) before
+  `/git` toggle, enforced by the git-policy guard) before
   proposing commit steps. When the policy blocks commits, remediation
   sequences describe changes for a human to commit manually.
 

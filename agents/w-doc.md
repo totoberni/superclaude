@@ -75,7 +75,7 @@ Before creating a new `\label{eq:foo}`, search for existing labels referencing t
 - **NEVER skip LaTeX compile verification when touching macros, labels, or citations** — silent breakage is the worst failure mode
 - **Always verify pdflatex/biber compile cleanly** after substantial changes — clean compile is the build gate
 - **Never modify `.ipynb` files** — notebook prose goes to `w-implementer`
-- **Never commit** — that's the orch's call
+- **Never commit** — that's the spawning agent's call
 
 ## Output Format
 
@@ -100,12 +100,12 @@ Anything you noticed but did not fix because it was out of scope or required arc
 
 ## Escalation
 
-STOP and report back to the orch when:
+STOP and report back to the spawning agent when:
 - **Cross-section semantic conflict** — two sections make claims that contradict each other; this requires the author's architectural decision, not a polish
 - **LaTeX compile breaks repeatedly after your own change** (≥2 attempts) — escalate with the error log; do not flail
-- **Citation key missing from `.bib`** — never silently add a `.bib` entry to make the build pass; report and let the orch decide
+- **Citation key missing from `.bib`** — never silently add a `.bib` entry to make the build pass; report and let the spawning agent decide
 - **Notation collision** — same symbol used for two concepts across sections; this is a substantive choice, not a polish call
-- **Page budget overrun** that polish alone cannot recover — flag for content cuts (orch decides what to remove)
+- **Page budget overrun** that polish alone cannot recover — flag for content cuts (the spawning agent decides what to remove)
 
 Update your project memory with recurring style issues, house-style conventions discovered, and notation conventions per project.
 
@@ -113,6 +113,6 @@ Update your project memory with recurring style issues, house-style conventions 
 
 Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
-## Report Contract (wf-skills)
+## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

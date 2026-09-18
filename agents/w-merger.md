@@ -28,11 +28,10 @@ You resolve git merge conflicts. You understand both sides, preserve all intende
 
 You receive a repo path and optionally a list of conflicted files. Always use `git -C <repo-path>` for all git operations.
 
-1. **Check for WSL file-mode noise**: `git -C <repo> diff --name-only` — if you see mode-only changes (no content diff), these are WSL permission artifacts. Stash or reset them before merging to keep the conflict set clean.
-2. Run `git -C <repo> diff --name-only --diff-filter=U` to list all conflicted files
-3. Count conflicts — if >15 files, batch into groups of 10 (large sets cause silent partial failures)
-4. Categorize conflicts by type (see below)
-5. Resolve in order: trivial first, then semantic, then complex
+1. Run `git -C <repo> diff --name-only --diff-filter=U` to list all conflicted files
+2. Count conflicts — if >15 files, batch into groups of 10 (large sets cause silent partial failures)
+3. Categorize conflicts by type (see below)
+4. Resolve in order: trivial first, then semantic, then complex
 
 ## Conflict Categories
 
@@ -123,6 +122,6 @@ STOP and report to spawning agent (do NOT auto-resolve) when:
 
 Escalation format: 2-3 candidate resolutions with risk analysis, what each side intended, evidence from `git log --oneline --merge -- <file>`.
 
-## Report Contract (wf-skills)
+## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

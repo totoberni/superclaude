@@ -3,7 +3,7 @@
 ## Read Before Edit
 - Understand existing code before suggesting changes
 - Check for known issues before debugging:
-  - Superclaude: `memory_db.py search '<project> gotchas mistakes'` or `list --tier shared-projects`
+  - Superclaude: `mem search '<project> gotchas mistakes'` or `mem list --tier shared-projects`
   - In-project: `docs/gotchas.md` or `.orchestrator/mistakes.md`
 
 ## Minimal Changes
@@ -13,16 +13,15 @@
 - Three similar lines > premature abstraction
 
 ## Git Discipline
-- Git commit and push are gated by the `/git` policy toggle, enforced mechanically by `hooks/guards/26-git-policy.sh` (reads `config/git-policy`). `/git false` blocks commit and push for all agents; `/git true` allows them. This is the single git-permission toggle; the owner sets it. See `docs/guard-activation.md`.
+- Git commit and push are gated by the `/git` policy toggle, enforced mechanically by the git-policy guard (reads `config/git-policy`). `/git false` blocks commit and push for all agents; `/git true` allows them. This is the single git-permission toggle; the owner sets it. See `docs/guard-activation.md`.
 - Never create/switch/merge branches without explicit instruction
 - One logical commit per unit of work
-- WSL permission diffs (`755 → 644`): never commit — see `21-domain-gotchas.md §WSL File Permissions`
 
 ## Commit Protocol
 - **Format**: `<type>(<optional scope>): <description>` — type is one of: feat, fix, test, docs, chore, refactor, style, ci, perf, build
 - **Pre-commit check**: if no tests have run this session, consider running tests before committing
 - **Co-author**: all agent commits include `Co-Authored-By: Claude <noreply@anthropic.com>`
-- **Hook enforcement**: `hooks/guards/30-commit-gate.sh` (blocks mode-only-diff and secret-shaped content; warns on conventional-subject and bulk-add).
+- **Hook enforcement**: the commit-gate guard (blocks secret-shaped content; warns on conventional-subject and bulk-add).
 
 ## Security
 - No secrets in code (check .env, credentials before committing)
@@ -41,9 +40,9 @@ Stop and ask the user if:
 
 If you fail at the same task 3 times with different approaches:
 1. Stop trying the same category of solution
-2. Check project gotchas (`memory_db.py search '<project> gotchas mistakes'` or `list --tier shared-projects`)
-3. If a worker, report back to your orch with all 3 attempts documented
-4. If an orch, write ESC-NNN to escalations.md with all 3 attempts
+2. Check project gotchas (`mem search '<project> gotchas mistakes'` or `mem list --tier shared-projects`)
+3. If a worker, report back to the agent that spawned you with all 3 attempts documented
+4. Otherwise, report to the user with all 3 attempts documented
 5. Never silently retry a 4th time — the pattern indicates a wrong mental model
 
 ## Consolidation

@@ -34,13 +34,13 @@ example-project M2. `technical` audits implementation readiness (spec
 completeness, codebase forensics, HPC portability, dependency graph,
 single source of truth) and mirrors the hrev-2 pattern. `both` (the
 default) runs both gauntlets in a single unified review; this is the
-right choice for coursework projects where one orch owns the whole
+right choice for coursework projects where one worker owns the whole
 stack.
 
 `--reviewer-count` controls delegation. `1` (default) produces a
 single review document. `2` is meaningful only with `--scope both` and
-signals meta to dispatch two orchs -- one per scope -- with
-independent review docs that meta later consolidates. Two-reviewer
+signals meta to dispatch two `w-hostile-reviewer` workers -- one per
+scope -- with independent review docs that meta later consolidates. Two-reviewer
 dispatches are the right pattern when the methodology and technical
 surfaces are large enough that a single session cannot cover both
 within budget.
@@ -96,15 +96,19 @@ the principles alone do not encode.
    or the novelty gauntlet to a coursework where novelty is not
    assessed.
 
-6. **Multi-pass cadence**: for consequential work, budget 2-3
-   hostile passes, not one. Pass 1 catches ~70 percent of big
+6. **Multi-pass cadence**: each hostile review is a one-shot pass
+   that returns a single `VERDICT:`; it never loops on its own. For
+   consequential work the owner or meta may nonetheless budget 2-3
+   independent hostile passes, not one. Pass 1 catches ~70 percent of big
    issues; pass 2 finds subtler tier-1 problems that only surface
    once pass-1 fixes are in (calibration hidden by the gross
    failure, colorbar inconsistency masked by the missing legend,
    numerical shift cascaded through updated prose); pass 3
    confirms the fixes held without introducing new issues. The
    cadence is not "a single review done harder"; it is a sequence
-   of reviews with scope-explicit refinement between them.
+   of independent reviews with scope-explicit refinement between
+   them, each examining the current state afresh (no pre-approval,
+   `verdict-schema.md`).
 
 ### Mode-aware gauntlet selection
 
@@ -205,7 +209,7 @@ implementation readiness.
 
 1. **Per-code-change audit**: for each code change, flag, or
    configuration item introduced in the product:
-   - Is the spec complete enough for a code-wave orch to
+   - Is the spec complete enough for an implementer worker to
      implement without supplementary questions?
    - Edge cases enumerated?
    - Downstream interactions traced (does the flag thread
@@ -292,10 +296,7 @@ Resolution order for the review document path:
    the next unused number in `docs/phase*-hostile-review.md`. This
    is the default for projects with a `docs/` directory, matching
    the example-project precedent (`docs/phase2-hostile-review.md`).
-3. If `docs/` does not exist and the caller is an orch:
-   `~/.claude/comms/<orch-name>/review.md` (the hrev-1 / hrev-2
-   precedent).
-4. If the caller is meta and no `docs/` exists:
+3. If `docs/` does not exist:
    `~/.claude/plans/<project>/hostile-review-<N>.md`.
 
 Decontamination (see Cross-subcommand conventions) applies when the
@@ -303,19 +304,23 @@ path resolves into the project tree.
 
 ### Delegation protocol (meta use)
 
-Meta may delegate the review to an orch rather than run it directly:
+Meta may delegate the review to a worker rather than run it directly:
 
-1. Spin up an orch named `o-<project>-hrev-<N>` (or `-method-<N>` /
-   `-tech-<N>` for a `--reviewer-count 2` dual dispatch), following
-   the usual meta comms scaffolding.
-2. DIR-001 for that orch is the literal `/research hostile-review`
-   invocation with the resolved scope, target path, and web-search
-   budget. Include the discovered markscheme, spec, and product-
-   under-review paths so the orch does not re-discover them.
-3. The orch's deliverable is the review document at the resolved
-   target path. On completion it reports via RPT and stops.
-4. Meta reads the review and issues a subsequent DIR for the fix
+1. Dispatch one `w-hostile-reviewer` worker (or two, one per scope,
+   for a `--reviewer-count 2` dual dispatch).
+2. The task brief is the literal `/hostile-review` invocation with
+   the resolved scope, target path, and web-search budget. Include
+   the discovered markscheme, spec, and product-under-review paths
+   so the worker does not re-discover them. The brief carries the
+   artefact and rubric only, never the producer's reasoning or a
+   prior clean verdict.
+3. The worker's deliverable is the review document at the resolved
+   target path. Its return opens with the `VERDICT:` line (see
+   Return token below), then it stops. It does not loop.
+4. Meta reads the verdict and the review, then dispatches the fix
    wave, citing the review document as the authoritative punch list.
+   A further hostile pass happens only if the owner or meta judges
+   it necessary.
 5. For a two-reviewer dispatch: meta consolidates the two reviews
    manually (preserving per-reviewer attribution, deduplicating
    findings, severity-ranking the merged list). Auto-consolidation
@@ -375,7 +380,7 @@ appear in this order so downstream consumers find anchors.
 
 ## 9. Remediation sequencing
 <ordered punch list: which findings fix which others, which block
- others, suggested atomic directives if the caller is meta>
+ others, suggested atomic task briefs if the caller is meta>
 ```
 
 Every finding uses the table form
@@ -386,9 +391,24 @@ where `location` is `<file>:<line>` or `<file>:<section>`, evidence
 is one of the forms from hostile-specific principle 2, and
 recommended fix is a concrete action (not "consider X").
 
+### Return token
+
+Line 1 of the return to the caller is the machine-readable token
+(verdict-first, `~/.claude/skills/_shared/verdict-schema.md`):
+
+```
+VERDICT: REWORK|CLEAN blocking=N major=N minor=N
+```
+
+Blocking maps to `blocking`, Major to `major`, Minor to `minor`;
+PASS items are not counted. `VERDICT: CLEAN` requires `blocking=0
+major=0`. Findings without evidence are dropped before counting, and
+a zero-finding review is a valid outcome. Only the hostile reviewer
+authors the token; a caller that relays it quotes the line verbatim.
+
 ### Workflow
 
-1. Verify maximum effort is in effect (the `w-hostile-reviewer` agent ships `effort: max`); if depth cannot be assured, abort with ESC.
+1. Verify maximum effort is in effect (the `w-hostile-reviewer` agent ships `effort: max`); if depth cannot be assured, abort and report the reason to the caller.
 2. Run the project discovery protocol; state project root,
    artefacts, mode, markscheme, spec, prior reviews at the top of
    your working notes.
@@ -405,6 +425,6 @@ recommended fix is a concrete action (not "consider X").
 8. Synthesise findings; sort by severity and remediation order;
    write the output document per the exact structure above.
 9. Decontamination grep (Cross-subcommand conventions).
-10. Report path of the output document back to the caller. If
-    caller is meta, state "ready for delegation" and suggest the
-    DIR skeleton meta would write for the fix wave.
+10. Return to the caller: the `VERDICT:` line first, then the path
+    of the output document. If caller is meta, suggest the task-brief
+    skeleton meta would write for the fix wave. Then stop.

@@ -9,7 +9,7 @@ maxTurns: 40
 memory: project
 skills:
   - debugging
-  - wsl-gotchas
+  - windows-gotchas
   - gas-patterns
   - test-cleanup-protocol
 ---
@@ -46,8 +46,8 @@ If you haven't completed Phase 1, you CANNOT propose fixes.
 ### Phase 2: Narrow the Scope
 
 1. Binary search: which file/function/line causes the failure?
-2. Use `timeout -v` for hanging tests (M-8, M-9)
-3. Check project gotchas FIRST: `~/.claude/agent-memory/shared/projects/<project>.md`
+2. For hanging tests, set the tool's own timeout parameter and state the expected duration (M-8, M-9)
+3. Check project gotchas FIRST: `mem search '<project> gotchas mistakes'`, then `mem get --name <slug>` for the full entry
 4. Isolate: does it fail alone or only in combination?
 
 ### Phase 3: Identify Root Cause
@@ -73,14 +73,14 @@ If you catch yourself thinking any of these, STOP:
 
 ### 3+ Fixes Failed = Wrong Architecture
 
-If 3 attempts fail with different approaches, STOP fixing. Report back to your orch with all 3 attempts documented. The pattern indicates a wrong mental model, not a missing fix.
+If 3 attempts fail with different approaches, STOP fixing. Report back to the spawning agent with all 3 attempts documented. The pattern indicates a wrong mental model, not a missing fix.
 
 ## Hard Rules
 
 - **NEVER skip Step 1 cleanup** (see `~/.claude/skills/test-cleanup-protocol/SKILL.md`) before forming a theory — stale __pycache__ causes phantom failures
 - **NEVER weaken assertions** (`==` → `>=`) to make tests pass — that's hiding bugs
 - **NEVER add `pytest.skip()`** to mask failures — except for live-API-key gates
-- **NEVER claim "pre-existing"** without merge-base proof (see `~/.claude/agents/orch.md` § Test Failure Protocol Step 6)
+- **NEVER claim "pre-existing"** without merge-base proof (the failure must reproduce on the merge-base commit)
 - **NEVER theorize** before reproducing the failure
 - **3 attempts then escalate**: if your first 3 different-approach fixes fail, STOP and escalate to spawning agent with all 3 attempts documented (per `~/.claude/rules/00-universal.md` § Escalation on Repeated Failure)
 
@@ -89,14 +89,14 @@ If 3 attempts fail with different approaches, STOP fixing. Report back to your o
 1. **Capture** — Get the full error output (don't truncate stack traces). When diagnosing test failures: first run the Test Cleanup Protocol — see `~/.claude/skills/test-cleanup-protocol/SKILL.md` (nukes stale `__pycache__`, restores compose-dirtied host files, checks `git status`). Many "phantom" test bugs are environmental.
 2. **Locate** — Identify the origin file and line number
 3. **Check docs first** — Read known issues BEFORE theorizing:
-   - Superclaude: `~/.claude/agent-memory/shared/projects/<project>.md` (Gotchas + Mistakes)
+   - Superclaude: memory DB, `mem search '<project> gotchas mistakes'` then `mem get --name <slug>` (Gotchas + Mistakes)
    - In-project: `docs/gotchas.md` or `.orchestrator/mistakes.md`
    - Tool conventions: `~/.claude/rules/20-tool-conventions.md`
 4. **Read context** — Read the surrounding code (not just the error line)
 5. **Hypothesize** — State your root cause hypothesis explicitly before changing anything
 6. **Fix minimally** — Implement the smallest change that addresses the root cause
 7. **Verify** — Rebuild/rerun to confirm the fix works
-8. **Record** — Append the fix to the relevant gotchas/mistakes file
+8. **Record** — Record the fix (see Recording Fixes)
 
 ## Test Isolation Debugging
 
@@ -151,13 +151,13 @@ When tests pass alone but fail in suite (or vice versa), the problem is almost a
 - **clasp push != deploy**: Always deploy after push
 - **UrlFetchApp 302**: Use `curl -L -d ''` not `curl -X POST`
 
-### WSL-Specific
-See preloaded `wsl-gotchas` skill for port conflicts, file permissions, line endings.
+### Windows-Specific
+See preloaded `windows-gotchas` skill for native Windows pitfalls (paths, line endings, shell differences).
 
 ## Recording Fixes
 
 After fixing, record the issue in the appropriate location:
-- Superclaude projects: `~/.claude/agent-memory/shared/projects/<project>.md` (Mistakes or Gotchas)
+- Superclaude projects: memory DB via `/mistake <project>` (Mistakes or Gotchas, tier `shared-projects`)
 - In-project: `docs/gotchas.md` or `.orchestrator/mistakes.md`
 - Format: what went wrong, root cause, fix applied, prevention rule
 
@@ -178,7 +178,7 @@ After fixing, record the issue in the appropriate location:
 - Cleanup ran: [yes/no — see test-cleanup-protocol]
 
 ### Gotchas Discovered
-[any new patterns to record in `~/.claude/agent-memory/shared/projects/<project>.md`]
+[any new patterns to record in project memory via `/mistake <project>`]
 
 ### Verdict
 FIXED / BLOCKED / ESCALATED
@@ -199,6 +199,6 @@ Format escalation as a structured report including: 3 attempts, files touched, w
 
 Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
-## Report Contract (wf-skills)
+## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

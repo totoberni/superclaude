@@ -15,7 +15,7 @@ rows, sanitize misplaced/duplicate entries, and clean compact snapshots.
 
 **v3 (DB-aware)**: memory is a hybrid-search SQLite store, not a tree of MD files. The
 short/mid/long-term horizons are now **DB-expressed via the `tier` column**, not directories.
-Promote/consolidate/archive are **DB operations** (`memory_db.py upsert`/`search`/`get`/`prune`),
+Promote/consolidate/archive are **DB operations** (`mem upsert`/`search`/`get`/`prune`),
 not file moves. The one exception is the deliberate MD archive-tombstone and the
 `--complete` checkpoint file — those are intentional MD-WRITES, preserved (see the
 `MD-WRITE (preserved)` notes); only MD-READ-for-measurement logic was removed.
@@ -44,7 +44,7 @@ now expressed as tier re-assignment via upsert):
 
 | Mode/Flag | Scope | Cost | Use when |
 |-----------|-------|------|----------|
-| `--quick` | Targeted project or all (single pass) | ~10 min | After an orch wave, end of day |
+| `--quick` | Targeted project or all (single pass) | ~10 min | After a worker wave, end of day |
 | `--complete` | Cell-by-cell with checkpointing | ~25 min | Monthly deep clean, project milestone |
 | `--compact` | Run compaction procedure (formerly /compact-mem) | additive | When cells are over-budget |
 | `--sanitize` | Run sanitization P0/P1 fixes (formerly /sanitize-mem) | additive | When refs/dupes are suspected |
@@ -61,25 +61,25 @@ now expressed as tier re-assignment via upsert):
 Collect per-tier DB health signals (rows, bytes, oversized "fat" rows, stale candidates, FTS/vec integrity):
 
 ```bash
-bash ~/.claude/scripts/scan-mem-matrix.sh --budgets
+scpy memory/scan_mem_matrix.py --budgets
 ```
 
 Then enumerate rows per horizon for classification:
 
 ```bash
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier instance         # short-term
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier class             # mid-term
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier shared-projects   # mid-term
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier shared-global     # long-term
+mem list --tier instance         # short-term
+mem list --tier class             # mid-term
+mem list --tier shared-projects   # mid-term
+mem list --tier shared-global     # long-term
 ```
 
 For each row, classify:
 
 | Entry state | Criteria | Action |
 |-------------|----------|--------|
-| **Promotable** | Has `[PROMOTE]` tag in body, OR Occ>=3, OR same pattern in 2+ projects (find via `memory_db.py search`) | Re-tier upward (Step 2) |
-| **Stale** | References deleted files/orchs, completed work, resolved gotchas, OR `updated` past `STALE_DAYS` with low signal | Archive (Step 3) |
-| **Oversized / near-dup** | `LENGTH(text) > OVERSIZE_BYTES` (from the scan's `fat` count) OR flagged near-dup by `/mem-health` OR surfaced by hybrid `memory_db.py similar` (Step 7) | Consolidate (Step 7) |
+| **Promotable** | Has `[PROMOTE]` tag in body, OR Occ>=3, OR same pattern in 2+ projects (find via `mem search`) | Re-tier upward (Step 2) |
+| **Stale** | References deleted files/agents, completed work, resolved gotchas, OR `updated` past `STALE_DAYS` with low signal | Archive (Step 3) |
+| **Oversized / near-dup** | `LENGTH(text) > OVERSIZE_BYTES` (from the scan's `fat` count) OR flagged near-dup by `/mem-health` OR surfaced by hybrid `mem similar` (Step 7) | Consolidate (Step 7) |
 | **Active** | Currently actionable | Keep in place |
 
 ### Step 2: Promote (re-tier one horizon up)
@@ -89,7 +89,7 @@ An entry promotes ONE horizon per /lt-mem run. Promotion = re-assign the `tier` 
 the `retier` subcommand (a single in-place UPDATE of tier+path; the row, its FTS shadow, and
 its precomputed embedding are all preserved — no dup, no re-embed, no delete).
 
-> CRITICAL — use `retier`, not `upsert`, to promote: `memory_db.py retier (--name X | --id N)
+> CRITICAL — use `retier`, not `upsert`, to promote: `mem retier (--name X | --id N)
 > --tier <TARGET>` re-tiers the row IN PLACE. It rewrites the path to `<TARGET>/<tail>` for you
 > (stripping the old leading tier segment), so there is NO `--path` to remember and NO way to
 > accidentally fork a duplicate. This removes the old footgun entirely: the previous mechanism
@@ -98,7 +98,7 @@ its precomputed embedding are all preserved — no dup, no re-embed, no delete).
 > LITERAL stored tier string — `--tier shared-global` (not `--tier global`). `retier` guards
 > against a no-op (errors if the row is already in TARGET) and REJECTS `--tier archive` (use the
 > `archive` subcommand for that — archive needs an origin-encoded reversible path; see Step 3).
-> Fetch the slug/description first via `memory_db.py get --name <slug>` (or `list`) if unsure.
+> Fetch the slug/description first via `mem get --name <slug>` (or `list`) if unsure.
 
 For each promotable entry (mid-term tiers are `class` and `shared-projects`; long-term is `shared-global`):
 
@@ -111,14 +111,10 @@ Promotion format for long-term (`shared-global`) — the PRIMARY mechanism is th
 
 ```bash
 # Search to confirm the row to promote (and detect any sibling near-dup first)
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  search '<pattern summary>' -k 3
+mem search "<pattern summary>" -k 3
 
 # Re-tier IN PLACE — one UPDATE, no --path needed, no duplicate possible.
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  retier --name <slug-kebab-case> --tier shared-global
+mem retier --name <slug-kebab-case> --tier shared-global
 ```
 
 > When promotion is genuinely a RESHAPE (you are rewriting the body, not merely moving it), use
@@ -156,12 +152,12 @@ AND semantically searchable.
 
 ```bash
 # Re-tier to archive (preserves row + embedding; default search no longer surfaces it)
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py archive --name <slug>
+mem archive --name <slug>
 # Reverse if it turns out to still matter:
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py archive --name <slug> --unarchive
+mem archive --name <slug> --unarchive
 # Confirm it left the active horizon but is still queryable:
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py search '<its topic>' -k 5            # absent
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py search '<its topic>' --tier archive -k 5  # present
+mem search "<its topic>" -k 5            # absent
+mem search "<its topic>" --tier archive -k 5  # present
 ```
 
 **SECONDARY — MD tombstone (preserved, optional)**: optionally also write a tombstone capturing
@@ -176,44 +172,24 @@ confirmation per Constraints. For ordinary staleness, prefer `archive` so the ve
 Find stale rows via the scan's `stale` count + targeted listing:
 ```bash
 # rows past the staleness horizon (updated older than STALE_DAYS)
-sqlite3 ~/.claude/agent-memory/.memory.db \
-  "SELECT name, tier, updated FROM memories WHERE updated < datetime('now','-60 days') ORDER BY updated;"
+scpy memory/memory_db.py sql "SELECT name, tier, updated FROM memories WHERE updated < datetime('now','-60 days') ORDER BY updated;"
 ```
 
 Stale criteria:
-- References files that don't exist on disk (broken refs — verify with `test -e` on paths in the body)
+- References files that don't exist on disk (broken refs — verify each path in the body with the Glob or Read tool)
 - Gotcha for a resolved issue (project has moved past it)
 - Mistake with Occ=1, older than 60 days (`STALE_DAYS`), and no related active work
-- Orch instance memory for a decommissioned orch (`instance` row whose agent is a dead orch)
+- Worker instance memory for a retired worker (`instance` row whose agent no longer exists)
 
 ### Step 4: Clean Compact Snapshots
 
-Primary method (session-matching):
+Snapshots live in `~/.claude/agent-memory/_system/_compact-snapshots/` and are named
+`compact-<date>-<time>-<session-prefix>.md`. List them with the Glob tool, then:
 
-```bash
-SNAP_DIR="$HOME/.claude/agent-memory/_system/_compact-snapshots"
-TIMER_DIR="$HOME/.claude/session-timers"
-
-for snap in "$SNAP_DIR"/*.md; do
-  [ -f "$snap" ] || continue
-  SNAP_SESSION=$(basename "$snap" .md | sed 's/compact-[0-9]*-[0-9]*-//')
-  ACTIVE=false
-  for sf in "$TIMER_DIR"/*.start; do
-    [ -f "$sf" ] || continue
-    SID=$(basename "$sf" .start)
-    echo "$SID" | grep -q "^${SNAP_SESSION}" && ACTIVE=true && break
-  done
-  if [ "$ACTIVE" = false ]; then
-    rm "$snap"
-    echo "Cleaned: $(basename "$snap")"
-  fi
-done
-```
-
-Fallback (date-based): delete all snapshots from the current day when no sessions are active:
-```bash
-find "$SNAP_DIR" -name "*.md" -mtime 0 -delete 2>/dev/null
-```
+1. Retain every snapshot whose `<session-prefix>` matches the current session, and every snapshot
+   modified within the last 24 hours (another session may still be live).
+2. Delete each remaining snapshot by its exact path, one named file at a time. No wildcard or
+   recursive deletes.
 
 ### Step 5: Report
 
@@ -222,7 +198,7 @@ find "$SNAP_DIR" -name "*.md" -mtime 0 -delete 2>/dev/null
 
 **Mode**: --quick | --complete (+ --compact | --sanitize | --dry-run flags)
 **Scope**: <project name | all>
-**Rows scanned**: N (per `memory_db.py stats`)
+**Rows scanned**: N (per `mem stats`)
 
 ### Promotions (re-tiered)
 | # | Entry | From horizon (tier) | To horizon (tier) | Status |
@@ -246,7 +222,7 @@ find "$SNAP_DIR" -name "*.md" -mtime 0 -delete 2>/dev/null
 | stale rows | N | N |
 | FTS/vec integrity | OK/DESYNC | OK/DESYNC |
 ```
-(Capture Before/After by running `bash ~/.claude/scripts/scan-mem-matrix.sh --budgets` at the start and end.)
+(Capture Before/After by running `scpy memory/scan_mem_matrix.py --budgets` at the start and end.)
 
 ### Step 6: Checkpoint (--complete mode only)
 
@@ -303,8 +279,7 @@ carries over. They are advisory consolidation triggers, not hard gates.
 | mid | `class` MTM (agent = class name) | ~2400 B (≈40 lines) |
 | mid | `class` project-scoped (agent = class) | ~1800 B (≈30 lines) |
 | short | `instance` meta (agent = meta) | ~4800 B (≈80 lines) |
-| short | `instance` orch (agent = orch/<name>) | ~2400 B (≈40 lines) |
-| short | `instance` other (agent = <name>) | ~1800 B (≈30 lines) |
+| short | `instance` worker or other (agent = <name>) | ~1800 B (≈30 lines) |
 
 > These per-tier byte targets are softer than the single global `OVERSIZE_BYTES` (8000 B) that
 > `/mem-health` scores on. `OVERSIZE_BYTES` flags only egregiously fat rows (a hard health
@@ -314,10 +289,9 @@ carries over. They are advisory consolidation triggers, not hard gates.
 ### C1. Measure
 Use the scan from Step 1 (per-tier rows/bytes/biggest/fat). For ad-hoc invocation:
 ```bash
-bash ~/.claude/scripts/scan-mem-matrix.sh --budgets
+scpy memory/scan_mem_matrix.py --budgets
 # Find the specific oversized rows to target (largest first):
-sqlite3 ~/.claude/agent-memory/.memory.db \
-  "SELECT name, tier, LENGTH(text) AS bytes FROM memories ORDER BY bytes DESC LIMIT 20;"
+scpy memory/memory_db.py sql "SELECT name, tier, LENGTH(text) AS bytes FROM memories ORDER BY bytes DESC LIMIT 20;"
 ```
 
 **Near-duplicate detection (hybrid `similar`)** — for each row that looks like a merge
@@ -325,8 +299,7 @@ candidate (a fat row, or one whose topic recurs), ask the DB for its nearest nei
 hybrid metric (semantic cosine + lexical Jaccard). High `cos` AND high `jac` ⇒ likely duplicate;
 high `cos` with low `jac` ⇒ same topic in different words (a relation pure FTS misses):
 ```bash
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  similar --name <slug> -k 8
+mem similar --name <slug> -k 8
 ```
 This reuses the row's precomputed embedding (no re-embed). The `/mem-similar` skill wraps the
 same call. **PROPOSE every merge for human review — NEVER auto-merge** (see C2).
@@ -338,32 +311,29 @@ Edit the row body, then re-`upsert` IN PLACE (same `--path`) so the change re-em
 | Technique | When | Transform |
 |-----------|------|-----------|
 | Prose to bullet | Paragraphs in a body | "When X because Y, do Z" -> `- X -> Y. Fix: Z` |
-| Merge near-dup rows | 2+ rows same topic (from `/mem-health`, or hybrid `memory_db.py similar` per C1) | PROPOSE the merge for human review (never auto-merge); once approved, keep the richer row, fold in the unique facts, then `archive` the other(s) — `prune` only if confirmed noise |
+| Merge near-dup rows | 2+ rows same topic (from `/mem-health`, or hybrid `mem similar` per C1) | PROPOSE the merge for human review (never auto-merge); once approved, keep the richer row, fold in the unique facts, then `archive` the other(s) — `prune` only if confirmed noise |
 | Table to inline | <3-row table in a body | Single-row table -> `Key: value` |
 | Promote to ref | Detail duplicated in another row | Full text -> `See: [[other-slug]]` |
 | Drop timestamps | Static items | Remove dates that add no value |
 
-To rewrite a row's body in place (preserves its tier/path, re-embeds the new text):
+To rewrite a row's body in place (preserves its tier/path, re-embeds the new text), write the compressed body to `~/.claude/tmp/<existing-slug>.md` with the Write tool, then:
 ```bash
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  upsert --tier <existing-tier> --type <existing-type> \
-  --name <existing-slug> --description "<existing-desc>" \
-  --path <existing-path> --text-file <compressed-body.md>
+mem upsert --tier <existing-tier> --type <existing-type> --name <existing-slug> --description "<existing-desc>" --path <existing-path> --text-file ~/.claude/tmp/<existing-slug>.md
 ```
 
 ### C3. Keep/Cut Rules
 
-**KEEP**: gotchas/fix recipes, canonical paths, active orch state, DEC-NNN, wins/mistakes content.
+**KEEP**: gotchas/fix recipes, canonical paths, active plan state, DEC-NNN, wins/mistakes content.
 
 **CUT**: "Updated: [date]" on static items, verbose prose (one-liner suffices), completed TODOs, session-specific commit hashes.
 
-**ARCHIVE stale rows**: per Step 3 — re-tier to `tier='archive'` via `memory_db.py archive --name <slug>` (preserves the row + its embedding, leaves the active horizon). `prune` only as a last resort for genuine noise.
+**ARCHIVE stale rows**: per Step 3 — re-tier to `tier='archive'` via `mem archive --name <slug>` (preserves the row + its embedding, leaves the active horizon). `prune` only as a last resort for genuine noise.
 
 ### C4. Verify
 
-1. `bash ~/.claude/scripts/scan-mem-matrix.sh --budgets` — fat count dropped, FTS/vec still OK
-2. `memory_db.py stats` — `memories == fts == vec` (re-embedding kept the shadows aligned)
-3. Spot-check a compressed row via `memory_db.py get --name <slug>` — every gotcha still has its fix recipe; `[[links]]` resolve to real slugs
+1. `scpy memory/scan_mem_matrix.py --budgets` — fat count dropped, FTS/vec still OK
+2. `mem stats` — `memories == fts == vec` (re-embedding kept the shadows aligned)
+3. Spot-check a compressed row via `mem get --name <slug>` — every gotcha still has its fix recipe; `[[links]]` resolve to real slugs
 
 ### C5. Report (consolidation summary)
 
@@ -389,7 +359,7 @@ for small corpora. Plain `VACUUM` reclaims SQLite free pages but cannot repack v
 
 **One command fixes both**:
 ```bash
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py compact
+mem compact
 ```
 Sequence: FTS5 `optimize` → vec0 rebuild (DROP + recreate at `chunk_size=256`, re-inserting
 every vector at `rowid=memories.id`) → `VACUUM` → self-verify (integrity_check=ok, row counts
@@ -397,44 +367,15 @@ unchanged, zero orphan memories, KNN self-match byte-identical). Rolls back the 
 any error.
 
 **Safety discipline**: structural compaction is more invasive than row ops. Always back up first
-(`cp ~/.claude/agent-memory/.memory.db <backup>`) and prefer testing on the copy
-(`memory_db.py compact --db <copy>`) before running live — especially after large prune waves.
+(copy `~/.claude/agent-memory/.memory.db` to `<backup>`) and prefer testing on the copy
+(`mem compact --db <copy>`) before running live — especially after large prune waves.
 The command is transactional + self-verifying, but a backup is the cardinal-rule safety net.
 
 **When**: after a heavy consolidation round (many prunes/compressions/re-tiers), not on every
 quick run. Measured impact: 4.1 MB → 1.83 MB (~56% reduction) with zero search-quality loss.
 
-**Peer note**: compaction is file-level and does NOT propagate via Step 8's row-level sync. Run
-it on the peer separately after Step 8 completes:
-```bash
-ssh <peer> 'HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py compact'
-```
-
 **Optional ongoing hygiene**: `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;` once, then
 `PRAGMA incremental_vacuum;` cheaply reclaims free pages between full compactions.
-
-### Step 8: Propagate to peer (replicated 2-DB setup)
-
-A `/lt-mem` consolidation writes only to the local machine's DB. On a replicated 2-machine setup
-(e.g. WSL + a peer host), the consolidating machine is the source of truth; the peer must inherit all
-compactions, re-tiers, archives, and prunes — else a later peer-side sync can resurrect
-stale/fat copies.
-
-Run immediately after the consolidation pass:
-
-```bash
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/claude_mem_sync.py \
-  --peer-host <peer> --auto newer
-```
-
-Use `--auto newer`, NOT `--auto safe`: the tidied rows are newer post-consolidation, so `newer`
-lets them win cleanly; `--auto safe` keeps-both and would re-add `-conflict-<peer>` copies of
-every compressed/archived row, undoing the tidy. Unless the owner specifies a different SOT or
-direction (e.g. the peer initiated the consolidation), the consolidating machine always pushes
-as source of truth.
-
-> Sync mechanics — SSH transport, conflict resolution, row merging — live in
-> `scripts/memory/claude_mem_sync.py` and `scripts/cockpit/`; do not duplicate them here.
 
 ## Sanitization (P0/P1 — formerly /sanitize-mem)
 
@@ -446,23 +387,23 @@ Query the DB to enumerate all entries in scope. Build a mental map of what each 
 
 ```bash
 # List entries by tier (repeat for each tier needed)
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier instance
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier shared-projects
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier shared-global
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py list --tier class
+mem list --tier instance
+mem list --tier shared-projects
+mem list --tier shared-global
+mem list --tier class
 
 # Or search across tiers for specific content
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py search "<topic>" -k 8
+mem search "<topic>" -k 8
 ```
 
-Fetch full body of any entry via `memory_db.py get --name <slug>` (or `get --id <n>`).
+Fetch full body of any entry via `mem get --name <slug>` (or `get --id <n>`).
 
 ### S2. Detect P0/P1 Issues
 
 | Priority | Issue | Detection | Fix |
 |----------|-------|-----------|-----|
 | **P0** | **Wrong tier** — project learnings in agent-specific memory | Content about a project's codebase/patterns in a row at tier=`instance` (agent=<agent>) instead of tier=`shared-projects` | Re-tier in place to `shared-projects` via `retier --name <slug> --tier shared-projects` (no `--path`, no dup) |
-| **P1** | **Duplicates** — same learning in 2+ rows | Same concept in different rows (use the `/mem-health` near-dup flag or `memory_db.py search`) | Keep the richer row, `prune` the others (or reduce them to a `[[link]]`) |
+| **P1** | **Duplicates** — same learning in 2+ rows | Same concept in different rows (use the `/mem-health` near-dup flag or `mem search`) | Keep the richer row, `prune` the others (or reduce them to a `[[link]]`) |
 
 (P2 stale refs, P3 session cruft, P4 orphans are no longer auto-handled — surface them in the /lt-mem report's "manual review" appendix.)
 
@@ -474,15 +415,13 @@ Fetch full body of any entry via `memory_db.py get --name <slug>` (or `get --id 
 | Agent operational protocol | `instance` (agent = <agent>) | Not duplicate rules/ content |
 | Cross-project wins | `shared-global` (agent NULL) | Reference, not duplicate |
 | Tool patterns | `rules/20-tool-conventions.md` (flat file) | Reference, not duplicate |
-| Test quality standards | `instance` (agent = orch, base orch) | Inherit from base orch |
-
 ### S4. Execute P0/P1 Fixes
 
 For each issue found:
 1. Fetch the source and target entries from the DB:
    ```bash
-   HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py get --name <source-slug>
-   HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py get --name <target-slug>
+   mem get --name <source-slug>
+   mem get --name <target-slug>
    ```
    (Use `search "<topic>"` first if the slug is not known.)
 2. If moving content (P0): `retier --name <slug> --tier <canonical-tier>` — moves the single misplaced row in place (no `--path`, no dup, embedding preserved). There is no separate source to update; the one row simply changes tier.
@@ -517,5 +456,4 @@ Append to /lt-mem report:
 - ALWAYS run the consolidation pass (Step 7) after promote/archive unless `--skip-compact` or zero oversized + zero near-dup rows remain
 - The deliberate MD-WRITES — the `_system/_archive/` tombstone (Step 3) and the `--complete` checkpoint file (Step 6) — are preserved by design and flagged for owner review; do NOT remove them
 - `--dry-run`: NO DB writes and NO file writes anywhere. Output the unified plan only.
-- After any consolidation, sync to the peer DB via Step 8 — consolidating machine is SOT; use `--auto newer` (NOT `--auto safe`), unless the owner specifies otherwise
-- Structural compaction (`memory_db.py compact`) is transactional + self-verifying with rollback; always back up the DB and test on a copy before running live after large prune waves; it does NOT propagate via Step 8 — run it on the peer separately
+- Structural compaction (`mem compact`) is transactional + self-verifying with rollback; always back up the DB and test on a copy before running live after large prune waves

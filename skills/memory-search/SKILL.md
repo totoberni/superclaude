@@ -12,7 +12,7 @@ allowed-tools: Read, Grep, Glob, Bash
 
 Search across all superclaude memory files for a keyword or topic. Memory is DB-resident
 (v3): all tiers (instance, shared, class, global) are indexed in `~/.claude/agent-memory/.memory.db`.
-The canonical search tool is `memory_db.py`.
+The canonical search tool is `mem` (the `memory_db.py` CLI shim).
 
 **Query**: $ARGUMENTS
 
@@ -25,16 +25,14 @@ Extract the search query from `$ARGUMENTS`. If empty, ask the user what to searc
 ### 2. Query the Memory DB
 
 ```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  search '<query>' -k 5 --mode hybrid
+mem search "<query>" -k 5 --mode hybrid
 ```
 
 - Default `--mode hybrid` (semantic + keyword). Use `--mode fts` for exact jargon / IDs
   (e.g., `M-7`, hook names, exact error strings).
 - Add `--json` to get machine-readable output when the caller needs structured data.
 - Each result includes `id`, `name`, `tier`, `type`, `text`, and a relevance score.
-- To read the full entry as rendered HTML: `memory_db.py get --name <name> --html`
+- To read the full entry as rendered HTML: `mem get --name <name> --html`
 
 ### 3. Display Results
 
@@ -47,7 +45,7 @@ Group results by tier:
 - [workspace] "rubber-stamp diagnostic" — Occ=3, …
 - [vps] "db migration gotcha" — …
 
-### instance / orch
+### instance / meta
 - "compilation loop pattern" — …
 
 ### No strong matches

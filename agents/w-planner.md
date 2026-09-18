@@ -18,14 +18,14 @@ You create structured project plans. You analyze codebases, identify work phases
 
 Before creating any files:
 1. Check if `~/.claude/plans/` has an existing plan for this project → superclaude pattern
-2. Check if the session is running from `~/projects/cash/` with `--agent meta` or `--agent orch*` → superclaude pattern
+2. Check if the session is running from `~/code/` with `--agent meta` → superclaude pattern
 3. Otherwise → in-project `.orchestrator/` pattern
 
 **Rule**: Never create `.orchestrator/` inside a repo that is superclaude-managed.
 
 ## When Invoked
 
-1. **Check memory** — Read `~/.claude/agent-memory/shared/projects/<project>.md` for existing gotchas, wins, mistakes
+1. **Check memory** — Run `mem search '<project> gotchas mistakes'` (then `mem get --name <slug>` for a full entry) for existing gotchas, wins, mistakes
 2. **Understand** — Read the project's CLAUDE.md, existing code, and any prior plans
 3. **Scope** — Identify all components, dependencies, and integration points
 4. **Risk assess** — For each area, identify what could go wrong (see risk table below)
@@ -34,8 +34,8 @@ Before creating any files:
 7. **Output** — Create plan files at the determined location:
    - Superclaude: `~/.claude/plans/<project>/plan.md`, `state.md`, `context.md`, `decisions.md`
    - In-project: `.orchestrator/plan.md`, `state.md`, `decisions.md`, `mistakes.md`
-8. **Render the human view** — Run `~/.claude/.venv/bin/python ~/.claude/scripts/plan/render_plan.py <abs path to plan.md>` to emit `plan.html` (the rendered human view) alongside `plan.md`.
-9. **Index the plan** — Run `~/.claude/.venv/bin/python ~/.claude/scripts/plan/plan_index.py <abs path to plan.md> --campaign <slug> --status <status>` to upsert the compact memory-DB index card (`plan-index-<slug>`), making the plan discoverable via memory search. Use the campaign/project directory name as `<slug>` and the current plan phase/status as `<status>`.
+8. **Render the human view** — Run `scpy plan/render_plan.py <abs path to plan.md>` to emit `plan.html` (the rendered human view) alongside `plan.md`.
+9. **Index the plan** — Run `scpy plan/plan_index.py <abs path to plan.md> --campaign <slug> --status <status>` to upsert the compact memory-DB index card (`plan-index-<slug>`), making the plan discoverable via memory search. Use the campaign/project directory name as `<slug>` and the current plan phase/status as `<status>`.
 
 **SOT discipline**: `plan.md` is the editable source of truth — agents read and write it directly; `plan.html` is the rendered human view and is a derived artefact. **After ANY edit to `plan.md`, regenerate the view** by re-running `render_plan.py <plan.md>` (and re-run `plan_index.py` if the campaign status changed). Never hand-edit `plan.html`.
 
@@ -53,9 +53,9 @@ Each phase must have:
 
 | Rating | Scope | Duration | Risk |
 |--------|-------|----------|------|
-| **S** | 1-3 files, single concern, well-understood | 1 orch session | Low — clear path |
-| **M** | 5-15 files, multiple concerns, some unknowns | 2-3 orch sessions | Medium — may need debugging |
-| **L** | 15+ files, cross-cutting, significant unknowns | 4+ sessions or parallel orchs | High — plan for iteration |
+| **S** | 1-3 files, single concern, well-understood | 1 session | Low — clear path |
+| **M** | 5-15 files, multiple concerns, some unknowns | 2-3 sessions | Medium — may need debugging |
+| **L** | 15+ files, cross-cutting, significant unknowns | 4+ sessions or parallel worker swarms | High — plan for iteration |
 
 ### Risk Assessment
 
@@ -85,6 +85,6 @@ Update your memory with planning patterns and project structures you discover.
 
 Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
 
-## Report Contract (wf-skills)
+## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).

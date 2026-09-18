@@ -9,9 +9,9 @@ allowed-tools: Read, Bash, Grep, Glob, Agent
 
 # Swarm Dispatch
 
-Codifies the battle-tested swarm patterns (W-1, W-4, W-7, W-11) into a single dispatch skill. Used by meta+orch to launch parallel worker batches with the right shape for the work.
+Codifies the battle-tested swarm patterns (W-1, W-4, W-7, W-11) into a single dispatch skill. Used by meta to launch parallel worker batches with the right shape for the work.
 
-**Authority**: meta + orch only. Workers (`w-*`) cannot spawn children — invoking this skill from a worker is a no-op error.
+**Authority**: meta (or a plain session) only. Workers (`w-*`) cannot spawn children — invoking this skill from a worker is a no-op error.
 **Hard cap**: 5 workers per single Agent-tool batch (Anthropic limit).
 
 ## Patterns
@@ -21,7 +21,7 @@ Codifies the battle-tested swarm patterns (W-1, W-4, W-7, W-11) into a single di
 | `discovery` | W-1 | Read-only spec capture / recon | N up-to-5 read-only Explore/general-purpose helpers | 5x |
 | `reviewer-bg-overlap` | W-4 | Implement K + review K-1 in BG | 1 implementer + 1 reviewer (BG) per cycle | 40% |
 | `mixed-batch` | W-7 | Heterogeneous parallel work | up to 5 mixed: web research + code recon + reviewer | 4x |
-| `polish` | W-11 | Meta-direct polish on orch-DONE | Meta + 3 read-only helpers | ~5 hr saved per round |
+| `polish` | W-11 | Meta-direct polish on worker-DONE | Meta + 3 read-only helpers | ~5 hr saved per round |
 
 ## Procedure
 
@@ -58,10 +58,10 @@ Codifies the battle-tested swarm patterns (W-1, W-4, W-7, W-11) into a single di
 
 ### Pattern: `polish` (W-11)
 
-1. Verify orch state = DONE for the target scope.
-2. Verify polish scope: ≤6 files, reversible edits, **no new files**, no architecture change. If violated → STOP, re-handoff to orch.
+1. Verify the state file shows DONE for the target scope.
+2. Verify polish scope: ≤6 files, reversible edits, **no new files**, no architecture change. If violated → STOP, re-delegate to a worker.
 3. Meta-direct polish: small surgical edits with up to 3 read-only helpers (Explore for context lookups, w-reviewer for sanity check post-polish).
-4. Single commit; report polish delta in RPT.
+4. Single commit; report polish delta to the user.
 
 ## Direct Dispatch (v2.1.63+)
 
@@ -130,15 +130,15 @@ Pipeline: 3 sequential w-implementer tasks editing `src/components/{Hero,Nav,Foo
 
 5 parallel: 2 general-purpose web research (Tailwind v4 migration, Next.js 16 app router changes) + 2 Explore (existing routing code, existing styling code) + 1 w-reviewer on a draft RFC. Synthesize into one design doc.
 
-### `polish` — Meta-direct after orch DONE on example-course example-abm report
+### `polish` — Meta-direct after worker DONE on example-course example-abm report
 
-Orch reported DONE on `report.tex`. Scope check: 4 files, all reversible (typo fixes, citation order, figure caption tweaks), no new files. Meta dispatches 1 Explore for cite-key cross-check + 1 w-reviewer for final readthrough, then commits.
+The worker reported DONE on `report.tex`. Scope check: 4 files, all reversible (typo fixes, citation order, figure caption tweaks), no new files. Meta dispatches 1 Explore for cite-key cross-check + 1 w-reviewer for final readthrough, then commits.
 
 ## Constraints
 
 - **NEVER** exceed 5 workers per single Agent-tool batch.
 - **NEVER** skip R-1 schema spec when ≥2 workers in the batch share output.
-- **NEVER** invoke this skill from a `w-*` worker — only meta+orch have spawn authority.
+- **NEVER** invoke this skill from a `w-*` worker — only meta (or a plain session) has spawn authority.
 - **NEVER** bundle uncertain calls (file lookups that may fail, ref lookups, commands that might error) with safe calls in the same parallel batch — Anthropic cancels ALL siblings if any single call errors. Run discovery calls first, then dispatch from confirmed inputs.
 - **NEVER** rely on a prompt keyword for thinking depth. Thinking IS inherited from the session; the depth control is the `effort` chain. Set `effort:` in the worker's agent frontmatter, or override model/effort at dispatch. SOT: `~/.claude/rules/13-worker-first-mandate.md` § Critical Implementation Note.
 
@@ -148,4 +148,4 @@ Orch reported DONE on `report.tex`. Scope check: 4 files, all reversible (typo f
 - Tool conventions: `~/.claude/rules/20-tool-conventions.md` § Parallel Tool Batches
 - Worker fleet matrix: `~/.claude/rules/13-worker-first-mandate.md` § Per-Worker Defaults
 - Plan: `~/.claude/plans/swarm-first-v2/`
-- Sister skills: `/autocommission` (ephemeral worker spawn), `/topology-producer-reviewer` (specialized W-4 wrapper)
+- Sister skills: `/autocommission` (ephemeral worker spawn)

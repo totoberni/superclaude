@@ -10,7 +10,7 @@ user-invocable: false
 This checklist operationalizes the programming principles. Use it systematically when reviewing or refactoring code.
 
 ## DRY Analysis
-- [ ] Search for duplicated logic: `grep -rn` for similar function bodies, copy-pasted blocks
+- [ ] Search for duplicated logic: use the Grep tool for similar function bodies, copy-pasted blocks
 - [ ] Each function/module has a single, clear responsibility
 - [ ] Shared logic extracted when used 3+ times
 - [ ] Comments reference other files/functions instead of duplicating their docs

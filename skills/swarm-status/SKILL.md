@@ -10,7 +10,7 @@ allowed-tools: Read, Bash, Glob
 
 # Swarm Status
 
-Lightweight visibility into currently-active worker dispatches. Use INSTEAD of `/super-health` when you only need "what's running now?" — sub-second response.
+Lightweight visibility into currently-active worker dispatches. Use when you only need "what's running now?" — sub-second response.
 
 **Mode**: $ARGUMENTS (default: `--all`)
 
@@ -19,30 +19,22 @@ Lightweight visibility into currently-active worker dispatches. Use INSTEAD of `
 | Source | What |
 |--------|------|
 | `~/.claude/agents/_ephemeral/` | Ephemeral autocommissioned worker `.md` files currently active (auto-cleaned on task done) |
-| `~/.claude/comms/_spawns.log` (if exists) | Recent worker spawn events from `45-spawn-log.sh` hook |
-| Process tree | Background `claude --agent w-*` processes (currently running BG reviewers, etc.) |
+| `~/.claude/comms/_spawns.log`, `_spawns-rich.log` (if they exist) | Recent worker spawn events from the spawn-log hooks |
+| `~/.claude/comms/_outcomes.log` (if exists) | Worker outcome events from the spawn-log hooks; a spawn with no matching outcome is still in flight |
 
 ## Procedure
 
 ### Step 1: Ephemeral agents currently registered
 
-```bash
-ls -la ~/.claude/agents/_ephemeral/ 2>/dev/null | grep -E '^-.*\.md$' || echo "(no ephemeral agents currently registered)"
-```
+Glob `~/.claude/agents/_ephemeral/*.md`. If nothing matches, report "(no ephemeral agents currently registered)".
 
 ### Step 2: Recent spawn events (last 50)
 
-```bash
-log=~/.claude/comms/_spawns.log
-[ -f "$log" ] && tail -50 "$log" || echo "(no spawn log yet — 45-spawn-log.sh not deployed)"
-```
+Read the last 50 lines of `~/.claude/comms/_spawns.log` (and `_spawns-rich.log` for the task description). If the file is absent, report "(no spawn log yet: the spawn-log hooks are not deployed)".
 
-### Step 3: Live BG processes
+### Step 3: In-flight workers
 
-```bash
-# Find background claude --agent w-* processes
-pgrep -af 'claude --agent' || echo "(no live agent processes)"
-```
+Read the last 50 lines of `~/.claude/comms/_outcomes.log`. A spawn from Step 2 with no matching outcome entry is treated as still in flight (background reviewers included). If the file is absent, report "(no outcome log yet)".
 
 ### Step 4: Format output
 
@@ -53,10 +45,10 @@ EPHEMERAL AGENTS (N)
 - name | spawned-at | task-summary
 
 BG REVIEWERS (N)
-- agent | parent-PID | spawned-at
+- agent | spawned-at
 
-LIVE AGENT PROCESSES (N)
-- agent-type | PID | started-at
+IN-FLIGHT WORKERS (N)
+- agent-type | spawned-at | task-summary
 ```
 
 ## Modes
@@ -75,10 +67,8 @@ LIVE AGENT PROCESSES (N)
 
 - NEVER spawn anything — read-only diagnostic
 - NEVER kill processes — that's the user's call
-- If a process appears "stuck" (running >2hr): suggest `/super-health --quick` for deeper diagnosis
+- If a worker appears "stuck" (spawned >2hr ago with no outcome): report it to the user; see `/recover-truncated` for the recovery flow
 
 ## Cross-References
 
-- `/super-health` for full health audit
-- `/nudge` for cross-agent status probe
 - `~/.claude/skills/autocommission/SKILL.md` (reads from same `_ephemeral/` dir)

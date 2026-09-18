@@ -11,7 +11,7 @@ allowed-tools: Read, Write, Bash, Glob, Grep, Agent
 
 Spawn an EPHEMERAL `w-*` worker for a one-off task that no existing permanent `w-*` covers. The ephemeral agent file is auto-deleted once the worker returns (DEC-005 Q1).
 
-> **Note (updated 2026-05-09)**: Custom `subagent_type` is supported by the Agent tool (per v2.1.63+ docs at `code.claude.com/docs/en/sub-agents`). Autocommission writes the ephemeral `agents/_ephemeral/<name>.md` and the Meta/Orch invokes the Agent tool with `subagent_type: "<name>"` directly. The earlier `general-purpose`-with-embedded-prompt workaround is OBSOLETE — direct dispatch works.
+> **Note (updated 2026-05-09)**: Custom `subagent_type` is supported by the Agent tool (per v2.1.63+ docs at `code.claude.com/docs/en/sub-agents`). Autocommission writes the ephemeral `agents/_ephemeral/<name>.md` and Meta invokes the Agent tool with `subagent_type: "<name>"` directly. The earlier `general-purpose`-with-embedded-prompt workaround is OBSOLETE — direct dispatch works.
 
 **Task**: $ARGUMENTS
 
@@ -21,7 +21,6 @@ Spawn an EPHEMERAL `w-*` worker for a one-off task that no existing permanent `w
 |---|---|
 | Task fits any of the 11 permanent `w-*` (matrix in `13-worker-first-mandate.md`) | The existing `w-*` (NOT this skill) |
 | Task is one-off AND no existing `w-*` fits | `/autocommission` |
-| Starting a permanent ork for multi-session/multi-hour work | `/handoff` (NOT this skill — DEC-001) |
 
 `/autocommission` is the **escape hatch** for genuinely novel tasks. Default delegation should hit a permanent `w-*` ~95% of the time.
 
@@ -29,12 +28,10 @@ Spawn an EPHEMERAL `w-*` worker for a one-off task that no existing permanent `w
 
 | Agent | Can autocommission? |
 |---|---|
-| Meta | YES |
-| Orch / Orch-* | YES |
+| Meta (or a plain session) | YES |
 | `w-*` (any) | NO — workers do not spawn children (wasted tokens, infinite-recursion risk) |
-| Scaf | NO — infrastructure work uses normal scaf flow |
 
-DEC-005 Q2: meta + orch only. DEC-005 Q3: cap = unlimited at this stage.
+DEC-005 Q2: meta only. DEC-005 Q3: cap = unlimited at this stage.
 
 ## Procedure
 
@@ -85,30 +82,30 @@ Spawn the agent via Agent tool with `subagent_type: "<ephemeral-agent-name>"` (c
 
 Immediately after the worker returns (success OR failure), delete `~/.claude/agents/_ephemeral/<name>.md`. DEC-005 Q1: cleanup is non-optional.
 
-```bash
-rm -f "$HOME/.claude/agents/_ephemeral/<name>.md"
+```
+rm ~/.claude/agents/_ephemeral/<name>.md
 ```
 
 ### Step 7 — Track Pattern
 
 Upsert the autocommission pattern to the memory DB (`shared-global` tier):
 
-```bash
-# Search for existing ledger entry for this pattern:
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  search "autocommission pattern <one-line-pattern>" --mode fts -k 3
+Search for an existing ledger entry for this pattern:
 
-# Fetch full body if found (to get current occurrence count):
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  get --name autocommission-pattern-<slug>
+```
+mem search "autocommission pattern <one-line-pattern>" --mode fts -k 3
+```
 
-# Upsert (increment count in body, update last-seen date):
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  upsert --name "autocommission-pattern-<slug>" \
-         --tier shared-global \
-         --type reference \
-         --description "R-4 autocommission pattern ledger: <one-line-pattern>" \
-         --body "## Autocommission Pattern
+Fetch the full body if found (to get the current occurrence count):
+
+```
+mem get --name autocommission-pattern-<slug>
+```
+
+Upsert (increment count in body, update last-seen date). Write this body to `~/.claude/tmp/autocommission-pattern-<slug>.md` with the Write tool:
+
+```markdown
+## Autocommission Pattern
 - pattern: <one-line-pattern>
 - occurrences: <N>
 - first-seen: <YYYY-MM-DD>
@@ -116,7 +113,13 @@ HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.p
 - example-task: <task description>
 - ephemeral-name-template: w-eph-<slug>-<timestamp>
 - recommended-model: <X>
-- status: TRACKING"
+- status: TRACKING
+```
+
+Then run (one line):
+
+```
+mem upsert --name "autocommission-pattern-<slug>" --tier shared-global --type reference --description "R-4 autocommission pattern ledger: <one-line-pattern>" --text-file ~/.claude/tmp/autocommission-pattern-<slug>.md
 ```
 
 Count prior occurrences from the DB entry. If count reaches **3**, flag promotion candidacy (R-4).
@@ -164,5 +167,4 @@ If unsure, pick the next-higher tier — overspend on a one-off costs less than 
 - Quality gates SOT: `~/.claude/rules/40-swarm-quality-gates.md` (R-1 schema, R-2 baseline-stash, R-3 verification, R-4 fleet expansion)
 - Decisions: `~/.claude/plans/swarm-first-v2/decisions.md` (DEC-001 ephemeral-vs-permanent split, DEC-005 Q1/Q2/Q3 cleanup/authority/cap)
 - Permanent fleet: `~/.claude/agents/w-*.md` (current 11 agents — check FIRST before autocommissioning)
-- Pattern log: memory DB `shared-global` tier — entries named `autocommission-pattern-<slug>` (search: `memory_db.py search "autocommission pattern" --mode fts -k 20`)
-- Sibling skill (do not confuse): `/handoff` for permanent ork lifecycle
+- Pattern log: memory DB `shared-global` tier — entries named `autocommission-pattern-<slug>` (search: `mem search "autocommission pattern" --mode fts -k 20`)
