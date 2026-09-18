@@ -610,3 +610,15 @@ def test_near_dup_pair_counter_matches_bash_tokenisation():
 
 def test_scan_module_api_with_explicit_path(empty_db):
     assert scan.table_lines(empty_db)[-1] == "INTEGRITY\trows=0\tfts_idx=0\tvec=present\tOK\t-"
+
+
+def test_init_creates_missing_parent_directory(tmp_path):
+    """Prima installazione: la cartella del DB non esiste ancora e va creata."""
+    import subprocess
+    import sys
+    db = tmp_path / "fresh" / "nested" / ".memory.db"
+    script = Path(__file__).resolve().parent / "memory_db.py"
+    res = subprocess.run([sys.executable, str(script), "--db", str(db), "init"],
+                         capture_output=True, text=True, encoding="utf-8")
+    assert res.returncode == 0, res.stderr
+    assert db.is_file()

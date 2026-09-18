@@ -121,6 +121,9 @@ def _embed_query(text: str) -> list[float]:
 
 def _connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
     """Open a connection with the sqlite-vec extension loaded."""
+    # Su un'installazione nuova ~/.claude/agent-memory/ non esiste ancora:
+    # sqlite3 non crea le cartelle e fallirebbe con "unable to open database file".
+    Path(db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     # Wait up to 5s for a competing writer instead of failing immediately with
     # "database is locked" (Phase EM concurrency hardening).
