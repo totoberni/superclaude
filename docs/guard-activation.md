@@ -1,53 +1,28 @@
 # Guard Activation Lifecycle
 
-The mechanical guard subsystem ships INERT: the guard code under `hooks/guards/` does nothing
-until `settings.json` wires the two dispatchers. This doc is how to turn that wiring on and off
-safely.
+How the guards described in `~/.claude/docs/guard-subsystem.md` are switched on, tuned, and switched off.
 
-## Two-layer model
+## Registration
 
-| Layer | What | State |
-|---|---|---|
-| 1: guard code | `hooks/guard-dispatch.sh`, `hooks/guard-post.sh`, `hooks/guards/*.sh` | Committed, version-controlled, inert on its own (sourcing defines functions only, no top-level side effects) |
-| 2: wiring | `settings.json` entries under `hooks.PreToolUse` (guard-dispatch.sh) and `hooks.PostToolUse` (guard-post.sh) | Machine-local, gitignored, not part of the repo or any push |
+The dispatcher is registered into `~/.claude/settings.json` by `docs/win11-migration/apply-settings.ps1`, run by the owner (agents do not edit `settings.json`). The script writes one `dispatch.py <Event>` command per hook event; until it has been run, no guard is active. New handlers need no further registration: any module dropped into `~/.claude/hooks/sc_hooks/handlers/` is imported by the dispatcher on the next event.
 
-Because `settings.json` is gitignored, wiring is per-machine: pushing or pulling the guard code
-never activates or deactivates it anywhere. Each machine's guard state is set independently.
+## Modes and kill switches
 
-## Activating
+Each guard runs in one of three modes, default `block`:
 
-Run the owner-only apply script:
+| Mode | Effect |
+|---|---|
+| `block` | A deny on PreToolUse stops the tool call (exit 2, reason returned to the model) |
+| `warn` | The deny is downgraded to a `GUARD-WARN [name]` note; the tool call proceeds |
+| `off` | The handler is not run |
 
-```bash
-~/projects/apply-superclaude-guards.sh
-```
+Environment variables (set in the shell before launch, or in the `env` block of `settings.json`):
 
-It is idempotent (safe to re-run, never adds duplicate hook entries), auto-backs-up
-`settings.json` to a timestamped `settings.json.bak-guards-<timestamp>` file before touching it,
-and wires both dispatchers with a 10 second hook timeout. It also restores that backup and aborts
-if the resulting JSON fails validation.
+- `SUPERCLAUDE_GUARDS=off` disables every handler.
+- `SUPERCLAUDE_GUARD_<NAME>=off|warn|block` sets one guard. `<NAME>` is the guard name upper-cased with non-alphanumerics as underscores, for example `SUPERCLAUDE_GUARD_WRITE_ACL=warn`, `SUPERCLAUDE_GUARD_GIT_POLICY=off`.
 
-Hooks are read at session start, so **restart the session/app** after running the script; the new
-`PreToolUse`/`PostToolUse` entries do not take effect in an already-running session.
+Guards present: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard.
 
-## Kill-switch and fail-open
+## Rollout and diagnosis
 
-- Set `SUPERCLAUDE_GUARDS=off` to disable every guard at once without unwiring `settings.json`
-  (`guard_kill_switch` in `hooks/guards/lib-guard.sh` checks this env var first, before any
-  per-guard logic runs).
-- Both dispatchers are fail-open: any internal fault (missing lib, bad JSON, absent `jq`) prints a
-  `GUARD-WARN` and passes the tool call through; only an explicit `guard_block` in block mode
-  exits 2. A broken guard never bricks tool use.
-
-## Deactivating
-
-Either restore a `settings.json.bak-guards-*` backup (`cp <backup> ~/.claude/settings.json`), or
-manually remove the two hook entries, then restart the session. For a temporary, reversible
-disable that needs no restart, use the kill-switch above instead.
-
-## The /git policy flag
-
-Distinct from wiring: the `26-git-policy` guard reads `~/.claude/config/git-policy`, written only
-by the `/git` skill. `/git false` blocks commit/push; `/git true` allows; an absent file is
-treated as enabled (fail-open, matching the rest of this subsystem). See
-`skills/git/SKILL.md` for the full scope and blocked/unblocked vectors; not restated here.
+Introduce a new guard in `warn`, watch the notes, then promote it to `block`. A deny outside PreToolUse is always advisory. If a guard seems silent, read `~/.claude/logs/hooks.log`: handler exceptions are fail-open and only show up there.

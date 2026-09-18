@@ -16,12 +16,14 @@
 
 ## Installation (when ready)
 
-```bash
+Node comes from `fnm` at user scope on this machine; `npm`/`npx` resolve from PATH in a shell where `fnm` is initialised. On Windows an MCP `command` of `npx` may need to be `npx.cmd` (or `cmd /c npx`).
+
+```
 npm install -g @anthropic-ai/claude-code-mcp-server-playwright
 ```
 
 Or use the Playwright MCP server directly:
-```bash
+```
 npx @anthropic-ai/claude-code-mcp-server-playwright
 ```
 
@@ -41,7 +43,7 @@ When ready to enable, add to `~/.claude/settings.json` under a new `mcpServers` 
 }
 ```
 
-**Important**: Do NOT add this config until explicitly instructed by the user. Scaf must handle the settings.json edit with the standard backup/validate/restore protocol.
+**Important**: Do NOT add this config until explicitly instructed by the user. `settings.json` is owner-managed (see `docs/win11-migration/apply-settings.ps1`); the owner makes the edit, keeping a backup and validating the JSON afterwards.
 
 ## Agent Updates (when ready)
 
@@ -59,7 +61,7 @@ Update `~/.claude/agents/w-design-reviewer.md`:
 ## Verification
 
 After setup, verify with:
-```bash
+```
 # Check MCP server is reachable
 npx @anthropic-ai/claude-code-mcp-server-playwright --help
 

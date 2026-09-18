@@ -16,16 +16,15 @@ Manage ML experiment records via `experiments.md` in any project. File-based onl
 ## Project Detection
 
 Detect the ML project from `$ARGUMENTS` or infer from context:
-1. Explicit path: `/experiment add $HOME/projects/cash/<project> ...`
-2. Named project: `/experiment list <project>` → resolve to `~/projects/cash/<project>/`
+1. Explicit path: `/experiment add ~/code/<project> ...`
+2. Named project: `/experiment list <project>` → resolve to `~/code/<project>/`
 3. If ambiguous, ask the user
 
 Set `PROJECT` to the absolute project path. All file operations use absolute paths.
 
 Check the memory DB for project-specific gotchas before any operations:
 ```bash
-HF_HUB_OFFLINE=1 ~/.claude/.venv/bin/python ~/.claude/scripts/memory/memory_db.py \
-  search "<project> gotchas mistakes" -k 6
+mem search "<project> gotchas mistakes" -k 6
 ```
 
 ## Subcommands

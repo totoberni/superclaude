@@ -58,10 +58,10 @@ T2.6 cannot join Wave 1 because it conflicts with every other task; it cannot st
 
 - **More than 5 parallel tasks in a wave**: Meta splits into multiple consecutive batches of up to 5 (the swarm-dispatch parallel ceiling). Batches are emitted in task-ID order; subsequent waves wait only on tasks whose IDs they explicitly depend on, not on prior batches in the same wave.
 - **Cross-phase `depends_on`**: Meta sequences phases — Phase N+1 cannot start any wave whose tasks depend on unresolved Phase N tasks. Phases otherwise execute eagerly as soon as their predecessors clear.
-- **Circular `depends_on`**: Meta detects the cycle during DAG construction and escalates via ESC-NNN. No execution starts.
+- **Circular `depends_on`**: Meta detects the cycle during DAG construction, stops, and reports it to the owner. No execution starts.
 - **`parallel: true` with implicit `depends_on previous`**: explicit metadata wins. Task is parallel; the implicit-previous default is dropped.
 - **Conflicts without parallel**: `conflicts_with` is only meaningful for parallel tasks. On sequential tasks it is silently ignored (sequential tasks never share a batch).
-- **`depends_on` referencing an unknown task ID**: Meta escalates via ESC-NNN before any execution starts. Typos do not silently degrade to sequential.
+- **`depends_on` referencing an unknown task ID**: Meta stops and reports it to the owner before any execution starts. Typos do not silently degrade to sequential.
 
 ## Migration Path
 

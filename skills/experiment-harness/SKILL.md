@@ -16,19 +16,16 @@ stale claims can be blocked.
 Distinct from `/experiment` (a markdown `experiments.md` tracker — no imports). This
 is an executable Python tool for numeric aggregation + provenance verification.
 
-**Engine**: `~/.claude/scripts/experiment-harness.py` — run with the venv python:
+**Engine**: `~/.claude/scripts/experiment-harness.py` — run through the `scpy` shim (venv python):
 
 ```bash
-~/.claude/.venv/bin/python ~/.claude/scripts/experiment-harness.py <run|verify> ...
+scpy experiment-harness.py <run|verify> ...
 ```
 
 ## `run` — multi-seed aggregate
 
 ```bash
-~/.claude/.venv/bin/python ~/.claude/scripts/experiment-harness.py \
-  run --script train.py --seeds 1,2,3 \
-      --metric test_acc \
-      --claim-id table2_acc --passport passport.yaml
+scpy experiment-harness.py run --script train.py --seeds 1,2,3 --metric test_acc --claim-id table2_acc --passport passport.yaml
 ```
 
 - `--script CMD...` — a lone `.py` runs under the venv python; extra tokens are
@@ -43,8 +40,7 @@ is an executable Python tool for numeric aggregation + provenance verification.
 ## `verify` — block unprovenanced / stale claims
 
 ```bash
-~/.claude/.venv/bin/python ~/.claude/scripts/experiment-harness.py \
-  verify --passport passport.yaml --claims claims.txt [--strict]
+scpy experiment-harness.py verify --passport passport.yaml --claims claims.txt [--strict]
 ```
 
 - `--claims` — `.txt` (one `<claim_id> [value] [std]` per line, `#` comments) or
@@ -61,6 +57,6 @@ value, std, n } }`. Full schema + worked example:
 
 ## Constraints
 
-- All paths absolute. Run via `~/.claude/.venv/bin/python` (PyYAML lives there).
+- All paths absolute. Run via `scpy` (it uses the `~/.claude/.venv` interpreter, where PyYAML lives).
 - Reporting tool: non-zero exit only on its own error (exit 2 = intentional
   `--strict` block, not a crash).

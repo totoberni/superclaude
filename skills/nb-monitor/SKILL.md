@@ -43,17 +43,16 @@ skill or its `nb_*.py` files.
 
 ## Usage
 
-Run via the dedicated superclaude venv (absolute path — venv discipline). The
+Run via the `scpy` shim (dedicated superclaude venv — venv discipline). The
 notebook needs a launchable kernelspec; pass `--kernel-name` to override the
 one recorded in the notebook metadata.
 
 ```bash
 # Monitor a run with the default 300 s per-cell hang timeout.
-~/.claude/.venv/bin/python ~/.claude/scripts/nb-monitor.py run analysis.ipynb
+scpy nb-monitor.py run analysis.ipynb
 
 # Tighter hang detection + explicit kernel + faster heartbeat.
-~/.claude/.venv/bin/python ~/.claude/scripts/nb-monitor.py run analysis.ipynb \
-    --cell-timeout 120 --kernel-name python3 --heartbeat 0.5
+scpy nb-monitor.py run analysis.ipynb --cell-timeout 120 --kernel-name python3 --heartbeat 0.5
 
 # Poll the live state from a statusline / another shell.
 cat ~/.claude/.nb-progress.json

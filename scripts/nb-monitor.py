@@ -25,7 +25,7 @@ Run-state classification (the load-bearing logic):
              converts a genuinely stuck cell into HUNG.
 
 Usage:
-    ~/.claude/.venv/bin/python ~/.claude/scripts/nb-monitor.py run NOTEBOOK \
+    scpy nb-monitor.py run NOTEBOOK \
         [--cell-timeout 300] [--kernel-name NAME] [--progress-path PATH] \
         [--heartbeat 0.5] [--allow-errors]
 
@@ -87,7 +87,17 @@ class ProgressWriter:
                     fh.write(payload)
                     fh.flush()
                     os.fsync(fh.fileno())
-                os.replace(tmp_name, self.path)
+                # Su Windows os.replace fallisce con PermissionError se il lettore
+                # (lo statusline) ha il file aperto in quell'istante: brevi retry,
+                # poi si salta questo aggiornamento (il prossimo heartbeat riscrive).
+                for _attempt in range(10):
+                    try:
+                        os.replace(tmp_name, self.path)
+                        break
+                    except PermissionError:
+                        time.sleep(0.02)
+                else:
+                    os.unlink(tmp_name)
             except BaseException:
                 # Best-effort cleanup of the temp file; never leave a turd, and
                 # never propagate a writer failure into the execution path.
@@ -380,6 +390,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+
+    if os.name == "nt":
+        # Su Windows il loop Proactor non ha add_reader: pyzmq ripiega su un thread
+        # selector (funziona) ma emette un RuntimeWarning a ogni run. Lo si silenzia.
+        import warnings
+        warnings.filterwarnings("ignore", message="Proactor event loop", category=RuntimeWarning)
 
     if args.command == "run":
         nb_path = args.notebook

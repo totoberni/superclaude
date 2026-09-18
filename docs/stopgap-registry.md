@@ -8,12 +8,12 @@ This is the living source of truth. It was seeded from the superclaude-v3 campai
 |---|---|---|
 | wakamex/ccusage (quota %) | unified telemetry reader (quota via stdin `rate_limits`) | pull latest, then retire the dependency |
 | ryoppippi/ccusage (cost) | unified telemetry reader (cost via local JSONL) | pull latest v20.x, then internalize |
-| overleaf-mcp (explain_log / FloatBarrier / hyperref-order) | LaTeX compile hook (`latex-warn.sh`) | re-check for new static checks to mine |
+| overleaf-mcp (explain_log / FloatBarrier / hyperref-order) | LaTeX warning hook (the `latex-warn` handler) | re-check for new static checks to mine |
 | pedrohcgs (passport.yaml provenance) | experiment harness | re-check for new gate patterns |
 | ralph-orchestrator (agent waves) | `/swarm-dispatch` scheduling | re-check parallel-scheduling design |
 | superpowers (inline self-review) | reviewer topology | re-check for review-loop improvements |
 | sst/opencode (multi-provider terminal REPL) | v4 console/REPL spine (FORK base) | fork base — track releases, re-sync during v4 build |
-| jlowin/fastmcp (Python MCP server + middleware) | v4 asset-bridge (memory/comms/skills as MCP) | dep — track releases; mine middleware-hook patterns |
+| jlowin/fastmcp (Python MCP server + middleware) | v4 asset-bridge (memory/skills as MCP) | dep — track releases; mine middleware-hook patterns |
 | BerriAI/litellm (multi-provider router/proxy) | v4 provider allocation/routing | dep — track releases; re-check routing/cost features |
 | google-gemini/gemini-cli (headless Gemini agent) | v4 Gemini provider (full-agent path) | track releases; re-check headless/MCP surface |
 | modelcontextprotocol/servers (filesystem/shell/git MCP) | v5 OS-control API (reference impls) | re-check for new OS-control servers to mine |

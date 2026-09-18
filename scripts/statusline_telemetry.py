@@ -9,7 +9,11 @@ HOME = os.path.expanduser("~")
 NB_PROGRESS_PATH = os.path.join(HOME, ".claude", ".nb-progress.json")
 COST_CACHE_PATH = os.path.join(HOME, ".claude", ".cost-cache.json")
 RATE_LATEST_PATH = os.path.join(HOME, ".claude", ".rate-latest.json")
-COST_REFRESH_SCRIPT = os.path.join(HOME, ".claude", "scripts", "cost-cache-refresh.sh")
+# Il refresh lancia direttamente cost_cache_computer.py (accanto a questo file), senza bash.
+COST_REFRESH_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cost_cache_computer.py")
+COST_REFRESH_STAMP = os.path.join(HOME, ".claude", ".cost-refresh.stamp")
+COST_REFRESH_MIN_INTERVAL_S = 120  # non rilanciare il refresh piu' spesso di cosi'
+IS_WINDOWS = os.name == "nt"
 # --- tunables -------------------------------------------------------------
 NB_HUNG_AFTER_S = 10.0          # status==running but updated older than this => HUNG
 COST_STALE_S = 15 * 60          # cost cache older than this => fire a backgrounded refresh
@@ -45,7 +49,15 @@ def read_stdin():
     # The CC envelope is handed over via STATUSLINE_STDIN (set by the bash
     # launcher) because this interpreter's own stdin carries the heredoc script.
     raw = os.environ.get("STATUSLINE_STDIN", "")
-    raw = (raw or "").strip()
+    if not raw:
+        # Invocazione nativa (nessun launcher bash): la busta JSON arriva su stdin.
+        # Letta come byte e decodificata UTF-8 (la console Windows userebbe cp1252).
+        try:
+            if sys.stdin is not None and not sys.stdin.isatty():
+                raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+        except Exception:
+            raw = ""
+    raw = (raw or "").strip().lstrip("\ufeff")
     if not raw:
         return {}
     try:
@@ -142,7 +154,12 @@ def _width_from_tty():
     statusline running detached, or under a test harness with no terminal)."""
     fd = None
     try:
-        fd = os.open("/dev/tty", os.O_RDONLY | os.O_NOCTTY)
+        if IS_WINDOWS:
+            # Su Windows /dev/tty non esiste: CONOUT$ e' il buffer della console
+            # attaccata al processo (assente se lanciati senza console).
+            fd = os.open("CONOUT$", os.O_RDWR)
+        else:
+            fd = os.open("/dev/tty", os.O_RDONLY | os.O_NOCTTY)
         c = _sane_cols(os.get_terminal_size(fd).columns)
         if c:
             return c
@@ -158,7 +175,15 @@ def _width_from_tty():
 
 
 def _width_from_columns_env():
-    return _sane_cols(os.environ.get("COLUMNS", ""))
+    c = _sane_cols(os.environ.get("COLUMNS", ""))
+    if c:
+        return c
+    # shutil.get_terminal_size: COLUMNS, poi il terminale di stdout; (0, 0) se ignoto.
+    try:
+        import shutil
+        return _sane_cols(shutil.get_terminal_size(fallback=(0, 0)).columns)
+    except Exception:
+        return None
 
 
 def terminal_width(stdin=None):
@@ -449,7 +474,7 @@ def _load_rate_fallback():
     agent starts. Returns None on absent/garbage/no-7d data (fail-safe -> caller
     omits the segment exactly as it did before this fallback existed)."""
     try:
-        with open(RATE_LATEST_PATH) as fh:
+        with open(RATE_LATEST_PATH, encoding="utf-8") as fh:
             d = json.load(fh)
         if not isinstance(d, dict):
             return None
@@ -504,12 +529,34 @@ def _fire_cost_refresh():
     if not os.path.exists(COST_REFRESH_SCRIPT):
         return
     try:
+        # Freno: lo statusline gira molto spesso e una scansione completa dura
+        # secondi; senza questo timbro si accumulerebbero refresh concorrenti.
+        try:
+            if (time.time() - os.path.getmtime(COST_REFRESH_STAMP)) < COST_REFRESH_MIN_INTERVAL_S:
+                return
+        except OSError:
+            pass
+        try:
+            with open(COST_REFRESH_STAMP, "w", encoding="utf-8") as fh:
+                fh.write("%d\n" % time.time())
+        except OSError:
+            pass
+        kwargs = {}
+        if IS_WINDOWS:
+            kwargs["creationflags"] = (
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
+        else:
+            kwargs["start_new_session"] = True  # detach so it survives this process exit
         subprocess.Popen(
-            ["bash", COST_REFRESH_SCRIPT],
+            [sys.executable, COST_REFRESH_SCRIPT],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,  # detach so it survives this process exit
+            close_fds=True,
+            **kwargs
         )
     except Exception:
         pass
@@ -555,7 +602,7 @@ def load_cost_cache():
     """Read the cost cache once (read-only). None if absent/garbage. Loaded in
     main() and shared via ctx so seg_cost + seg_burn don't double-read the file."""
     try:
-        with open(COST_CACHE_PATH, "r") as fh:
+        with open(COST_CACHE_PATH, "r", encoding="utf-8") as fh:
             loaded = json.load(fh)
         return loaded if isinstance(loaded, dict) else None
     except Exception:
@@ -616,17 +663,60 @@ def seg_cost(ctx):
 def _git(cwd, args):
     try:
         out = subprocess.run(
-            ["git", "-C", cwd] + args,
+            ["git", "--no-optional-locks", "-C", cwd] + args,
             stdout=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=1.0,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
         )
         if out.returncode != 0:
             return None
         return out.stdout.strip()
     except Exception:
         return None
+
+
+def _git_parallel(cwd, arg_lists, timeout=1.0):
+    """Lancia piu' comandi git IN PARALLELO e ritorna la lista degli stdout
+    (None per quelli falliti). Su Windows ogni spawn di git costa 40-60 ms:
+    in serie dominavano la latenza dello statusline. Scadenza unica condivisa;
+    repo assente o git mancante => tutti None, mai eccezioni."""
+    procs = []
+    for args in arg_lists:
+        try:
+            procs.append(subprocess.Popen(
+                ["git", "--no-optional-locks", "-C", cwd] + args,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+            ))
+        except Exception:
+            procs.append(None)
+    deadline = time.time() + timeout
+    results = []
+    for proc in procs:
+        if proc is None:
+            results.append(None)
+            continue
+        try:
+            out, _err = proc.communicate(timeout=max(0.05, deadline - time.time()))
+            results.append(out.strip() if proc.returncode == 0 else None)
+        except Exception:
+            try:
+                proc.kill()
+                proc.communicate(timeout=0.2)
+            except Exception:
+                pass
+            results.append(None)
+    return results
 
 
 def _osc8(url, text):
@@ -649,42 +739,52 @@ def seg_dirgit(ctx):
     # unaffected). Links the shown tail to the absolute cwd via file://.
     if ctx["cols"] >= 100 and cwd.startswith("/"):
         dir_part = _osc8("file://%s" % cwd, dir_part)
+    elif ctx["cols"] >= 100 and len(cwd) > 2 and cwd[1] == ":":
+        # Percorso Windows con lettera di unita': file:///C:/...
+        dir_part = _osc8("file:///%s" % cwd.replace("\\", "/"), dir_part)
 
-    branch = _git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if not os.path.isdir(cwd):
+        return dir_part  # cwd inesistente: niente git
+    queries = [
+        ["rev-parse", "--abbrev-ref", "HEAD"],
+        ["rev-parse", "--show-toplevel"],
+        ["status", "--porcelain"],
+    ]
+    if ctx["cols"] >= 100:
+        queries.append(["rev-list", "--left-right", "--count", "@{u}...HEAD"])
+    res = _git_parallel(cwd, queries)
+    branch = res[0]
     if not branch:
         return dir_part  # not a git repo (or git unavailable) -> dir only
 
     # Git half, rendered in PINK (distinct from the yellow path). Form: repo/branch
     # so the repo identity is visible without leaning on the path tail.
-    git_text = _git_repobranch(cwd, branch, ctx["cols"])
+    git_text = _git_repobranch(branch, res[1], res[2], res[3] if len(res) > 3 else None)
     return "%s %s" % (dir_part, colorize(git_text, PINK))
 
 
-def _git_repobranch(cwd, branch, cols):
+def _git_repobranch(branch, top, status, rev):
     """Build the 'repo/branch[*][ ↑n↓n]' string (uncoloured; caller pinks it)."""
     repo = None
-    top = _git(cwd, ["rev-parse", "--show-toplevel"])
     if top:
         repo = top.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or None
     head = "%s/%s" % (repo, branch) if repo else branch
 
-    dirty = "*" if _git(cwd, ["status", "--porcelain"]) else ""
+    dirty = "*" if status else ""
 
     ab = ""
-    if cols >= 100:
-        rev = _git(cwd, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
-        if rev:
-            cols2 = rev.split()
-            if len(cols2) == 2:
-                try:
-                    behind = int(cols2[0])
-                    ahead = int(cols2[1])
-                except ValueError:
-                    behind = ahead = 0
-                if ahead > 0:
-                    ab += "↑%d" % ahead
-                if behind > 0:
-                    ab += "↓%d" % behind
+    if rev:
+        cols2 = rev.split()
+        if len(cols2) == 2:
+            try:
+                behind = int(cols2[0])
+                ahead = int(cols2[1])
+            except ValueError:
+                behind = ahead = 0
+            if ahead > 0:
+                ab += "↑%d" % ahead
+            if behind > 0:
+                ab += "↓%d" % behind
     return "%s%s%s" % (head, dirty, (" " + ab) if ab else "")
 
 
@@ -703,7 +803,7 @@ NB_GLYPH = {
 def seg_notebook(ctx):
     """nb progress (R-1 schema) -> 'nb 12/40 [bar] play 8s'. Self-detects HUNG."""
     try:
-        with open(NB_PROGRESS_PATH, "r") as fh:
+        with open(NB_PROGRESS_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except Exception:
         return None
@@ -1048,9 +1148,9 @@ def _persist_rate_sample(stdin, now):
         tmp = None
         try:
             fd, tmp = tempfile.mkstemp(prefix=".rate-latest.", suffix=".json.tmp", dir=rate_dir)
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh)
-            os.replace(tmp, RATE_LATEST_PATH)
+            _replace_retry(tmp, RATE_LATEST_PATH)
             tmp = None
         finally:
             if tmp is not None:
@@ -1063,6 +1163,20 @@ def _persist_rate_sample(stdin, now):
 
 
 CONTEXT_LATEST_PATH = os.path.join(HOME, ".claude", ".context-latest.json")
+
+
+def _replace_retry(tmp, dst, attempts=5, delay=0.02):
+    """os.replace con brevi retry: su Windows fallisce con PermissionError se la
+    destinazione e' aperta da un altro processo (es. il hook che la legge).
+    Rilancia l'ultimo errore a tentativi esauriti (il chiamante lo assorbe)."""
+    for i in range(attempts):
+        try:
+            os.replace(tmp, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay)
 
 
 def _persist_context_sample(stdin):
@@ -1097,9 +1211,9 @@ def _persist_context_sample(stdin):
         tmp = None
         try:
             fd, tmp = tempfile.mkstemp(prefix=".context-latest.", suffix=".json.tmp", dir=ctx_dir)
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh)
-            os.replace(tmp, CONTEXT_LATEST_PATH)
+            _replace_retry(tmp, CONTEXT_LATEST_PATH)
             tmp = None
         finally:
             if tmp is not None:
@@ -1112,6 +1226,11 @@ def _persist_context_sample(stdin):
 
 
 def main():
+    # Console Windows cp1252: senza questo i glifi delle barre sollevano UnicodeEncodeError.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     now = time.time()
     stdin = read_stdin()
     _persist_rate_sample(stdin, now)

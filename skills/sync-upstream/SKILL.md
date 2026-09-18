@@ -19,18 +19,14 @@ Pull latest and report what's new and relevant.
 
 ### Steps
 
-1. Pull latest from upstream:
-   ```bash
-   cd $HOME/.claude/upstream/awesome-claude-code && \
-     git pull --ff-only 2>/dev/null || \
-     (git fetch origin && git reset --hard origin/main) 2>&1
+1. Pull latest from upstream (no `cd`; use `git -C`):
    ```
+   git -C ~/.claude/upstream/awesome-claude-code pull --ff-only
+   ```
+   If the fast-forward fails because the clone diverged, run `git -C ~/.claude/upstream/awesome-claude-code fetch origin` followed by `git -C ~/.claude/upstream/awesome-claude-code reset --hard origin/main` (the clone is a disposable read-only mirror).
    If offline (git fails), report "Offline — using cached reference" and continue with local copy.
 
-2. Read the resource catalog:
-   ```bash
-   wc -l $HOME/.claude/upstream/awesome-claude-code/THE_RESOURCES_TABLE.csv
-   ```
+2. Size the resource catalog: use Grep in `count` mode on `~/.claude/upstream/awesome-claude-code/THE_RESOURCES_TABLE.csv` (pattern `.`) to get the number of rows.
 
 3. Search for entries relevant to our infrastructure. Use Grep with targeted patterns:
    - `hook` — hook patterns and implementations
@@ -60,15 +56,12 @@ Full comparison of our infrastructure against the upstream catalog.
 
 1. Pull latest (same as default mode step 1)
 
-2. Inventory what we HAVE:
-   ```bash
-   echo "=== Our Infrastructure ==="
-   echo "Hooks: $(ls $HOME/.claude/hooks/*.sh 2>/dev/null | wc -l)"
-   echo "Skills: $(ls -d $HOME/.claude/skills/*/SKILL.md 2>/dev/null | wc -l)"
-   echo "Agents: $(ls $HOME/.claude/agents/*.md 2>/dev/null | wc -l)"
-   echo "Rules: $(ls $HOME/.claude/rules/*.md 2>/dev/null | wc -l)"
-   echo "Scripts: $(ls $HOME/.claude/scripts/*.sh 2>/dev/null | wc -l)"
-   ```
+2. Inventory what we HAVE, with the Glob tool (count the matches of each pattern):
+   - Hook handlers: `~/.claude/hooks/sc_hooks/handlers/*.py`
+   - Skills: `~/.claude/skills/*/SKILL.md`
+   - Agents: `~/.claude/agents/*.md`
+   - Rules: `~/.claude/rules/*.md`
+   - Scripts: `~/.claude/scripts/**/*.py`
 
 3. Read the upstream catalog (THE_RESOURCES_TABLE.csv) — use targeted Grep, not full read:
    - Search for categories: hooks, commands, agents, configuration, workflows
@@ -82,6 +75,6 @@ Full comparison of our infrastructure against the upstream catalog.
 
 - The upstream clone is **READ-ONLY** — never modify files in `~/.claude/upstream/`
 - This skill is **informational** — report but do NOT auto-implement features
-- Implementation decisions go through Meta -> directive -> scaf flow
+- Implementation decisions go through Meta, which dispatches workers after owner approval
 - Don't read the entire CSV — use targeted grep for relevant categories
 - If the upstream dir doesn't exist, tell the user to run: `git clone --depth 1 https://github.com/hesreallyhim/awesome-claude-code.git ~/.claude/upstream/awesome-claude-code`

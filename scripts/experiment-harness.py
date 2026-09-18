@@ -2,7 +2,7 @@
 """experiment-harness — multi-seed ML experiment runner + claim-provenance verifier.
 
 Run via the dedicated venv (absolute path):
-    ~/.claude/.venv/bin/python ~/.claude/scripts/experiment-harness.py <subcommand> ...
+    scpy experiment-harness.py <subcommand> ...
 
 Two subcommands:
 
@@ -69,7 +69,7 @@ try:
 except ImportError:  # pragma: no cover - dependency is declared in requirements.txt
     sys.stderr.write(
         "error: PyYAML not available. Install with:\n"
-        "  ~/.claude/.venv/bin/pip install pyyaml\n"
+        "  uv pip install --python <venv python> pyyaml\n"
     )
     sys.exit(1)
 
@@ -203,6 +203,8 @@ def git_commit(cwd: Path | None = None) -> str:
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
         if out.returncode == 0:
@@ -250,9 +252,12 @@ def run_one_seed(
     """
     env = dict(os.environ)
     env["EXPERIMENT_SEED"] = str(seed)
+    # Su Windows un figlio Python scriverebbe su pipe in cp1252: si allinea a UTF-8.
+    env.setdefault("PYTHONUTF8", "1")
     full = list(cmd) + ["--seed", str(seed)]
     proc = subprocess.run(
-        full, capture_output=True, text=True, env=env, timeout=timeout
+        full, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=env, timeout=timeout
     )
     if proc.returncode != 0:
         raise RuntimeError(
@@ -612,6 +617,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Console Windows (cp1252): forza UTF-8 per i caratteri non ASCII in uscita.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

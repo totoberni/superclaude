@@ -218,8 +218,35 @@ def local_date_of(ts_str):
     return dt.astimezone().date()  # convert to local tz, take the date
 
 
+def _long_path(path):
+    """Su Windows antepone il prefisso esteso: i transcript dei subagent sotto
+    projects/<slug>/<session>/subagents/ superano facilmente i 260 caratteri
+    di MAX_PATH e verrebbero saltati in silenzio. No-op altrove."""
+    if os.name != "nt":
+        return path
+    path = os.path.abspath(path)
+    if path.startswith("\\\\?\\"):
+        return path
+    if path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + path[2:]
+    return "\\\\?\\" + path
+
+
+def replace_retry(tmp, dst, attempts=10, delay=0.05):
+    """os.replace con brevi retry. Su Windows la destinazione puo' essere aperta
+    da un altro processo (lo statusline che legge la cache): PermissionError.
+    Ritorna True se riuscito, False a tentativi esauriti (tmp resta al chiamante)."""
+    for _ in range(attempts):
+        try:
+            os.replace(tmp, dst)
+            return True
+        except PermissionError:
+            time.sleep(delay)
+    return False
+
+
 def iter_jsonl_files(root):
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, _dirs, files in os.walk(_long_path(root)):
         for fn in files:
             if fn.endswith(".jsonl"):
                 yield os.path.join(dirpath, fn)
@@ -344,7 +371,8 @@ def write_ledger_atomic(days_dict):
             f.write("\n")
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, LEDGER_PATH)
+        if not replace_retry(tmp, LEDGER_PATH):
+            raise OSError("ledger busy (open by another process)")
     except BaseException:
         try:
             os.unlink(tmp)
@@ -474,7 +502,7 @@ def main():
     for path in iter_jsonl_files(PROJECTS_DIR):
         n_files += 1
         try:
-            fh = open(path, "r", encoding="utf-8")
+            fh = open(path, "r", encoding="utf-8", errors="replace")
         except OSError:
             # An unreadable file must not corrupt the whole run; skip it.
             continue
@@ -677,7 +705,14 @@ def main():
             f.write("\n")
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, CACHE_PATH)
+        if not replace_retry(tmp, CACHE_PATH):
+            # Cache occupata da un altro processo: si rinuncia in silenzio, la
+            # cache precedente resta valida e il prossimo refresh riprovera'.
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return 0
     except BaseException:
         # Never leave a partial temp file behind, and never clobber the cache.
         try:

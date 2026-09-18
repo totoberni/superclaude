@@ -101,3 +101,57 @@ def test_read_ctx_handles_bom_and_garbage(monkeypatch):
     assert ctx.tool == "Edit" and ctx.file_path == r"C:\a\b.py" and ctx.new_content == "x"
     monkeypatch.setattr(sys, "stdin", type("S", (), {"buffer": io.BytesIO(b"not json")})())
     assert core.read_ctx("Stop").event == "Stop"
+
+
+def test_norm_path_expands_8dot3_short_names(tmp_path):
+    """I nomi corti 8.3 devono confrontarsi uguali alla forma lunga (solo Windows)."""
+    import os
+    if os.name != "nt":
+        pytest.skip("solo Windows")
+    import ctypes
+    long_dir = tmp_path / "a long directory name"
+    long_dir.mkdir()
+    buf = ctypes.create_unicode_buffer(1024)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(long_dir), buf, 1024) or "~" not in buf.value:
+        pytest.skip("nomi 8.3 disabilitati su questo volume")
+    short = buf.value
+    assert core.norm_path(short) == core.norm_path(str(long_dir))
+    # vale anche per un file che non esiste ancora sotto la cartella corta
+    assert core.norm_path(short + r"\new\file.txt") == core.norm_path(str(long_dir / "new" / "file.txt"))
+    assert core.is_under(short + r"\x.md", str(long_dir))
+
+
+def test_norm_path_and_ctx_tolerate_bad_types():
+    assert core.norm_path(None) == "" and core.norm_path(b"bytes") == ""
+    assert core.norm_path("a.py", cwd=123).endswith("/a.py")
+    ctx = core.Ctx(event="PreToolUse", payload={}, session_id="t", tool="Edit",
+                   tool_input={"file_path": 42, "edits": "not-a-list", "command": ["x"], "content": None},
+                   cwd="C:/x", role="plain", agent="")
+    assert ctx.file_path == "" and ctx.command == "" and ctx.new_content == ""
+
+
+def test_default_mode_warn_never_blocks(monkeypatch, capsys):
+    monkeypatch.setattr(core, "_REGISTRY", [])
+    monkeypatch.setattr(core, "_DEFAULT_MODE", {})
+    core.on("PreToolUse", name="advisory", default_mode="warn")(lambda c: core.Result.deny("heads up"))
+    assert core.dispatch(_ctx()) == 0
+    assert "GUARD-WARN [advisory]" in capsys.readouterr().out
+    monkeypatch.setenv("SUPERCLAUDE_GUARD_ADVISORY", "block")     # l'ambiente può inasprire
+    assert core.dispatch(_ctx()) == 2
+
+
+@pytest.mark.parametrize("sid", ["..", ".", "...", "../..", "", "..\..", "/", "a/../.."])
+def test_state_file_never_escapes_state_dir(sid):
+    """Un session_id ostile non deve mai far uscire lo stato da STATE_DIR/<nome>/."""
+    ctx = core.Ctx(event="SessionEnd", payload={}, session_id=sid, tool="", tool_input={},
+                   cwd="C:/x", role="plain", agent="")
+    target = ctx.state_file("..")
+    assert target.parent.parent == core.STATE_DIR
+    assert target.parent.name not in ("", ".", "..") and target.name not in ("", ".", "..")
+
+
+def test_fs_path_keeps_case_and_resolves_forms():
+    assert core.fs_path(None) is None and core.fs_path("") is None
+    assert str(core.fs_path("/c/Users/X/Proj/A.py")).replace("\\", "/") == "C:/Users/X/Proj/A.py"
+    assert str(core.fs_path("src/A.py", cwd="/c/Users/X/Proj")).replace("\\", "/") == "C:/Users/X/Proj/src/A.py"
+    assert core.fs_path("~/x.md") == Path.home() / "x.md"

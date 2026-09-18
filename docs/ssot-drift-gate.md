@@ -31,7 +31,7 @@ its anchor, if given, is a real heading in it); `defining_marker` matches only i
 pointer resolver over the whole corpus: every `` SOT: `path` `` and `` see `path` `` reference
 found anywhere must resolve to a real file.
 
-Invocation: `python3 ~/.claude/scripts/ssot-lint.py --root ~/.claude`. It reports failures, exit 1
+Invocation: `scpy ssot-lint.py --root ~/.claude`. It reports failures, exit 1
 on any, exit 0 clean. One pointer is mechanically exempted via `POINTER_IGNORES` in
 `ssot-lint.py`: `skills/research/references/report.md`'s citation of `docs/reprod-notes.md §M3`
 is a teaching example (illustrating how a downstream project cites its own reproduction notes),

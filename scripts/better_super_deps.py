@@ -15,7 +15,6 @@ Parses ~/.claude/dependencies.yml (schema: 1) and provides:
 Network routing:
   python  → PyPI JSON API (https://pypi.org/pypi/<name>/json) — sandbox-allowlisted
   npm     → registry.npmjs.org — NOT sandbox-allowlisted → status: needs-network
-  docker  → docker manifest inspect <image>:<tag> — NOT sandbox-allowlisted → status: needs-network
 
 Used by /better-super --new (--record self-registration) and --update (--check + --export).
 Schema and CLI interface are stable; consuming skills reference this docstring as the contract.
@@ -35,10 +34,14 @@ from typing import Optional
 try:
     import yaml
 except ImportError:
-    sys.exit("PyYAML not found — run: ~/.claude/.venv/bin/pip install PyYAML")
+    sys.exit("PyYAML not found: run `uv pip install --python <venv python> PyYAML`")
 
 MANIFEST_PATH = Path.home() / ".claude" / "dependencies.yml"
-VENV_PIP = Path.home() / ".claude" / ".venv" / "bin" / "pip"
+# Interprete del venv: Scripts/python.exe su Windows, bin/python altrove.
+if os.name == "nt":
+    VENV_PYTHON = Path.home() / ".claude" / ".venv" / "Scripts" / "python.exe"
+else:
+    VENV_PYTHON = Path.home() / ".claude" / ".venv" / "bin" / "python"
 PYPI_URL_TEMPLATE = "https://pypi.org/pypi/{name}/json"
 
 # ---------------------------------------------------------------------------
@@ -48,12 +51,12 @@ PYPI_URL_TEMPLATE = "https://pypi.org/pypi/{name}/json"
 def load_manifest(path: Path = MANIFEST_PATH) -> dict:
     if not path.exists():
         sys.exit(f"Manifest not found: {path}")
-    with path.open("r") as f:
+    with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not isinstance(data, dict) or data.get("schema") != 1:
         sys.exit(f"Unsupported manifest schema in {path} (expected schema: 1)")
-    # Ensure all three type sections exist
-    for section in ("python", "npm", "docker"):
+    # Ensure all type sections exist
+    for section in ("python", "npm"):
         data.setdefault(section, [])
     return data
 
@@ -62,12 +65,11 @@ def save_manifest(data: dict, path: Path = MANIFEST_PATH) -> None:
     inline_comment = {
         "python": "# pip; pinned; --export → requirements-format / --pip-install → venv; currency via PyPI JSON API",
         "npm":    "# node; currency via registry.npmjs.org (external — not sandbox-allowlisted)",
-        "docker": "# compose; currency via registry digest (external — checked via docker manifest inspect)",
     }
-    with path.open("w") as f:
+    with path.open("w", encoding="utf-8") as f:
         f.write(f"schema: {data['schema']}\n")
         f.write(f"updated: \"{data.get('updated', '')}\"\n\n")
-        for section in ("python", "npm", "docker"):
+        for section in ("python", "npm"):
             entries = data.get(section, [])
             comment = inline_comment[section]
             f.write(f"{section}:   {comment}\n")
@@ -90,7 +92,7 @@ def save_manifest(data: dict, path: Path = MANIFEST_PATH) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_list(args: argparse.Namespace, data: dict) -> None:
-    types = [args.type] if args.type else ["python", "npm", "docker"]
+    types = [args.type] if args.type else ["python", "npm"]
     for t in types:
         entries = data.get(t, [])
         if not entries:
@@ -103,8 +105,6 @@ def cmd_list(args: argparse.Namespace, data: dict) -> None:
                 scope = e.get("scope")
                 pkg = f"@{scope}/{e['name']}" if scope else e["name"]
                 print(f"  {pkg}  install={e.get('install','?')}  version={e.get('version','?')}  via={e.get('via','?')}  # {e.get('reason','')}")
-            elif t == "docker":
-                print(f"  {e['name']}  image={e.get('image','?')}:{e.get('tag','?')}  compose={e.get('compose','?')}  endpoint={e.get('endpoint','null')}  via={e.get('via','?')}")
 
 # ---------------------------------------------------------------------------
 # --check  (routes per type)
@@ -158,20 +158,8 @@ def check_npm(entries: list) -> None:
         print(f"{pkg:<30} {current:<15} {'?':<15} needs-network")
 
 
-def check_docker(entries: list) -> None:
-    # docker manifest inspect <image>:<tag> requires docker daemon + network
-    # Not accessible in sandbox — mark gracefully.
-    # Real check: docker manifest inspect <image>:<tag> | jq '.[0].Digest'
-    print(f"{'name':<20} {'image:tag':<40} {'status'}")
-    print("-" * 75)
-    for e in entries:
-        name = e["name"]
-        image_tag = f"{e.get('image','?')}:{e.get('tag','?')}"
-        print(f"{name:<20} {image_tag:<40} needs-network")
-
-
 def cmd_check(args: argparse.Namespace, data: dict) -> None:
-    types = [args.type] if args.type else ["python", "npm", "docker"]
+    types = [args.type] if args.type else ["python", "npm"]
     for t in types:
         entries = data.get(t, [])
         if not entries:
@@ -181,8 +169,6 @@ def cmd_check(args: argparse.Namespace, data: dict) -> None:
             check_python(entries)
         elif t == "npm":
             check_npm(entries)
-        elif t == "docker":
-            check_docker(entries)
 
 # ---------------------------------------------------------------------------
 # --record  (append or update, idempotent by (type, name))
@@ -207,17 +193,6 @@ def cmd_record(args: argparse.Namespace, data: dict) -> None:
             "scope": args.scope,
             "install": args.install or "npx-latest",
             "version": version,
-            "via": via,
-            "reason": reason,
-        }
-    elif dep_type == "docker":
-        entry = {
-            "name": name,
-            "image": args.image or "",
-            "tag": args.tag or "latest",
-            "digest": None,
-            "compose": args.compose or "",
-            "endpoint": args.endpoint,
             "via": via,
             "reason": reason,
         }
@@ -264,7 +239,7 @@ def cmd_export(args: argparse.Namespace, data: dict) -> None:
 
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text("\n".join(lines) + "\n")
+        out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"Wrote {len(python_entries)} entries to {out_path}")
     else:
         print("\n".join(lines))
@@ -275,25 +250,24 @@ def cmd_export(args: argparse.Namespace, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_pip_install(args: argparse.Namespace, data: dict) -> None:
+    import shutil
     import subprocess
 
     python_entries = data.get("python", [])
     specs = _requirements_lines(python_entries)
 
-    if VENV_PIP.exists():
-        pip_prefix = [str(VENV_PIP)]
+    if not VENV_PYTHON.exists():
+        print(f"error: venv interpreter not found: {VENV_PYTHON}", file=sys.stderr)
+        sys.exit(1)
+    # Il venv e' creato da uv e puo' non contenere pip: si preferisce
+    # `uv pip install --python <venv python>`, con ripiego su `<venv python> -m pip`.
+    uv = shutil.which("uv")
+    if uv:
+        pip_prefix = [uv, "pip", "install", "--python", str(VENV_PYTHON)]
     else:
-        # Fallback: python3 -m pip. Keep the argv elements SEPARATE — a single
-        # "python3 -m pip" string as argv[0] would fail (space in the executable).
-        import shutil
-        python3 = shutil.which("python3")
-        if python3 is None:
-            print("error: ~/.claude/.venv/bin/pip not found and python3 not in PATH", file=sys.stderr)
-            sys.exit(1)
-        pip_prefix = [python3, "-m", "pip"]
-        print(f"warning: {VENV_PIP} not found — falling back to {' '.join(pip_prefix)}", file=sys.stderr)
+        pip_prefix = [str(VENV_PYTHON), "-m", "pip", "install"]
 
-    cmd = pip_prefix + ["install"] + specs
+    cmd = pip_prefix + specs
     if args.dry_run:
         print(" ".join(cmd))
         sys.exit(0)
@@ -306,6 +280,12 @@ def cmd_pip_install(args: argparse.Namespace, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Console Windows (cp1252): forza UTF-8 per i caratteri non ASCII in uscita.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     # argparse subparsers keyed by strings starting with "--" need special handling.
     # We parse argv manually: first positional after the script name is the command.
     # To keep argparse happy, remap bare "--list"/"--check"/"--record"/"--sync"
@@ -339,24 +319,20 @@ def main() -> None:
     sub = p.add_subparsers(dest="command")
 
     ls = sub.add_parser("list")
-    ls.add_argument("--type", choices=["python", "npm", "docker"])
+    ls.add_argument("--type", choices=["python", "npm"])
 
     chk = sub.add_parser("check")
-    chk.add_argument("--type", choices=["python", "npm", "docker"])
+    chk.add_argument("--type", choices=["python", "npm"])
 
     rec = sub.add_parser("record")
-    rec.add_argument("--type", required=True, choices=["python", "npm", "docker"])
+    rec.add_argument("--type", required=True, choices=["python", "npm"])
     rec.add_argument("--name", required=True)
     rec.add_argument("--version", required=False, default=None,
-                     help="Package version (required for python/npm; omit for docker)")
+                     help="Package version (required for python/npm)")
     rec.add_argument("--via", required=True)
     rec.add_argument("--reason", required=True)
     rec.add_argument("--scope", default=None)
     rec.add_argument("--install", default=None)
-    rec.add_argument("--image", default=None)
-    rec.add_argument("--tag", default=None)
-    rec.add_argument("--compose", default=None)
-    rec.add_argument("--endpoint", default=None)
 
     exp = sub.add_parser("export")
     exp.add_argument("--out", default=None,

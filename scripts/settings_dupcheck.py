@@ -25,7 +25,7 @@ def find_duplicate_keys(path):
             seen[k] = v
         return seen
 
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         json.loads(fh.read(), object_pairs_hook=_check_pairs)
     return dups
 

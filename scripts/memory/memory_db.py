@@ -4,7 +4,8 @@ Hybrid keyword (FTS5 BM25) + semantic (sqlite-vec KNN) search over the curated
 agent-memory corpus. Flat MD remains the SOT/backup until a gated cutover; this
 DB is strictly additive and non-destructive (rollback = delete the .db file).
 
-Always run under ~/.claude/.venv/bin/python (fastembed + sqlite-vec live there).
+Invoke via the `mem` shim (or `~/.claude/.venv/Scripts/python.exe` on Windows);
+fastembed + sqlite-vec live in that venv.
 
 Spec: ~/.claude/plans/superclaude-v3/memory-schema.md (§Schema, §Python interfaces,
 §Migration rules). Public API: init_db, upsert, search, get_html, migrate.
@@ -19,7 +20,10 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-import sqlite_vec
+try:
+    import sqlite_vec
+except ImportError:  # il sottocomando `sql` e i tool di sola lettura non ne hanno bisogno
+    sqlite_vec = None
 
 # --- Constants ---------------------------------------------------------------
 
@@ -50,9 +54,30 @@ CANDIDATE_POOL = 50
 # time; no stored vector is mutated. Text is bge-small-en-v1.5's documented prompt.
 BGE_QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 ARCHIVE_TIER = "archive"  # Re-tiered, out-of-active-recall memories (still queryable).
+# Tier canonici e forme brevi accettate in ingresso (vedi normalize_tier).
+CANONICAL_TIERS = ("instance", "class", "shared-projects", "shared-global", ARCHIVE_TIER)
+TIER_ALIASES = {"shared": "shared-projects", "global": "shared-global"}
 
 # Migration walk rules (spec §Migration rules).
 _EXCLUDE_PARTS = {"_system", "_archive", "archive", "_compact-snapshots", "_stop-snapshots"}
+
+
+def normalize_tier(tier: str) -> str:
+    """Riporta un nome di tier alla forma canonica.
+
+    Accetta le forme brevi `shared` e `global`, ignora maiuscole e spazi ai
+    bordi; i nomi canonici passano invariati. Un nome sconosciuto solleva
+    ValueError con l'elenco dei tier validi (la CLI lo traduce in exit code 2).
+    """
+    key = (tier or "").strip().lower()
+    key = TIER_ALIASES.get(key, key)
+    if key not in CANONICAL_TIERS:
+        raise ValueError(
+            f"unknown tier {tier!r}; valid tiers: {', '.join(CANONICAL_TIERS)} "
+            f"(aliases: shared -> shared-projects, global -> shared-global)"
+        )
+    return key
+
 
 # --- Embedder (lazy singleton) ----------------------------------------------
 
@@ -98,8 +123,7 @@ def _connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
     """Open a connection with the sqlite-vec extension loaded."""
     conn = sqlite3.connect(str(db_path))
     # Wait up to 5s for a competing writer instead of failing immediately with
-    # "database is locked" — matters when a cross-device sync writes this DB
-    # concurrently with a local agent's write (Phase EM concurrency hardening).
+    # "database is locked" (Phase EM concurrency hardening).
     conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     conn.enable_load_extension(True)
@@ -215,6 +239,7 @@ def upsert(
     NULL (rendered lazily by get_html). Returns the row id.
     """
     path = str(path)
+    tier = normalize_tier(tier)
     new_hash = _content_hash(text, name, description)
     conn = _connect(db_path)
     try:
@@ -312,6 +337,8 @@ def search(
     (CLI: `--tier archive`) is given. The exclusion is a post-filter on the ranked
     rowids — each arm over-fetches so dropping archived hits does not starve `k`.
     """
+    if tier is not None:
+        tier = normalize_tier(tier)
     # tier='archive' implies the caller wants archived rows; never exclude then.
     exclude_archive = not include_archived and tier != ARCHIVE_TIER
     # Over-fetch when filtering so the post-filter still yields up to `k`.
@@ -827,8 +854,7 @@ def _db_get_by_name(conn: sqlite3.Connection, name: str):
 
 def _db_get_by_path(conn: sqlite3.Connection, path: str):
     # `path` is the UNIQUE identity column — unambiguous, unlike `name`
-    # (names can collide across tiers). Cross-device sync must address rows
-    # by path so a delete never targets the wrong row.
+    # (names can collide across tiers).
     return conn.execute(
         "SELECT * FROM memories WHERE path = ?", (path,)
     ).fetchone()
@@ -1059,6 +1085,8 @@ def similar(
     sorted by `combined` descending. Raises LookupError if `row_id` is absent or
     has no stored embedding.
     """
+    if tier is not None:
+        tier = normalize_tier(tier)
     conn = _connect(db_path)
     try:
         target = _db_get_by_id(conn, row_id)
@@ -1235,6 +1263,7 @@ def retier(
     Returns {'id', 'name', 'old_tier', 'new_tier', 'old_path', 'new_path'}.
     Raises LookupError if absent; ValueError on archive-target or a redundant move.
     """
+    target_tier = normalize_tier(target_tier)
     if target_tier == ARCHIVE_TIER:
         raise ValueError(
             "use the `archive` command to re-tier to 'archive' "
@@ -1369,6 +1398,59 @@ def compact_db(db_path=DB_PATH) -> dict:
         conn.close()
 
 
+# --- SQL di sola lettura -----------------------------------------------------
+
+_SQL_LEAD_RE = re.compile(r"^\s*(select|with)\b", re.IGNORECASE)
+
+
+def _check_readonly_sql(query: str) -> str:
+    """Valida che `query` sia UNA sola istruzione SELECT/WITH e la restituisce pulita.
+
+    Rifiuta istruzioni multiple separate da `;` (un solo `;` finale e' tollerato)
+    e qualunque istruzione che non inizi con SELECT o WITH (PRAGMA, ATTACH, DML...).
+    Il controllo sul `;` e' volutamente semplice: vale anche dentro i letterali.
+    """
+    q = (query or "").strip()
+    if q.endswith(";"):
+        q = q[:-1].rstrip()
+    if not q:
+        raise ValueError("empty SQL statement")
+    if ";" in q:
+        raise ValueError("multiple statements are not allowed (found ';')")
+    if not _SQL_LEAD_RE.match(q):
+        raise ValueError("only a single SELECT or WITH statement is allowed")
+    return q
+
+
+def _sql_authorizer(action, *_args):
+    """Nega ATTACH, DETACH e PRAGMA anche se annidati in una SELECT."""
+    if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH, sqlite3.SQLITE_PRAGMA):
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def run_sql(query: str, db_path: Path | str = DB_PATH) -> tuple[list[str], list[tuple]]:
+    """Esegue una SELECT/WITH su una connessione di sola lettura.
+
+    Non carica l'estensione vec (le tabelle vec0 non sono interrogabili da qui).
+    Restituisce (colonne, righe). Solleva ValueError se la query e' rifiutata,
+    FileNotFoundError se il DB non esiste, sqlite3.Error per errori SQL.
+    """
+    q = _check_readonly_sql(query)
+    p = Path(db_path).expanduser()
+    if not p.is_file():
+        raise FileNotFoundError(f"DB not found: {p}")
+    conn = sqlite3.connect(p.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.set_authorizer(_sql_authorizer)
+        cur = conn.execute(q)
+        cols = [d[0] for d in (cur.description or [])]
+        return cols, [tuple(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 # --- CLI entry ---------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -1379,6 +1461,15 @@ if __name__ == "__main__":
     def _die(msg: str, code: int = 1) -> None:
         print(f"error: {msg}", file=sys.stderr)
         sys.exit(code)
+
+    def _tier_or_die(value):
+        """Normalizza un --tier della CLI; tier sconosciuto -> exit code 2."""
+        if value is None:
+            return None
+        try:
+            return normalize_tier(value)
+        except ValueError as e:
+            _die(str(e), 2)
 
     def _resolve_name_or_die(conn, arg):
         """Resolve --name via the resolution ladder; return the full row on a UNIQUE
@@ -1436,7 +1527,8 @@ if __name__ == "__main__":
     p_search.add_argument(
         "--tier",
         default=None,
-        help="Restrict results to this tier (use 'archive' to query archived rows).",
+        help="Restrict results to this tier: instance, class, shared-projects, shared-global, archive (aliases: shared, global). "
+        "Use 'archive' to query archived rows.",
     )
     p_search.add_argument(
         "--all",
@@ -1456,7 +1548,11 @@ if __name__ == "__main__":
         "upsert",
         help="Insert or update a memory.",
     )
-    p_upsert.add_argument("--tier", required=True, help="Tier: instance, shared, class, global.")
+    p_upsert.add_argument(
+        "--tier",
+        required=True,
+        help="Tier: instance, class, shared-projects, shared-global, archive (aliases: shared, global).",
+    )
     p_upsert.add_argument(
         "--type",
         required=True,
@@ -1499,7 +1595,9 @@ if __name__ == "__main__":
         "list",
         help="List memories (name · tier · type · path).",
     )
-    p_list.add_argument("--tier", default=None, help="Filter by tier.")
+    p_list.add_argument(
+        "--tier", default=None, help="Filter by tier: instance, class, shared-projects, shared-global, archive (aliases: shared, global)."
+    )
     p_list.add_argument(
         "--type",
         default=None,
@@ -1521,16 +1619,21 @@ if __name__ == "__main__":
     )
 
     # stats
-    p_stats = sub.add_parser("stats", help="Row counts for memories / fts / vec.")
+    p_stats = sub.add_parser(
+        "stats",
+        help="Row counts for memories / fts / vec, per-tier and per-type counts, last update.",
+    )
 
     # compact
     p_compact = sub.add_parser(
         "compact",
         help="Structural maintenance: FTS5 optimize + vec0 rebuild + VACUUM (reclaims fragmentation; safe/verified).",
     )
+    # SUPPRESS: senza, il default del sottoparser sovrascriveva il --db globale
+    # e `--db <copia> compact` finiva sul DB live.
     p_compact.add_argument(
         "--db",
-        default=str(DB_PATH),
+        default=argparse.SUPPRESS,
         help=f"DB path (default: {DB_PATH}).",
     )
 
@@ -1546,7 +1649,9 @@ if __name__ == "__main__":
         "-k", type=int, default=8, metavar="N", help="Max results (default 8)."
     )
     p_similar.add_argument(
-        "--tier", default=None, help="Restrict candidates to this tier."
+        "--tier",
+        default=None,
+        help="Restrict candidates to this tier: instance, class, shared-projects, shared-global, archive (aliases: shared, global).",
     )
     p_similar.add_argument(
         "--json",
@@ -1582,13 +1687,14 @@ if __name__ == "__main__":
         "--tier",
         required=True,
         metavar="TARGET",
-        help="Target tier (e.g. shared-global). Reject 'archive' — use `archive`.",
+        help="Target tier: instance, class, shared-projects, shared-global "
+        "(aliases: shared, global). Rejects 'archive': use `archive`.",
     )
 
     # export
     p_export = sub.add_parser(
         "export",
-        help="Emit a JSON manifest of all rows (for cross-device sync).",
+        help="Dump a JSON manifest of all rows (backup / inspection).",
     )
     p_export.add_argument(
         "--with-body",
@@ -1596,9 +1702,22 @@ if __name__ == "__main__":
         help="Include each row's full body text (default: metadata only).",
     )
 
+    # sql
+    p_sql = sub.add_parser(
+        "sql",
+        help="Run ONE read-only SELECT/WITH statement (DB opened read-only, no vec extension).",
+    )
+    p_sql.add_argument("statement", metavar="SELECT", help="A single SELECT or WITH statement.")
+    p_sql.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Output a JSON array of objects instead of tab-separated rows.",
+    )
+
     ns = parser.parse_args()
 
-    db = Path(ns.db) if ns.db else DB_PATH
+    db = Path(ns.db).expanduser() if ns.db else DB_PATH
 
     if ns.cmd is None:
         parser.print_help()
@@ -1617,7 +1736,7 @@ if __name__ == "__main__":
             mode=ns.mode,
             db_path=db,
             include_archived=ns.include_archived,
-            tier=ns.tier,
+            tier=_tier_or_die(ns.tier),
         )
         if ns.as_json:
             # Omit html column from machine output (large, rarely needed).
@@ -1643,11 +1762,12 @@ if __name__ == "__main__":
         if ns.text_stdin:
             body = sys.stdin.read()
         else:
-            p = Path(ns.text_file)
+            p = Path(ns.text_file).expanduser()
             if not p.exists():
                 _die(f"--text-file not found: {p}")
             body = p.read_text(encoding="utf-8", errors="replace")
 
+        ns.tier = _tier_or_die(ns.tier)
         agent_part = ns.agent or "_"
         logical_path = ns.path or f"{ns.tier}/{agent_part}/{ns.name}.md"
 
@@ -1689,7 +1809,7 @@ if __name__ == "__main__":
             params: list = []
             if ns.tier:
                 query_parts.append("AND tier = ?")
-                params.append(ns.tier)
+                params.append(_tier_or_die(ns.tier))
             if ns.mem_type:
                 query_parts.append("AND type = ?")
                 params.append(ns.mem_type)
@@ -1741,7 +1861,9 @@ if __name__ == "__main__":
             _die(f"memory not found: id={ns.id}")
 
         try:
-            results = similar(row["id"], k=ns.k, tier=ns.tier, db_path=db)
+            results = similar(
+                row["id"], k=ns.k, tier=_tier_or_die(ns.tier), db_path=db
+            )
         except LookupError as e:
             _die(str(e))
 
@@ -1801,7 +1923,7 @@ if __name__ == "__main__":
             _die(f"memory not found: id={ns.id}")
 
         try:
-            info = retier(row["id"], ns.tier, db_path=db)
+            info = retier(row["id"], _tier_or_die(ns.tier), db_path=db)
         except (LookupError, ValueError) as e:
             _die(str(e))
 
@@ -1821,26 +1943,39 @@ if __name__ == "__main__":
             vec_count = conn.execute(
                 "SELECT COUNT(*) FROM memories_vec"
             ).fetchone()[0]
+            by_tier = conn.execute(
+                "SELECT COALESCE(tier, '(null)'), COUNT(*) FROM memories "
+                "GROUP BY 1 ORDER BY 2 DESC, 1"
+            ).fetchall()
+            by_type = conn.execute(
+                "SELECT COALESCE(type, '(null)'), COUNT(*) FROM memories "
+                "GROUP BY 1 ORDER BY 2 DESC, 1"
+            ).fetchall()
+            last_updated = conn.execute("SELECT MAX(updated) FROM memories").fetchone()[0]
         finally:
             conn.close()
 
         print(f"memories : {mem_count}")
         print(f"fts rows : {fts_count}")
         print(f"vec rows : {vec_count}")
+        # Righe aggiuntive (documentate in skills/mem-index): le prime tre restano invariate.
+        print("tiers    : " + (", ".join(f"{t}={n}" for t, n in by_tier) or "-"))
+        print("types    : " + (", ".join(f"{t}={n}" for t, n in by_type) or "-"))
+        print(f"updated  : {last_updated or '-'}")
 
     elif ns.cmd == "compact":
-        r = compact_db(ns.db)
+        r = compact_db(db)
         print(
             f"compact ok={r['ok']}  {r['before_bytes']:,} -> {r['after_bytes']:,} bytes"
             f" ({100*(1-r['after_bytes']/r['before_bytes']):.0f}% smaller)"
         )
 
     elif ns.cmd == "export":
-        # JSON manifest of all rows for cross-device sync. Identity = `path`,
+        # JSON manifest of all rows (backup / dump). Identity = `path`,
         # equality = content `hash` (sha256 of name+description+text — machine
         # independent), recency = `updated`. `id`/`created` are intentionally
-        # omitted from the equality surface (machine-local); `--with-body`
-        # adds `text` so a remote peer can reconstruct a row via `upsert`.
+        # omitted (machine-local); `--with-body` adds `text` so a row can be
+        # reconstructed via `upsert`.
         conn = _connect(db)
         try:
             cols = "path, name, tier, type, agent, description, hash, updated"
@@ -1852,3 +1987,27 @@ if __name__ == "__main__":
         finally:
             conn.close()
         print(json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2))
+
+    elif ns.cmd == "sql":
+        try:
+            cols, rows = run_sql(ns.statement, db)
+        except ValueError as e:
+            _die(f"refused: {e}", 2)
+        except (FileNotFoundError, sqlite3.Error) as e:
+            _die(str(e))
+        if ns.as_json:
+            print(json.dumps(
+                [dict(zip(cols, r)) for r in rows], ensure_ascii=False, indent=2,
+                default=lambda b: f"<blob {len(b)}B>",
+            ))
+        else:
+            def _cell(v) -> str:
+                if v is None:
+                    return ""
+                if isinstance(v, bytes):
+                    return f"<blob {len(v)}B>"
+                return str(v).replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+            print("\t".join(cols))
+            for r in rows:
+                print("\t".join(_cell(v) for v in r))

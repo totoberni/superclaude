@@ -35,6 +35,33 @@ WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
 _DRIVE_MSYS = re.compile(r"^/([a-zA-Z])(/|$)")        # /c/Users/...  (Git Bash)
 _DRIVE_WIN = re.compile(r"^([a-zA-Z]):[\\/]?")         # C:\Users\... o C:/Users/...
+_SHORT_NAME = re.compile(r"~\d")                       # segmento 8.3, es. MARIO~1.ROS
+
+
+def _expand_short_names(s: str) -> str:
+    """Espande i nomi corti 8.3 risalendo al primo antenato esistente.
+
+    `os.path.realpath` espande solo ciò che esiste: per un file ancora da creare
+    si risolve la parte esistente del percorso e si riattacca il resto.
+    """
+    if os.name != "nt":
+        return s
+    probe = s.replace("/", "\\")
+    m = _DRIVE_MSYS.match(s)
+    if m:
+        probe = f"{m.group(1)}:\\" + s[m.end():].replace("/", "\\")
+    tail: list[str] = []
+    try:
+        while probe and not os.path.exists(probe):
+            head, _, last = probe.rstrip("\\").rpartition("\\")
+            if not head or head == probe:
+                return s
+            tail.insert(0, last)
+            probe = head
+        resolved = os.path.realpath(probe)
+    except (OSError, ValueError):
+        return s
+    return "\\".join([resolved.rstrip("\\"), *tail]) if tail else resolved
 
 
 # --------------------------------------------------------------------------
@@ -45,13 +72,19 @@ def norm_path(raw: str | os.PathLike[str] | None, cwd: str | None = None) -> str
 
     Accetta `C:\\Users\\x`, `C:/Users/x`, `/c/Users/x`, `~/x`, `$HOME/x` e
     percorsi relativi (risolti rispetto a `cwd`). NTFS è case-insensitive, quindi
-    il confronto avviene sempre in minuscolo. Non tocca il filesystem.
+    il confronto avviene sempre in minuscolo. Non tocca il filesystem, tranne che
+    per espandere i nomi corti 8.3 (`C:\\Users\\MARIO~1.ROS\\...`): questa macchina
+    li produce davvero e senza espansione aggirerebbero ogni regola sui percorsi.
     """
-    if raw is None:
+    if raw is None or isinstance(raw, (bytes, bytearray)):
         return ""
+    if cwd is not None and not isinstance(cwd, str):
+        cwd = None
     s = str(raw).strip().strip('"').strip("'")
     if not s:
         return ""
+    if _SHORT_NAME.search(s):
+        s = _expand_short_names(s)
     home = str(Path.home())
     if s == "~" or s.startswith(("~/", "~\\")):
         s = home + s[1:]
@@ -83,6 +116,30 @@ def norm_path(raw: str | os.PathLike[str] | None, cwd: str | None = None) -> str
     return out.lower()
 
 
+def fs_path(raw: str | os.PathLike[str] | None, cwd: str | None = None) -> Path | None:
+    """Percorso utilizzabile per l'accesso ai file, con le maiuscole originali.
+
+    `norm_path` serve per i CONFRONTI (minuscolo); questo serve per APRIRE o
+    MOSTRARE un file: accetta `/c/Users/...`, `~`, percorsi relativi a `cwd`.
+    """
+    if raw is None or isinstance(raw, (bytes, bytearray)):
+        return None
+    s = str(raw).strip().strip('"').strip("'")
+    if not s:
+        return None
+    if s == "~" or s.startswith(("~/", "~\\")):
+        s = str(Path.home()) + s[1:]
+    m = _DRIVE_MSYS.match(s)
+    if m:
+        s = f"{m.group(1).upper()}:/{s[m.end():]}"
+    p = Path(s)
+    if not p.is_absolute() and isinstance(cwd, str) and cwd:
+        base = fs_path(cwd)
+        if base is not None:
+            p = base / p
+    return p
+
+
 def is_under(path: str | os.PathLike[str] | None, root: str | os.PathLike[str], cwd: str | None = None) -> bool:
     """True se `path` coincide con `root` o sta sotto di esso."""
     p, r = norm_path(path, cwd), norm_path(root, cwd).rstrip("/")
@@ -111,28 +168,42 @@ class Ctx:
     role: str            # "meta" | "worker" | "plain"
     agent: str           # nome dell'agente ("meta", "w-reviewer", ...) oppure ""
 
+    def _str_field(self, *keys: str) -> str:
+        """Primo campo stringa non vuoto tra `keys`; i tipi inattesi valgono ""."""
+        for key in keys:
+            val = self.tool_input.get(key)
+            if isinstance(val, str) and val:
+                return val
+        return ""
+
     @property
     def file_path(self) -> str:
-        ti = self.tool_input
-        return str(ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or "")
+        return self._str_field("file_path", "notebook_path", "path")
 
     @property
     def command(self) -> str:
-        return str(self.tool_input.get("command") or "")
+        return self._str_field("command")
 
     @property
     def new_content(self) -> str:
         """Testo che lo strumento sta per scrivere (Write/Edit/MultiEdit)."""
-        ti = self.tool_input
-        chunks = [str(ti.get("content") or ""), str(ti.get("new_string") or ""), str(ti.get("new_source") or "")]
-        for edit in ti.get("edits") or []:
-            if isinstance(edit, dict):
-                chunks.append(str(edit.get("new_string") or ""))
+        chunks = [self._str_field("content"), self._str_field("new_string"), self._str_field("new_source")]
+        edits = self.tool_input.get("edits")
+        for edit in edits if isinstance(edits, (list, tuple)) else ():
+            if isinstance(edit, dict) and isinstance(edit.get("new_string"), str):
+                chunks.append(edit["new_string"])
         return "\n".join(c for c in chunks if c)
 
     def state_file(self, key: str) -> Path:
-        sid = re.sub(r"[^A-Za-z0-9_.-]", "_", self.session_id or "no-session")
-        return STATE_DIR / sid / key
+        """File di stato per (sessione, chiave), sempre DENTRO STATE_DIR/<sid>/.
+
+        Un session_id ostile come `..` risolverebbe a ~/.claude, che la pulizia di
+        fine sessione cancella: i punti iniziali vengono rimossi e un nome vuoto
+        ricade su "no-session". Stessa cura per la chiave.
+        """
+        sid = re.sub(r"[^A-Za-z0-9_.-]", "_", self.session_id or "").lstrip(".") or "no-session"
+        safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key or "").lstrip(".") or "state"
+        return STATE_DIR / sid / safe_key
 
     def once(self, key: str) -> bool:
         """True solo la prima volta per (sessione, chiave): per gli avvisi one-shot."""
@@ -164,12 +235,21 @@ class Result:
 
 Handler = Callable[[Ctx], "Result | None"]
 _REGISTRY: list[tuple[str, tuple[str, ...], str, Handler]] = []
+_DEFAULT_MODE: dict[str, str] = {}
 
 
-def on(event: str, tools: Iterable[str] = (), name: str = "") -> Callable[[Handler], Handler]:
-    """Registra un handler. `tools` vuoto = tutti gli strumenti."""
+def on(event: str, tools: Iterable[str] = (), name: str = "",
+       default_mode: str = "block") -> Callable[[Handler], Handler]:
+    """Registra un handler. `tools` vuoto = tutti gli strumenti.
+
+    `default_mode="warn"` dichiara una guardia consultiva: un suo `Result.deny`
+    diventa un avviso, a meno che l'ambiente non chieda esplicitamente "block".
+    """
     def deco(fn: Handler) -> Handler:
-        _REGISTRY.append((event, tuple(tools), name or fn.__name__, fn))
+        key = name or fn.__name__
+        _REGISTRY.append((event, tuple(tools), key, fn))
+        if default_mode in ("warn", "block"):
+            _DEFAULT_MODE.setdefault(key, default_mode)
         return fn
     return deco
 
@@ -247,7 +327,7 @@ def dispatch(ctx: Ctx) -> int:
     for event, tools, name, fn in _REGISTRY:
         if event != ctx.event or (tools and ctx.tool not in tools):
             continue
-        mode = guard_mode(name)
+        mode = guard_mode(name, _DEFAULT_MODE.get(name, "block"))
         if mode == "off":
             continue
         try:

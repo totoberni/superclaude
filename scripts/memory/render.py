@@ -36,8 +36,8 @@ Usage from Python:
     page = "".join(render(t, k, scripts=reg) for t, k in rows)
 
 Usage from CLI (smoke test):
-    ~/.claude/.venv/bin/python render.py tikz   < snippet.tex
-    ~/.claude/.venv/bin/python render.py mermaid <<< 'graph TD; A-->B;'
+    scpy memory/render.py tikz   < snippet.tex
+    echo 'graph TD; A-->B;' | scpy memory/render.py mermaid
 """
 
 from __future__ import annotations

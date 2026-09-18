@@ -25,11 +25,11 @@ exit indicates the tool itself failed (bad path, unreadable file, missing dep
 for the requested mode).
 
 Usage:
-    ~/.claude/.venv/bin/python ~/.claude/scripts/figure-validate.py FIGURE [FIGURE ...]
-    ~/.claude/.venv/bin/python ~/.claude/scripts/figure-validate.py plot.py fig.png
-    ~/.claude/.venv/bin/python ~/.claude/scripts/figure-validate.py --mode code plot.py
-    ~/.claude/.venv/bin/python ~/.claude/scripts/figure-validate.py --json fig.png
-    ~/.claude/.venv/bin/python ~/.claude/scripts/figure-validate.py \
+    scpy figure-validate.py FIGURE [FIGURE ...]
+    scpy figure-validate.py plot.py fig.png
+    scpy figure-validate.py --mode code plot.py
+    scpy figure-validate.py --json fig.png
+    scpy figure-validate.py \
         --min-contrast 4.5 --min-linewidth 0.8 --min-alpha 0.3 fig.png
 """
 
@@ -565,6 +565,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    # Console Windows (cp1252): forza UTF-8 per i caratteri non ASCII in uscita.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     args = build_arg_parser().parse_args(argv)
     cfg = Config(args.min_contrast, args.min_linewidth, args.min_alpha)
 

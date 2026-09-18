@@ -234,12 +234,54 @@ def check_forbidden_pattern(root, rec, home_rel, corpus_paths, failures):
         )
 
 
+_SH_CACHE = []
+_SH_SKIP_WARNED = []
+
+
+def find_sh():
+    """Percorso di una shell POSIX per i comandi ground_truth, o None.
+
+    Su Windows si usa lo sh.exe di Git Bash, accanto al bash.exe indicato da
+    CLAUDE_CODE_GIT_BASH_PATH; in mancanza, un eventuale sh sul PATH. Altrove
+    basta "sh". Il risultato e' memorizzato (una sola ricerca per esecuzione).
+    """
+    if _SH_CACHE:
+        return _SH_CACHE[0]
+    found = None
+    if os.name != "nt":
+        found = "sh"
+    else:
+        bash = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH", "").strip().strip('"')
+        if bash:
+            sibling = os.path.join(os.path.dirname(bash), "sh.exe")
+            if os.path.isfile(sibling):
+                found = sibling
+            elif os.path.isfile(bash):
+                found = bash
+        if found is None:
+            import shutil
+            found = shutil.which("sh")
+    _SH_CACHE.append(found)
+    return found
+
+
 def check_ground_truth(rec, failures):
     cmd = rec.get("ground_truth")
     if not cmd:
         return
+    sh = find_sh()
+    if sh is None:
+        if not _SH_SKIP_WARNED:
+            _SH_SKIP_WARNED.append(True)
+            print(
+                "ssot-lint: SKIP ground_truth checks: no POSIX sh found "
+                "(set CLAUDE_CODE_GIT_BASH_PATH to Git Bash's bash.exe)",
+                file=sys.stderr,
+            )
+        return
     result = subprocess.run(
-        ["sh", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        [sh, "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip().splitlines()

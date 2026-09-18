@@ -21,7 +21,7 @@ GATE mode (`--gate`) writes a proof-of-pipeline page to
 memories rendered from the DB, an injected quantikz 2-qubit-circuit TikZ
 diagram (proving server-side TikZ→SVG end-to-end), and a Mermaid block.
 
-Always run under ~/.claude/.venv/bin/python.
+Run via the `scpy` shim (or `~/.claude/.venv/Scripts/python.exe` on Windows).
 
 Usage:
     python viewer.py --id 18                 -> stdout
@@ -380,7 +380,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--db", default=str(memory_db.DB_PATH), help="DB path override")
     args = p.parse_args(argv)
 
-    db_path = args.db
+    db_path = str(Path(args.db).expanduser())
 
     if args.gate:
         page, n_real = build_gate(db_path)
@@ -401,7 +401,7 @@ def main(argv: list[str]) -> int:
 
     page = build_page(rows, title, db_path=db_path)
     if args.out:
-        Path(args.out).write_text(page, encoding="utf-8")
+        Path(args.out).expanduser().write_text(page, encoding="utf-8")
         sys.stderr.write(f"wrote {len(rows)} memor{'y' if len(rows)==1 else 'ies'} → {args.out}\n")
     else:
         sys.stdout.write(page)

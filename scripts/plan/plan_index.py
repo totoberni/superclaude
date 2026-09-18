@@ -18,8 +18,7 @@ import sys
 from pathlib import Path
 
 
-MEMORY_DB = Path("~/.claude/scripts/memory/memory_db.py").expanduser()
-VENV_PYTHON = Path("~/.claude/.venv/bin/python").expanduser()
+MEMORY_DB = Path.home() / ".claude" / "scripts" / "memory" / "memory_db.py"
 
 
 def die(msg: str) -> None:
@@ -112,9 +111,10 @@ def build_card(
 def upsert(slug: str, card_body: str, description: str) -> str:
     """Shell to memory_db.py upsert; return the upserted id."""
     name = f"plan-index-{slug}"
-    env = {**os.environ, "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+    env = {**os.environ, "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+           "PYTHONUTF8": "1"}  # il figlio deve leggere stdin come UTF-8 anche su Windows
     cmd = [
-        str(VENV_PYTHON),
+        sys.executable,
         str(MEMORY_DB),
         "upsert",
         "--tier", "instance",
@@ -128,6 +128,8 @@ def upsert(slug: str, card_body: str, description: str) -> str:
         input=card_body,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
     )
     if result.returncode != 0:

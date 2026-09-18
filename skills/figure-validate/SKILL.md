@@ -4,7 +4,7 @@ description: "Use when validating figures for WCAG-AA contrast, thin lines, low 
 model: haiku
 category: code-quality
 user-invocable: true
-argument-hint: "FIGURE [FIGURE ...] [--mode image|code|pdf] [--min-contrast N] [--min-linewidth N] [--min-alpha N] [--json] [--rounds N] [--loop]"
+argument-hint: "FIGURE [FIGURE ...] [--mode image|code|pdf] [--min-contrast N] [--min-linewidth N] [--min-alpha N] [--json]"
 allowed-tools: Bash, Read
 ---
 
@@ -14,9 +14,8 @@ Flags publication-quality legibility defects in scientific figures (matplotlib /
 ML-paper plots) before they reach a paper or slide deck. Three checks, two input
 modes. It is a **reporting** tool: exit code is 0 whether or not defects are
 found; a non-zero exit means the tool itself failed (bad path, unreadable file).
-The check is deterministic, so it can also DRIVE a regenerate-and-revalidate loop
-(see Loop integration): a conductor iterates fix-and-recheck until zero figures
-are flagged.
+The check is deterministic, so it can also gate a fix-and-revalidate pass
+(see Gate semantics): fix, then re-run until zero figures are flagged.
 
 ## Checks
 
@@ -44,28 +43,25 @@ against reference values (black/white = 21:1, `#777` on white = 4.48:1).
 
 ## Usage
 
-Run via the dedicated superclaude venv (absolute path — venv discipline):
+Run via the `scpy` shim (dedicated superclaude venv — venv discipline):
 
 ```bash
 # Validate a rendered figure.
-~/.claude/.venv/bin/python ~/.claude/scripts/figure-validate.py figure.png
+scpy figure-validate.py figure.png
 
 # Validate the plotting code that produced it (static scan).
-~/.claude/.venv/bin/python ~/.claude/scripts/figure-validate.py make_fig.py
+scpy figure-validate.py make_fig.py
 
 # Mix modes, machine-readable output.
-~/.claude/.venv/bin/python ~/.claude/scripts/figure-validate.py --json plot.py fig.png
+scpy figure-validate.py --json plot.py fig.png
 
 # Override thresholds (e.g. stricter linewidth for a print journal).
-~/.claude/.venv/bin/python ~/.claude/scripts/figure-validate.py \
-    --min-contrast 7.0 --min-linewidth 1.0 figure.png
+scpy figure-validate.py --min-contrast 7.0 --min-linewidth 1.0 figure.png
 ```
 
 **Args**: positional `FIGURE` paths (one or more); `--mode {auto,image,code,pdf}`
 (default `auto`); `--min-contrast` (default `4.5`); `--min-linewidth` (default
-`0.8`); `--min-alpha` (default `0.3`); `--json` for structured output. `--loop`
-is a skill-level convergence mode (see Loop integration), driven by the conductor;
-it is not forwarded to `figure-validate.py`, which keeps its single-shot contract.
+`0.8`); `--min-alpha` (default `0.3`); `--json` for structured output.
 
 ## Output
 
@@ -74,63 +70,37 @@ Per-file `[pass]` / `[FLAG]` header, then one line per issue with severity
 a description, and a `fix:` suggestion. Closes with a `summary:` line counting
 flagged files and total findings.
 
-## Loop integration (converge)
+## Gate semantics and fix-and-revalidate
 
 `figure-validate` is a DETERMINISTIC gate, not an LLM reviewer. Each run emits
 per-file `[pass]` / `[FLAG]` lines with concrete `fix:` suggestions; it never
-emits a `VERDICT` or `SEAL` token. Under the two-token protocol its result maps
+emits a `VERDICT` token. Under the two-token protocol its result maps
 through the deterministic-checker row of the severity table
 (`_shared/verdict-schema.md`): every `[FLAG]` is a failed-gate (blocking-class)
 finding, with no major/minor gradation. The per-issue `HIGH`/`MED` ordering only
-prioritises which flag to fix first; for the gate, ANY `[FLAG]` fails the round.
-Because the gate is deterministic it needs no fresh LLM auditor: the validator's
-own `0 [FLAG]` report on the latest figures IS the seal-equivalent evidence.
-Loop orchestration (dispatching the producer and printing the `/goal` block)
-runs in the conductor's context (meta/orch, which holds Agent and Skill); this
-skill's allowed-tools cover only its single invocation.
+prioritises which flag to fix first; for the gate, ANY `[FLAG]` fails.
+Because the gate is deterministic it needs no LLM auditor: the validator's
+own `0 [FLAG]` report on the latest figures IS the acceptance evidence.
 
-**`--loop` mode** turns the gate into a `/converge`-style regenerate-and-revalidate
-loop, driven by a conductor (meta or orch; converge authority is meta + orch
-only). It is a skill-level convergence mode consumed by the conductor; it is NOT
-forwarded to `figure-validate.py`, which keeps its single-shot reporting contract.
-Each round:
+When a run reports `[FLAG]` findings:
 
-1. **PRODUCE / REVISE**: for every `[FLAG]`, apply its `fix:` suggestion by
+1. **FIX**: for every `[FLAG]`, apply its `fix:` suggestion by
    regenerating the figure with the corrected setting (thicker linewidth, higher
    alpha, higher-contrast colour). Delegate the regeneration to a producer per
    `dispatch-contract.md` (a trivial code-mode edit may be done inline). Producers
    never self-certify the result.
-2. **RE-VALIDATE**: the conductor RE-RUNS the plain validator itself over ALL
-   target figures (loop rule c, tool-verified critique: never accept a producer's
-   "I fixed it"). Read the flagged-file count from the `summary:` line, or from
-   `--json` for a machine-readable count. The exit code stays 0, so the `[FLAG]`
-   count, not the exit code, is the loop signal.
-3. **LEDGER**: append the round, the delta (figures regenerated this round), and
-   the flagged-file count before the next round begins.
-4. Repeat until the validator reports `0 [FLAG]` across every target figure, or
-   the round cap (default 4) is reached.
+2. **RE-VALIDATE**: the parent (meta or the owner's session) RE-RUNS the plain
+   validator itself over ALL target figures (tool-verified critique: never accept
+   a producer's "I fixed it"). Read the flagged-file count from the `summary:`
+   line, or from `--json` for a machine-readable count. The exit code stays 0, so
+   the `[FLAG]` count, not the exit code, is the signal.
 
-Termination needs two independent signals (dual-condition exit): a `0 [FLAG]`
-validator report on the latest revision AND the producer's separate
-`STATUS: DONE`. If the total `[FLAG]` count does not fall across two consecutive
-rounds, the loop has stalled: ESCALATE rather than burning further rounds.
-
-## Emitted /goal block
-
-Setup ENDS by printing a ready-to-paste `/goal` block, then STOPS; the skill
-never arms `/goal` itself (DEC-R2). The block specialises the canonical shape
-(`_shared/verdict-schema.md`, Canonical emitted /goal block) for a purely
-deterministic gate: clause 1 quotes the validator's `0 [FLAG]` evidence in place
-of a `SEAL: ACCEPTED`, and NO LLM SEAL is required.
-
-```
-/goal Accept only when ALL hold: (1) the transcript contains a figure-validate run over ALL target figures that the conductor states is quoted verbatim, is the MOST RECENT such run, and post-dates the last regeneration of those figures, reporting 0 [FLAG] (summary: 0 flagged files, 0 findings); (2) the producer has separately stated completion (STATUS: DONE); no LLM SEAL is required, as this gate is purely deterministic. If regenerate-and-revalidate rounds exceed <N> (from --rounds, else 4), or the total [FLAG] count does not decrease across 2 consecutive rounds, declare ESCALATE and stop.
-```
-
-Paste this to arm the engine; `figure-validate` does not self-arm. The
-most-recent-and-post-dates clause is load-bearing: a `0 [FLAG]` report from
-before the last regeneration is stale evidence and never fires the goal (no
-pre-approval; `verdict-schema.md`, No pre-approval).
+Acceptance needs two independent signals: a `0 [FLAG]` validator report on the
+latest revision AND the producer's separate `STATUS: DONE`. A `0 [FLAG]` report
+from before the last regeneration is stale evidence and never counts (no
+pre-approval; `verdict-schema.md`, No pre-approval). If the `[FLAG]` count does
+not fall after a fix attempt, stop and report to the owner rather than retrying
+blindly.
 
 ## Dependencies
 
@@ -139,15 +109,17 @@ Needs `Pillow` + `numpy` (present in `~/.claude/.venv`). `PyMuPDF` is optional
 sample figures below — the validator itself never imports it. Missing deps are
 listed in `~/.claude/dependencies.yml` (owner installs; agents do not pip-install).
 
-## Self-test (after `pip install matplotlib`)
+## Self-test (after the owner installs `matplotlib` into `~/.claude/.venv` with `uv`)
 
-```bash
-~/.claude/.venv/bin/python - <<'PY'
-import subprocess, tempfile, os
+Write the script below to `~/.claude/tmp/figure_selftest.py` with the Write tool,
+then run `scpy ~/.claude/tmp/figure_selftest.py`:
+
+```python
+import subprocess, sys, tempfile, os
 from pathlib import Path
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt, numpy as np
-V = os.path.expanduser("~/.claude/.venv/bin/python")
+V = sys.executable  # the ~/.claude/.venv interpreter that scpy runs under
 S = os.path.expanduser("~/.claude/scripts/figure-validate.py")
 t = Path(tempfile.mkdtemp()); x = np.linspace(0, 10, 200)
 # clean: thick dark line on white
@@ -161,15 +133,12 @@ f.savefig(t / "bad.png", facecolor="#eeeeee"); plt.close(f)
 for name in ("clean.png", "bad.png"):
     print(subprocess.run([V, S, str(t / name)], capture_output=True, text=True).stdout)
 import shutil; shutil.rmtree(t)
-PY
 ```
 
 Expected: `clean.png` → `[pass]`; `bad.png` → `[FLAG]` (low contrast).
 
 ## Cross-References
 
-- Convergence engine (rounds, ledger, the 8 loop rules, goal-string emission):
-  `~/.claude/skills/converge/SKILL.md`
 - Two-token protocol and severity mapping (deterministic-checker row:
   `figure-validate` FLAG = failed gate): `~/.claude/skills/_shared/verdict-schema.md`
 - Dispatch contract and model split (producer regeneration budgets):
