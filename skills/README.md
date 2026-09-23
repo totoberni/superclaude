@@ -1,6 +1,6 @@
 # Superclaude Skill System: Reference
 
-The skills under `~/.claude/skills/*/SKILL.md` (50 of them) are the invocable capability layer of superclaude. Each skill is a self-contained protocol, a slash command a user types (`/plan`) and, by default, a capability the model can select autonomously through the Skill tool. This file is the mechanical reference. The entry-point summary lives in the global `~/.claude/README.md`; this file does not repeat it. It owns the mechanics: the frontmatter contract, the two-token protocol, single-pass review, the scheduled wf-* monitors, and the catalogue.
+The skills under `~/.claude/skills/*/SKILL.md` (54 of them) are the invocable capability layer of superclaude. Each skill is a self-contained protocol, a slash command a user types (`/plan`) and, by default, a capability the model can select autonomously through the Skill tool. This file is the mechanical reference. The entry-point summary lives in the global `~/.claude/README.md`; this file does not repeat it. It owns the mechanics: the frontmatter contract, the two-token protocol, single-pass review, the scheduled wf-* monitors, and the catalogue.
 
 ## Skill anatomy
 
@@ -78,7 +78,7 @@ Human gates are never auto-cleared. Design approval (`brainstorm`), memory delet
 
 ## Skill catalogue by category
 
-All 50 skills, grouped by their `category` frontmatter, with the one-line "Use when" purpose.
+All 54 skills, grouped by their `category` frontmatter, with the one-line "Use when" purpose.
 
 **delegation** (4)
 | Skill | Use when |
@@ -105,7 +105,7 @@ All 50 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `wf-nb-watch` | watching a long notebook run, dispatching a fix on BROKEN or HUNG |
 | `wf-hygiene` | a scheduled hygiene pass checks memory health and checkpoints |
 
-**meta** (8)
+**meta** (9)
 | Skill | Use when |
 |---|---|
 | `sanity-check` | auditing a worker's or swarm's changes for test-weakening or scope drift |
@@ -116,6 +116,7 @@ All 50 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `test-scaffold` | generating pytest boilerplate for untested Python modules |
 | `orchestrator-patterns` | applying templates or conventions for orchestrated projects |
 | `sync-upstream` | syncing the upstream Claude Code reference library and diffing |
+| `model-review` | asked to review a model: check the fit, hunt for leakage, sanity-check metrics |
 
 **orchestration** (4)
 | Skill | Use when |
@@ -125,7 +126,7 @@ All 50 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `pleh` | spawning parallel helper agents for self or cross-agent help |
 | `recover-truncated` | recovering a truncated worker via narrow re-dispatch |
 
-**memory** (9)
+**memory** (10)
 | Skill | Use when |
 |---|---|
 | `remember` | saving or loading meta context, cheaper than compaction |
@@ -137,8 +138,9 @@ All 50 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `mem-index` | browsing the memory DB by tier or type, with stats |
 | `mem-similar` | finding memories related or near-duplicate to one |
 | `mem-health` | scoring memory DB health across DB-aware criteria |
+| `super-health` | scoring superclaude health across its subsystems |
 
-**domain** (7)
+**domain** (9)
 | Skill | Use when |
 |---|---|
 | `research` | running scientific research, design, literature, review, report |
@@ -148,6 +150,8 @@ All 50 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `threat-model` | running a STRIDE threat analysis to map and rate attack surface |
 | `gas-patterns` | working with Google Apps Script conventions and gotchas |
 | `windows-gotchas` | a failure may stem from native Windows: shells, paths, Python, locks |
+| `deliverable-it` | building an Italian deliverable: client report, relazione, market intelligence |
+| `etl-check` | pre-flight checking a Databricks ETL pipeline before a job run |
 
 **code-quality** (2)
 | Skill | Use when |

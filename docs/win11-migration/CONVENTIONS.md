@@ -21,11 +21,11 @@ Target: Claude Code running natively on Windows 11 (PowerShell 7 / 5.1, Git Bash
 | Comms broker (HCOM) | hcom, `.broker.db`, `.comms.db`, `comms_db.py`, `comms_viewer.py`, `hcom-broker.py`, any `sqlite3 ~/.claude/comms/...` command, NUDGE, "dual-write" |
 | Converge and looping protocols | `/converge`, `/wf-auto`, `/wf-design`, `/wf-report`, `/wf-websearch`, `/wf-watchdog`, `/wf-wave-monitor`, `/review-dispatch`, `/topology-producer-reviewer`, `/swarm-observe`, `converge_auto.py`, `bin/loops`, SEAL, seal manifest, `rounds.md`, round ledger, `Ledger:` line, R-5, guards 60/62/64/70, `seal-manifest.py`, `instrument-tripwire.py` |
 | Session timer | 45/48/53-minute limits, `session-timers/*.start`, `.override`, edit/call counters, `/nudge`, `/session-reaper`, `/rb` |
-| Bash health suites | `/health`, `/super-health`, `/hook-health`, `/skill-health`, `/test-infra`, `super-health.sh`, `infra-test.sh`, `test-hooks.sh` |
+| Bash health suites | `/health`, `/hook-health`, `/skill-health`, `/test-infra`, `super-health.sh`, `infra-test.sh`, `test-hooks.sh`. Note: `/super-health` is re-implemented in Python (`scripts/health/super_health.py`). |
 | WSL specifics | `/mnt/c`, WSL file-mode (755 to 644) diffs, `core.fileMode` stash dance, `sg docker -c`, `/wsl-gotchas` (replaced by `/windows-gotchas`) |
 | Docker services | crawl4ai, firecrawl, `better-super --web` |
 
-Deleted skills (remove from any list, catalogue, or cross-reference): comms-query, converge, delegate, handoff, health, hook-health, nudge, portfolio, rb, review-dispatch, session-reaper, skill-health, super-health, swarm-observe, test-infra, topology-producer-reviewer, wf-auto, wf-design, wf-report, wf-watchdog, wf-wave-monitor, wf-websearch, wsl-gotchas.
+Deleted skills (remove from any list, catalogue, or cross-reference): comms-query, converge, delegate, handoff, health, hook-health, nudge, portfolio, rb, review-dispatch, session-reaper, skill-health, swarm-observe, test-infra, topology-producer-reviewer, wf-auto, wf-design, wf-report, wf-watchdog, wf-wave-monitor, wf-websearch, wsl-gotchas.
 
 Deleted agents: orch, scaf.
 
