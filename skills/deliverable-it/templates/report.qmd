@@ -1,0 +1,117 @@
+---
+title: "TITOLO DELLA RELAZIONE"
+subtitle: "SOTTOTITOLO: ambito, perimetro geografico, finestra temporale"
+author: "NOME COGNOME, ORGANIZZAZIONE"
+date: last-modified
+date-format: "D MMMM YYYY"
+lang: it
+engine: knitr
+# Nessun campo `abstract`: duplicherebbe la sezione Sintesi in docx e pdf.
+# La Sintesi resta l'unico riassunto del documento.
+---
+
+```{r}
+#| label: setup
+#| include: false
+# Motore knitr: i chunk Python girano via reticulate, quindi un solo documento
+# può mescolare le due analisi. Puntare l'interprete al venv del progetto.
+library(reticulate)
+use_virtualenv("../.venv", required = FALSE)
+
+data_dir <- "data"
+```
+
+# Sintesi
+
+PLACEHOLDER: da 200 a 400 parole. Le tre evidenze che cambiano una decisione,
+ciascuna con il numero che la sostiene e l'orizzonte a cui si riferisce. Scritta
+per ultima, a partire dalla sezione Evidenze. Nessun rinvio del tipo "come si
+vedrà oltre": chi legge solo questa pagina deve avere tutto.
+
+# Contesto e perimetro
+
+PLACEHOLDER: il mercato o il comparto osservato, l'area geografica, la finestra
+temporale, e soprattutto ciò che resta fuori. Il perimetro escluso è la parte
+che il cliente contesterà; dichiararlo qui.
+
+# Metodo e fonti
+
+PLACEHOLDER: fonti dei dati con data di estrazione, unità di osservazione,
+trattamento dei valori mancanti, stimatore o modello impiegato, limiti noti.
+Una tabella delle fonti sta meglio di un elenco puntato.
+
+| Fonte | Copertura | Estrazione | Note |
+|---|---|---|---|
+| PLACEHOLDER | PLACEHOLDER | PLACEHOLDER | PLACEHOLDER |
+
+: Fonti utilizzate {#tbl-fonti}
+
+# Evidenze
+
+## PLACEHOLDER: prima evidenza
+
+PLACEHOLDER: l'evidenza in una frase, poi il dato che la sostiene, poi la
+qualificazione. Il rinvio alla figura si scrive `@fig-serie-storica`, quello
+alla tabella `@tbl-sintesi`: Quarto li traduce in italiano grazie a `lang: it`.
+
+```{python}
+#| label: fig-serie-storica
+#| fig-cap: "PLACEHOLDER: andamento della grandezza osservata, 2019-2025"
+#| fig-width: 7
+#| fig-height: 4
+# Serie storica dell'indicatore principale, letta dall'output dell'analisi.
+# I nomi di file, colonne e variabili restano in inglese.
+import pandas as pd
+import matplotlib.pyplot as plt
+
+series = pd.read_csv("data/time_series.csv", parse_dates=["date"])
+
+fig, ax = plt.subplots()
+ax.plot(series["date"], series["value"], linewidth=2)
+# Etichette rivolte al cliente: in italiano, senza title case
+ax.set_xlabel("Anno")
+ax.set_ylabel("PLACEHOLDER: indicatore")
+ax.grid(True, alpha=0.3)
+fig.tight_layout()
+```
+
+## PLACEHOLDER: seconda evidenza
+
+PLACEHOLDER: come sopra. Una sottosezione per evidenza, mai due evidenze nello
+stesso paragrafo.
+
+```{r}
+#| label: tbl-sintesi
+#| tbl-cap: "PLACEHOLDER: sintesi per segmento"
+# Tabella di sintesi con la formattazione numerica italiana: virgola decimale e
+# punto come separatore delle migliaia.
+library(knitr)
+
+summary_table <- read.csv(file.path(data_dir, "segment_summary.csv"))
+
+kable(
+  summary_table,
+  format.args = list(big.mark = ".", decimal.mark = ","),
+  digits = 1
+)
+```
+
+# Implicazioni
+
+PLACEHOLDER: che cosa il cliente può decidere sulla base di queste evidenze e
+che cosa deve ancora osservare. L'incertezza residua va scritta qui, non
+nascosta in appendice.
+
+# Appendice
+
+## Tabelle complete
+
+PLACEHOLDER: le tabelle estese che appesantirebbero il corpo del testo.
+
+## Nota metodologica
+
+PLACEHOLDER: dettaglio tecnico, specificazione del modello, diagnostica.
+
+## Glossario
+
+PLACEHOLDER: i termini tecnici usati nel testo, definiti una volta sola.

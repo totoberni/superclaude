@@ -1,0 +1,55 @@
+# Configurazione di progetto per un deliverable in italiano.
+# Copiare questo file accanto al .qmd; le opzioni qui valgono per tutti i
+# documenti della cartella e possono essere sovrascritte nel front matter.
+
+project:
+  type: default
+  output-dir: _output
+
+# Lingua principale del documento, tag IETF BCP 47.
+# Verificato su quarto.org: `lang` identifica la lingua principale, attiva le
+# traduzioni bundled (l'italiano ha una traduzione completa) e controlla la
+# sillabazione nell'output PDF tramite babel o polyglossia.
+lang: it
+
+execute:
+  echo: false      # il cliente legge i risultati, non il codice
+  warning: false
+  message: false
+  freeze: auto     # non rieseguire i chunk se il sorgente non cambia
+
+format:
+
+  docx:
+    # Documento di stile della casa: fornito dal proprietario, non generato qui.
+    # Assente il file, il render va avanti con lo stile di default di pandoc.
+    reference-doc: house-reference.docx
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    fig-cap-location: bottom
+    tbl-cap-location: top
+
+  pdf:
+    # MiKTeX a livello utente: xelatex gestisce i font di sistema e, con
+    # `lang: it`, polyglossia per la sillabazione italiana.
+    pdf-engine: xelatex
+    documentclass: scrartcl
+    papersize: a4
+    geometry:
+      - top=25mm
+      - bottom=25mm
+      - left=25mm
+      - right=25mm
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    colorlinks: true
+    fig-cap-location: bottom
+    tbl-cap-location: top
+    # Pandoc deriva da `lang: it` la lingua di babel o polyglossia secondo il
+    # motore. Le due righe sotto sono un override esplicito da usare solo se il
+    # log di LaTeX mostra la sillabazione inglese; non verificate su questa
+    # macchina.
+    # babel-lang: italian
+    # polyglossia-lang: italian
