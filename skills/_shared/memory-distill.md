@@ -1,6 +1,6 @@
 # _shared/memory-distill.md: pitfall auto-selection for briefings (SOT)
 
-Reusable by any worker-briefing generator needing a "Known Pitfalls" or "Watch out for" briefing section.
+Consumed by: [discovery-protocol.md](discovery-protocol.md) (and so /research), meta dispatch prompts (Known Pitfalls section). Reusable by any worker-briefing generator needing a "Known Pitfalls" or "Watch out for" briefing section.
 
 ## Selection algorithm
 

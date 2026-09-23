@@ -62,7 +62,7 @@ def _write_text_lf(file: Path, text: str) -> None:
 
 
 def _warn_path_hazards(path: Path) -> None:
-    """Port Windows: sostituisce il vecchio rifiuto di `/mnt/c` (regola WSL).
+    """Port Windows: sostituisce il vecchio rifiuto dei percorsi montati da WSL.
     OneDrive e percorsi di rete ricevono un WARNING, mai un rifiuto."""
     for msg in path_hazards(path):
         print(f"[notebook] WARNING: {msg}", file=sys.stderr)
