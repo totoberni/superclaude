@@ -65,11 +65,12 @@ Aggregate distribution if fully adopted: ~5% haiku / ~70% sonnet / ~25% opus.
 ### Worker model split (tool-call budget)
 
 Model choice keys on expected tool-call count, not just worker class:
-- **<=20 calls**: keep the sonnet-class defaults in the table above.
-- **Beyond ~20-24 calls**: override `model: opus` regardless of worker class. Sonnet truncates **destructively** past ~24 calls (half-applied edits land on disk); opus truncation is **report-only** (the work completes underneath, only the closing message is cut).
+- **<20 calls**: keep the sonnet-class defaults in the table above (`model: sonnet` = Sonnet 5).
+- **>20 calls**: override `model: opus` (Opus 5.5) regardless of worker class. Sonnet truncates **destructively** past ~24 calls (half-applied edits land on disk); opus truncation is **report-only** (the work completes underneath, only the closing message is cut).
 - **Hard architectural cap ~40 calls / ~250k tokens for all models**: split the task rather than exceed it.
+- **Never `model: fable`** (owner decision 2026-09-23): Opus 5.5 outperforms it on our use cases. Do not dispatch Fable for any worker, helper, or reviewer until the owner lifts this.
 
-Evidence: concurrent-meta experiment 2026-07-07 (memory `worker-model-sonnet-truncation-opus-experiment`).
+Evidence: concurrent-meta experiment 2026-07-07 (memory `worker-model-sonnet-truncation-opus-experiment`); model versions and the Fable ban set by the owner 2026-09-23.
 
 ### Effort Level Reference
 
