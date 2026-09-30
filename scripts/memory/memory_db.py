@@ -1,14 +1,15 @@
 """v3 Memory subsystem — hybrid-search SQLite DB.
 
 Hybrid keyword (FTS5 BM25) + semantic (sqlite-vec KNN) search over the curated
-agent-memory corpus. Flat MD remains the SOT/backup until a gated cutover; this
-DB is strictly additive and non-destructive (rollback = delete the .db file).
+agent-memory corpus. This DB is the sole store and source of truth for agent
+memory; `migrate` only ingests legacy flat-MD trees. Deleting the .db file loses
+every memory, so back up with `mem export --with-body` (a JSON dump that
+`upsert` can restore from).
 
 Invoke via the `mem` shim (or `~/.claude/.venv/Scripts/python.exe` on Windows);
 fastembed + sqlite-vec live in that venv.
 
-Spec: ~/.claude/plans/superclaude-v3/memory-schema.md (§Schema, §Python interfaces,
-§Migration rules). Public API: init_db, upsert, search, get_html, migrate.
+Public API: init_db, upsert, search, get_html, migrate.
 """
 
 from __future__ import annotations
