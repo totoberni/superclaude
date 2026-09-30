@@ -68,7 +68,7 @@ Persistent memory lives in a hybrid-search SQLite DB at `~/.claude/agent-memory/
 
 1. Run SEVERAL searches with varied vocabulary (synonyms, jargon, file paths, error codes); then run `mem similar --name <slug>` (hybrid cosine + token-Jaccard) on the closest hit to surface same-topic-different-words rows; then `mem get --name <slug>` the FULL bodies of the top matches. Never answer from search snippets alone.
 2. FLAG every discrepancy explicitly at the TOP of your answer, before proceeding (for example: "memory says X; the plan or my assumption said Y"). Silent divergence produces garbage.
-3. Pair recall with empirical verification when state is volatile: memory plus a quick live probe (read the file, grep the code, run the diagnostic). A memory naming a file, flag, or alias is a claim about a past moment; confirm it still holds before acting on it. See the `meta-verify-infra-state-empirically` lesson.
+3. Pair recall with empirical verification when state is volatile: memory plus a quick live probe (read the file, grep the code, run the diagnostic). A memory naming a file, flag, or alias is a claim about a past moment; confirm it still holds before acting on it.
 
 `mem` is on PATH and works identically in Git Bash and PowerShell: `mem search "<q>" [-k N]` | `mem get --name "<name>"` | `mem similar --name "<name>" [-k N]` | `mem list [--tier T]`. It exposes the whole memory CLI (`init`, `search`, `upsert`, `get`, `list`, `prune`, `stats`, `compact`, `similar`, `archive`, `retier`, `export`).
 

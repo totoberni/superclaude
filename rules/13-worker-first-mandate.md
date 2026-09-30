@@ -70,7 +70,7 @@ Model choice keys on expected tool-call count, not just worker class:
 - **Hard architectural cap ~40 calls / ~250k tokens for all models**: split the task rather than exceed it.
 - **Never `model: fable`** (owner decision 2026-09-23): Opus 5.5 outperforms it on our use cases. Do not dispatch Fable for any worker, helper, or reviewer until the owner lifts this.
 
-Evidence: concurrent-meta experiment 2026-07-07 (memory `worker-model-sonnet-truncation-opus-experiment`); model versions and the Fable ban set by the owner 2026-09-23.
+Evidence: concurrent-meta experiment 2026-07-07; model versions and the Fable ban set by the owner 2026-09-23.
 
 ### Effort Level Reference
 
@@ -91,7 +91,7 @@ Note: official Anthropic docs explicitly recommend `low` for subagents. Default 
 | Opus 4.7 / Opus 4.6+ / Sonnet 4.6 / Mythos | Adaptive thinking — `/effort` IS the canonical thinking control; manual `budget_tokens` rejected |
 | Opus 4.5 / Claude 4 (legacy) | Orthogonal — `/effort` and `budget_tokens` work independently |
 
-In all cases: max-tier thinking on simple/visual tasks ≈10× overspend (per `feedback_effort_keyword_matrix.md`).
+In all cases: max-tier thinking on simple/visual tasks ≈10× overspend.
 
 ## Battle-Tested Swarm Patterns
 
