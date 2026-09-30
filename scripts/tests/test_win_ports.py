@@ -155,7 +155,7 @@ def test_git_tolerates_missing_repo_and_dir(sl, tmp_path):
     assert sl._git_parallel(str(tmp_path), [["rev-parse", "HEAD"]]) == [None]
 
 
-def test_cost_refresh_is_detached_python_and_throttled(sl, tmp_path, monkeypatch):
+def test_cost_refresh_is_windowless_python_and_throttled(sl, tmp_path, monkeypatch):
     calls = []
 
     class FakePopen:
@@ -173,7 +173,8 @@ def test_cost_refresh_is_detached_python_and_throttled(sl, tmp_path, monkeypatch
     assert kw["stdin"] == kw["stdout"] == kw["stderr"] == subprocess.DEVNULL
     if os.name == "nt":
         flags = kw["creationflags"]
-        assert flags & subprocess.DETACHED_PROCESS
+        # DETACHED_PROCESS deve restare fuori: Win32 ignorerebbe CREATE_NO_WINDOW (finestra visibile)
+        assert not flags & subprocess.DETACHED_PROCESS
         assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
         assert flags & subprocess.CREATE_NO_WINDOW
         assert "start_new_session" not in kw

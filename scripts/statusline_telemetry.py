@@ -543,9 +543,11 @@ def _fire_cost_refresh():
             pass
         kwargs = {}
         if IS_WINDOWS:
+            # Console nascosta propria e nuovo gruppo di processi: il refresh sopravvive alla CLI e non riceve Ctrl+C.
+            # DETACHED_PROCESS e' omesso di proposito: con esso Win32 ignora CREATE_NO_WINDOW e il python.exe del venv
+            # (un launcher) farebbe aprire una console visibile all'interprete reale. Stesso schema in skills/notebook/nb_exec.py.
             kwargs["creationflags"] = (
-                subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NEW_PROCESS_GROUP
+                subprocess.CREATE_NEW_PROCESS_GROUP
                 | subprocess.CREATE_NO_WINDOW
             )
         else:
