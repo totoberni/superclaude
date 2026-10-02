@@ -44,7 +44,7 @@ def test_other_files_allowed(mk, home, name):
 
 
 @pytest.mark.parametrize("content", [
-    "p = 'x.ipynb'\njson.dump(nb, fh)",
+    # il percorso in una variabile non è una scrittura precisa: ora è solo un avviso (WARN_CASES)
     "nbformat.write(nb, open(path, 'w'))",
 ])
 def test_raw_patterns_in_new_python_code_denied(mk, home, content):
@@ -71,6 +71,17 @@ WRITE_CASES = [
     f'json.dump(nb, open("a#1{IPYNB}", "w"))  # salva',
     # frammento di Edit non tokenizzabile (parentesi aperta): vale il ripiego riga per riga
     f'    json.dump(nb, open("a{IPYNB}", "w"),  # niente\n',
+    # percorso e scrittura nello stesso statement
+    f'open(str(p) + "{IPYNB}", "w").write(s)',
+    f'with open("x{IPYNB}", mode="w") as f:\n    f.write(s)\n',
+    f'{NBW}(nb, open("a{IPYNB}", "w"))',
+    f'Path("a{IPYNB}").write_bytes(b)',
+    f'Path("a{IPYNB}").open("w").write(s)',
+    f'nb = 1; json.dump(nb, open("a{IPYNB}", "w")); print(nb)',
+    # chiamata su più righe: decide la riga con percorso e modalità
+    f'json.dump(\n    nb,\n    open("a{IPYNB}", "w"),\n)\n',
+    # la docstring non conta, la scrittura sotto sì
+    f'def save(nb):\n    """Salva il notebook."""\n    json.dump(nb, open("a{IPYNB}", "w"))\n',
 ]
 
 READ_CASES = [
@@ -84,6 +95,26 @@ READ_CASES = [
     f'json.dump(cfg, open("cfg.json", "w"))  # non è un file{IPYNB}\n',
     # frammento di Edit non tokenizzabile, scrittura solo nel commento
     f'    nb = nb_io.load_ipynb(path,  # niente json.dump(nb, open("x{IPYNB}", "w"))\n',
+    # json.dumps restituisce una stringa: non è una scrittura
+    f"print(json.dumps(json.load(open('a{IPYNB}'))))\n",
+    # docstring con json.dump e notebook, nessun'altra scrittura
+    f'def show(p):\n    """Mai json.dump(nb, open("a{IPYNB}", "w")): usare nb_io."""\n    return nb_io.load_ipynb(p)\n',
+    # notebook citato solo nella docstring di modulo, scrittura su un altro file
+    f'"""Riepilogo dei file *{IPYNB}."""\nimport json\njson.dump(r, open("r.json", "w"))\n',
+    # letture con modalità esplicita
+    f'with open("a{IPYNB}", "r", encoding="utf-8") as f:\n    nb = json.load(f)\n',
+]
+
+WARN_CASES = [
+    # legge i notebook e scrive un rapporto JSON su un'altra riga
+    f'for p in DIR.glob("*{IPYNB}"):\n    rows.append(json.load(open(p)))\njson.dump(report, open("report.json", "w"))\n',
+    # percorso in una variabile: falso negativo noto del blocco, resta l'avviso
+    f'p = "a{IPYNB}"\njson.dump(nb, open(p, "w"))\n',
+    f"p = 'x{IPYNB}'\njson.dump(nb, fh)",
+    # statement separati da `;` sulla stessa riga
+    f"nb = json.load(open('a{IPYNB}')); json.dump(r, open('r.json', 'w'))\n",
+    # stringa tra parentesi: non è una docstring, quindi conta come menzione
+    f'p = (\n    "a{IPYNB}"\n)\nPath(p).write_text(s)\n',
 ]
 
 
@@ -104,6 +135,55 @@ def test_notebook_reads_and_comment_mentions_allowed(mk, home, content):
     assert notebook_guard.handle(mk("MultiEdit", file_path=target, edits=[{"new_string": content}])) is None
 
 
+def verdict(res):
+    if res is None:
+        return None
+    if res.block:
+        return "deny"
+    warned = len(res.context) == 1 and "nb_io.atomic_write_ipynb" in res.context[0] and "reading notebooks is fine" in res.context[0]
+    return "warn" if warned else "other"
+
+
+def py_verdicts(mk, home, content):
+    target = win(home / "code" / "proj" / "tool.py")
+    return {verdict(notebook_guard.handle(mk("Write", file_path=target, content=content))),
+            verdict(notebook_guard.handle(mk("Edit", file_path=target, old_string="x", new_string=content))),
+            verdict(notebook_guard.handle(mk("MultiEdit", file_path=target, edits=[{"new_string": content}])))}
+
+
+@pytest.mark.parametrize("content", WARN_CASES)
+def test_cooccurrence_in_python_code_only_warns(mk, home, content):
+    assert py_verdicts(mk, home, content) == {"warn"}
+
+
+@pytest.mark.parametrize("arg", ['"w"', '"wb"', '"w+"', '"a"', '"ab"', '"x"', '"r+"', "mode='w'", 'mode = "wb"',
+                                 '"w", encoding="utf-8"'])
+def test_open_write_modes_on_notebook_denied(mk, home, arg):
+    assert py_verdicts(mk, home, f'fh = open("a{IPYNB}", {arg})\n') == {"deny"}
+
+
+@pytest.mark.parametrize("arg", ['"r"', '"rb"', '"rt", encoding="utf-8"', 'mode="r"', 'encoding="utf-8"', ""])
+def test_open_read_modes_on_notebook_allowed(mk, home, arg):
+    sep = ", " if arg else ""
+    assert py_verdicts(mk, home, f'fh = open("a{IPYNB}"{sep}{arg})\n') == {None}
+
+
+MALFORMED_PY = [
+    # frammenti non tokenizzabili o degeneri: mai un'eccezione (il dispatcher la lascerebbe passare)
+    (f'x = "a{IPYNB}', None), (";", None), (";;;", None), ('"', None), ("'", None), ("\\", None),
+    ("open(", None), ("json.dump(", None), (f'"""a{IPYNB}', None), ("", None),
+    (f'open("a{IPYNB}", "w"', "deny"), (f"json.dump(nb, open('a{IPYNB}', 'w', ", "deny"),
+    (f"    x = 1\n  json.dump(r, open('a{IPYNB}', 'w'))\n", "deny"),
+    (f'x = 1\ry = "a{IPYNB}"  # c\rjson.dump(r, fh)\r', "warn"),
+    (f'x = "è{IPYNB}"  # json.dump(nb, f)\nj = 1\n', None),
+]
+
+
+@pytest.mark.parametrize(("content", "expected"), MALFORMED_PY)
+def test_malformed_python_fragments_do_not_crash(mk, home, content, expected):
+    assert py_verdicts(mk, home, content) == {expected}
+
+
 BLOCKED_SHELL = [
     "jupyter nbconvert --to notebook --execute --inplace a.ipynb",
     "jupyter nbconvert --execute a.ipynb --inplace",
@@ -115,6 +195,9 @@ BLOCKED_SHELL = [
     f"& C:\\Python312\\python.exe -c \"import json; json.dump(d, open('a{IPYNB}','w'))\"",
     f"python -c \"import json,pathlib; pathlib.Path('a{IPYNB}').write_text(json.dumps(nb))\"",
     "\"C:/Users/x/.venv/Scripts/python.exe\" -c \"import json; json.dump(n, open('a.ipynb','w'))\"",
+    f"python -c \"import json; x = 1; json.dump(nb, open('a{IPYNB}', mode='w'))\"",
+    f"python -c \"open('a{IPYNB}','w').write(s)\"",
+    f"python -c 'import json; json.dump(nb, open(\"a{IPYNB}\", \"w\"))'",
 ]
 
 ALLOWED_SHELL = [
@@ -131,6 +214,23 @@ ALLOWED_SHELL = [
     f"python3 -c \"import json,pathlib; print(len(json.loads(pathlib.Path('a{IPYNB}').read_text())['cells']))\"",
     f"py -3 -c \"import json; json.load(open('a{IPYNB}'))\"",
     f"& C:\\Python312\\python.exe -c \"import json; json.load(open('a{IPYNB}'))\"",
+    # json.dumps restituisce una stringa: stampare un notebook non è scriverlo
+    f"python -c \"import json; print(json.dumps(json.load(open('a{IPYNB}'))))\"",
+    f"python -m json.tool a{IPYNB}",
+]
+
+WARN_SHELL = [
+    # legge un notebook e scrive un rapporto: statement separati da `;`
+    f"python -c \"import json; nb=json.load(open('a{IPYNB}')); json.dump(r, open('r.json','w'))\"",
+    # percorso passato in argv: la scrittura non cita il notebook
+    f"python -c \"import json,sys; json.dump(x, open(sys.argv[1],'w'))\" a{IPYNB}",
+]
+
+MALFORMED_SHELL = [
+    # virgolette sbilanciate: shlex fallisce e si valuta il comando intero
+    (f"python -c \"import json; json.dump(nb, open('a{IPYNB}','w'))", "deny"),
+    (f"python -c \";\" a{IPYNB}", None), (f"python -c ';;' && ls *{IPYNB}", None),
+    (f"python -c a{IPYNB}", None), (f"python -c x a{IPYNB} -c", None),
 ]
 
 
@@ -145,6 +245,18 @@ def test_shell_bypasses_denied(mk, tool, cmd):
 @pytest.mark.parametrize("cmd", ALLOWED_SHELL)
 def test_nb_cli_and_harmless_commands_allowed(mk, tool, cmd):
     assert notebook_guard.handle(mk(tool, command=cmd)) is None
+
+
+@pytest.mark.parametrize("tool", SHELLS)
+@pytest.mark.parametrize("cmd", WARN_SHELL)
+def test_shell_cooccurrence_only_warns(mk, tool, cmd):
+    assert verdict(notebook_guard.handle(mk(tool, command=cmd))) == "warn"
+
+
+@pytest.mark.parametrize("tool", SHELLS)
+@pytest.mark.parametrize(("cmd", "expected"), MALFORMED_SHELL)
+def test_malformed_shell_one_liners_do_not_crash(mk, tool, cmd, expected):
+    assert verdict(notebook_guard.handle(mk(tool, command=cmd))) == expected
 
 
 @pytest.mark.parametrize("tool", ["Write", "Edit", "Bash", "PowerShell"])
