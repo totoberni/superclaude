@@ -114,9 +114,12 @@ def test_firewall_still_blocks_after_a_dash_rewrite(mk, home):
 
 FORBIDDEN = [
     "see ~/.claude/rules/00.md", r"see ~\.claude\hooks", "in .claude/rules we say", "the agent-memory dir",
-    "shared/projects/foo.md", "class/meta", "per MEMORY.md", "mtm.md", "LTM.md", ".memory.db",
+    "shared/projects/foo.md", "class/meta", "class/meta/x.md", "per MEMORY.md", "mtm.md", "LTM.md", ".memory.db",
     "memory_db.py query", "Meta says so", "memory.md says", "According to the gotchas file",
-    "see the project memory", "fixes M-12", "per GM-3 and G-27", "cf. MT-4", "(CW-9)", "W-2 applies",
+    "see the project memory", "per GM-3 and G-27", "cf. MT-4", "(CW-9)",
+    # id a una lettera: bloccano solo con un contesto di memoria sulla stessa riga
+    "gotcha M-12 applies", "| W-2 | fix the loader |", "|M-4|", "Occ=2, see G-27", "lesson W-3",
+    "a Mistake: M-9", "superclaude M-1", "the memory cell G-5", "good-idea W-8", "3 occurrences of M-2",
 ]
 
 
@@ -149,9 +152,41 @@ def test_firewall_scope(mk, home):
 @pytest.mark.parametrize("text", [
     "removed subsystems: .comms.db .broker.db comms_db.py", "section C4 and B-tree", "HTTP-200 and X-1",
     "project-local .claude/settings.json docs", "the summary.md file",
+    "src/subclass/metadata.py", "see class/metadata", "project_memory.md and xltm.md", "my-agent-memory_x",
 ])
 def test_firewall_clean_text_passes(mk, home, text):
     assert content_scan.handle(mk("Write", file_path=win(home / "code" / "proj" / "a.md"), content=text)) is None
+
+
+@pytest.mark.parametrize("text,ids", [
+    ("fixes M-12", ["M-12"]), ("Form W-2 and G-7 summit", ["W-2", "G-7"]), ("the M-16 rifle", ["M-16"]),
+    ("TLS-M-1 handshake", ["M-1"]), ("M-1\nmemory is elsewhere", ["M-1"]),   # il contesto vale solo sulla stessa riga
+    ("| W-2 form | tax |", ["W-2"]),                                          # non e' una cella da sola
+])
+def test_single_letter_ids_without_context_only_warn(mk, home, text, ids):
+    res = content_scan.handle(mk("Write", file_path=win(home / "code" / "proj" / "a.md"), content=text))
+    assert res is not None and not res.block and res.updated_input is None
+    assert len(res.context) == 1 and "memory cell id" in res.context[0]
+    for i in ids:
+        assert f"'{i}'" in res.context[0]
+
+
+def test_suspect_ids_are_deduplicated_and_capped(mk, home):
+    text = "W-1 W-1 W-2 W-3 W-4 W-5 W-6 W-7"
+    res = content_scan.handle(mk("Write", file_path=win(home / "code" / "proj" / "a.md"), content=text))
+    note = res.context[0]
+    assert note.count("'W-1'") == 1 and "'W-5'" in note and "'W-6'" not in note and ", ..." in note
+
+
+def test_dash_rewrite_and_id_warning_share_one_result(mk, home):
+    ctx = mk("Write", file_path=win(home / "code" / "proj" / "a.md"), content=f"Form W-2 {EM} filed")
+    res = content_scan.handle(ctx)
+    assert not res.block and res.updated_input["content"] == "Form W-2; filed"
+    assert len(res.context) == 2 and "replaced 1" in res.context[0] and "'W-2'" in res.context[1]
+
+
+def test_single_letter_ids_outside_code_are_ignored(mk, home):
+    assert content_scan.handle(mk("Write", file_path=win(home / "elsewhere" / "a.md"), content="fixes M-12")) is None
 
 
 @pytest.mark.parametrize("ti", [
@@ -165,6 +200,99 @@ def test_malformed_input_never_raises(mk, tool, ti):
 
 def test_non_dict_tool_input(mk):
     assert content_scan.handle(mk("Write", tool_input=None)) is None
+
+
+# --------------------------------------------------------------------------
+# Messaggi di commit scritti nella shell
+# --------------------------------------------------------------------------
+def shell_fixed(res):
+    """Comando corretto restituito dalla guardia, oppure None."""
+    return fixed(res, "command")
+
+
+def test_registered_for_write_and_shell_tools():
+    from sc_hooks import core
+    assert any(n == "content-scan" and e == "PreToolUse" and set(t) == set(core.WRITE_TOOLS + core.SHELL_TOOLS)
+               for e, t, n, _ in core._REGISTRY)
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_commit_message_dash_is_rewritten(mk, tool):
+    res = content_scan.handle(mk(tool, command=f'git commit -m "fix: a {EM} b"', description="d"))
+    assert shell_fixed(res) == 'git commit -m "fix: a; b"'
+    assert res.updated_input["description"] == "d"              # input COMPLETO
+    assert res.context and "replaced 1" in res.context[0] and "commit message" in res.context[0]
+
+
+def test_commit_heredoc_form_is_rewritten_line_by_line(mk):
+    cmd = (
+        "git commit -m \"$(cat <<'EOF'\n"
+        f"feat(x): add thing {EM} fast\n"
+        "\n"
+        f"Range 10{EN}20 covered; don't stop.\n"
+        "Plain line - with hyphen.\n"
+        "\n"
+        "Co-Authored-By: Claude <noreply@anthropic.com>\n"
+        "EOF\n"
+        ")\""
+    )
+    want = cmd.replace(f" {EM} ", "; ").replace(f"10{EN}20", "10-20")
+    res = content_scan.handle(mk("Bash", command=cmd))
+    assert shell_fixed(res) == want
+    assert "replaced 2" in res.context[0]
+
+
+@pytest.mark.parametrize("cmd,want", [
+    (f'git -C "C:/Users/x/code/proj" commit -m "a {EM} b"', 'git -C "C:/Users/x/code/proj" commit -m "a; b"'),
+    (f'git commit -m "subject" -m "body {EN} more"', 'git commit -m "subject" -m "body; more"'),
+    (f'cd C:/code/proj && git add src/a.py && git commit -m "a {EM} b"', 'cd C:/code/proj && git add src/a.py && git commit -m "a; b"'),
+    (f'git commit -m "use python and grep {EM} faster"', 'git commit -m "use python and grep; faster"'),
+    (f"bash -c \"git commit -m 'x {EM} y'\"", "bash -c \"git commit -m 'x; y'\""),
+])
+def test_commit_variants_are_rewritten(mk, cmd, want):
+    assert shell_fixed(content_scan.handle(mk("Bash", command=cmd))) == want
+
+
+def test_powershell_here_string_keeps_crlf(mk):
+    cmd = f"git -C C:/code/proj commit -m @'\r\nsubject {EM} x\r\n\r\nbody 1{EN}2\r\n'@"
+    want = "git -C C:/code/proj commit -m @'\r\nsubject; x\r\n\r\nbody 1-2\r\n'@"
+    assert shell_fixed(content_scan.handle(mk("PowerShell", command=cmd))) == want
+
+
+@pytest.mark.parametrize("tool,cmd,runs", [
+    ("Bash", f'git commit -m "a {EM} b" && git log | grep foo', "grep"),
+    ("Bash", f"git commit -am \"a {EM} b\"; sed -i 's/x/y/' f.txt", "sed"),
+    ("Bash", f'python fix.py && git commit -m "a {EN} b"', "python"),
+    ("PowerShell", f"$m = 'a {EM} b' -replace 'x','y'; git commit -m $m", "-replace"),
+    ("PowerShell", f'git commit -m "a {EM} b"; Get-Content f | Select-String "z"', "Select-String"),
+])
+def test_commit_with_dash_sensitive_tool_only_notes(mk, tool, cmd, runs):
+    res = content_scan.handle(mk(tool, command=cmd))
+    assert res is not None and not res.block and res.updated_input is None
+    assert f"also runs {runs}" in res.context[0] and "reword" in res.context[0]
+
+
+@pytest.mark.parametrize("cmd", [
+    f'echo "a {EM} b" > notes.txt',
+    f'git log --grep "a {EM} b"',
+    f'git commit-tree HEAD^{{tree}} -m "a {EM} b"',
+    'git commit -m "plain message - with hyphen"',
+    "git status",
+])
+def test_non_commit_or_dashless_commands_are_untouched(mk, cmd):
+    assert content_scan.handle(mk("Bash", command=cmd)) is None
+
+
+def test_firewall_does_not_apply_to_shell_commands(mk):
+    res = content_scan.handle(mk("Bash", command=f'git commit -m "see ~/.claude/rules and M-12 {EM} x"'))
+    assert not res.block and shell_fixed(res) == 'git commit -m "see ~/.claude/rules and M-12; x"'
+    assert len(res.context) == 1
+
+
+@pytest.mark.parametrize("ti", [{}, {"command": None}, {"command": 42}, {"command": ["git", "commit"]}])
+def test_malformed_shell_input_never_raises(mk, ti):
+    assert content_scan.handle(mk("Bash", tool_input=ti)) is None
+    assert content_scan.handle(mk("PowerShell", tool_input=None)) is None
 
 
 def test_source_files_contain_no_forbidden_dash():

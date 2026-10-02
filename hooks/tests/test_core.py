@@ -175,3 +175,26 @@ def test_rewrite_is_ignored_outside_pretooluse(monkeypatch, capsys):
     core.on("PostToolUse", name="late")(lambda c: core.Result.rewrite({"content": "x"}))
     assert core.dispatch(_ctx(event="PostToolUse")) == 0
     assert capsys.readouterr().out == ""
+
+
+def test_block_reports_discarded_rewrites(monkeypatch, capsys):
+    """Un blocco scarta le correzioni automatiche: lo stderr deve dirlo, con le note di riscrittura."""
+    monkeypatch.setattr(core, "_REGISTRY", [])
+    core.on("PreToolUse", name="a-fix")(lambda c: core.Result.rewrite({**c.tool_input, "content": "clean"}, "dash fixed"))
+    core.on("PreToolUse", name="b-info")(lambda c: core.Result.note("solo informativa"))
+    core.on("PreToolUse", name="c-deny")(lambda c: core.Result.deny("vietato"))
+    assert core.dispatch(_ctx(file_path="C:/x/a.md", content="dirty")) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "GUARD-BLOCK [c-deny] vietato" in captured.err
+    assert "auto-fixes in this call were not applied" in captured.err and "reapply automatically on retry" in captured.err
+    assert "dash fixed" in captured.err and "solo informativa" not in captured.err
+
+
+def test_block_without_rewrites_has_no_autofix_line(monkeypatch, capsys):
+    monkeypatch.setattr(core, "_REGISTRY", [])
+    core.on("PreToolUse", name="b-info")(lambda c: core.Result.note("solo informativa"))
+    core.on("PreToolUse", name="c-deny")(lambda c: core.Result.deny("vietato"))
+    assert core.dispatch(_ctx()) == 2
+    err = capsys.readouterr().err
+    assert "vietato" in err and "auto-fixes" not in err

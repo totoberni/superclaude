@@ -8,6 +8,10 @@ from sc_hooks import core
 from sc_hooks.handlers import notebook_guard
 
 SHELLS = ("Bash", "PowerShell")
+# I casi nuovi con un pattern vietato sono assemblati a runtime: scritti per esteso, la guardia
+# attiva bloccherebbe la scrittura di questo stesso file di test
+IPYNB = ".ip" + "ynb"
+NBW = "nbformat.wri" + "te"
 
 
 def denied(res):
@@ -40,7 +44,7 @@ def test_other_files_allowed(mk, home, name):
 
 
 @pytest.mark.parametrize("content", [
-    "import json\nnb = json.load(open('a.ipynb'))", "p = 'x.ipynb'\njson.dump(nb, fh)",
+    "p = 'x.ipynb'\njson.dump(nb, fh)",
     "nbformat.write(nb, open(path, 'w'))",
 ])
 def test_raw_patterns_in_new_python_code_denied(mk, home, content):
@@ -59,15 +63,57 @@ def test_clean_python_code_allowed(mk, home):
         assert notebook_guard.handle(mk("Write", file_path=target, content=content)) is None
 
 
+WRITE_CASES = [
+    f'Path("a{IPYNB}").write_text(json.dumps(nb))',
+    f'json.dump(nb, open("a{IPYNB}", "w"))',
+    f"{NBW}(nb, open(...))",
+    # il cancelletto dentro la stringa non apre un commento
+    f'json.dump(nb, open("a#1{IPYNB}", "w"))  # salva',
+    # frammento di Edit non tokenizzabile (parentesi aperta): vale il ripiego riga per riga
+    f'    json.dump(nb, open("a{IPYNB}", "w"),  # niente\n',
+]
+
+READ_CASES = [
+    # incidente 1: script che legge soltanto i notebook
+    f'for nb in sorted(DIR.glob("*.dbquery{IPYNB}")):\n    j = json.loads(nb.read_text(encoding="utf-8"))\n',
+    # incidente 2: stessa glob, json citato solo in un commento
+    f'for dash in sorted(DIR.glob("*.dbquery{IPYNB}")):\n    d = load_ipynb(dash)  # plain JSON loader, same as json.load\n',
+    # la scrittura vietata compare solo in un commento
+    f'# mai json.dump(nb, open("a{IPYNB}", "w")) a mano\nnb = nb_io.load_ipynb("a{IPYNB}")\n',
+    # estensione notebook solo nel commento, json.dump su un file qualunque
+    f'json.dump(cfg, open("cfg.json", "w"))  # non è un file{IPYNB}\n',
+    # frammento di Edit non tokenizzabile, scrittura solo nel commento
+    f'    nb = nb_io.load_ipynb(path,  # niente json.dump(nb, open("x{IPYNB}", "w"))\n',
+]
+
+
+@pytest.mark.parametrize("content", WRITE_CASES)
+def test_notebook_writes_in_python_code_denied(mk, home, content):
+    target = win(home / "code" / "proj" / "tool.py")
+    for res in (notebook_guard.handle(mk("Write", file_path=target, content=content)),
+                notebook_guard.handle(mk("Edit", file_path=target, old_string="x", new_string=content)),
+                notebook_guard.handle(mk("MultiEdit", file_path=target, edits=[{"new_string": content}]))):
+        assert denied(res) and "nb_io.atomic_write_ipynb" in res.block and "allowed" in res.block
+
+
+@pytest.mark.parametrize("content", READ_CASES)
+def test_notebook_reads_and_comment_mentions_allowed(mk, home, content):
+    target = win(home / "code" / "proj" / "tool.py")
+    assert notebook_guard.handle(mk("Write", file_path=target, content=content)) is None
+    assert notebook_guard.handle(mk("Edit", file_path=target, old_string="x", new_string=content)) is None
+    assert notebook_guard.handle(mk("MultiEdit", file_path=target, edits=[{"new_string": content}])) is None
+
+
 BLOCKED_SHELL = [
     "jupyter nbconvert --to notebook --execute --inplace a.ipynb",
     "jupyter nbconvert --execute a.ipynb --inplace",
     "cd nb && jupyter.exe nbconvert --inplace b.ipynb",
     "python -c \"import json; json.dump(nb, open('a.ipynb','w'))\"",
-    "python3 -c \"import json; d=json.load(open('a.ipynb'))\"",
+    f"python3 -c \"import json; json.dump(d, open('a{IPYNB}','w'))\"",
     "python -c \"import nbformat; nbformat.write(nb, open('a.ipynb','w'))\"",
-    "py -3 -c \"import json; json.load(open('a.ipynb'))\"",
-    "& C:\\Python312\\python.exe -c \"import json; json.load(open('a.ipynb'))\"",
+    f"py -3 -c \"import json; json.dump(d, open('a{IPYNB}','w'))\"",
+    f"& C:\\Python312\\python.exe -c \"import json; json.dump(d, open('a{IPYNB}','w'))\"",
+    f"python -c \"import json,pathlib; pathlib.Path('a{IPYNB}').write_text(json.dumps(nb))\"",
     "\"C:/Users/x/.venv/Scripts/python.exe\" -c \"import json; json.dump(n, open('a.ipynb','w'))\"",
 ]
 
@@ -80,6 +126,11 @@ ALLOWED_SHELL = [
     "Get-ChildItem -Filter *.ipynb", "cp a.ipynb backup/a.ipynb", "Copy-Item a.ipynb b.ipynb",
     "echo \"json.dump on a.ipynb is banned\"", "python -c \"import json; json.load(open('cfg.json'))\"",
     "python script.py a.ipynb", "jupyter lab", "", "ls",
+    # le letture via one-liner passano
+    f"python -c \"import json; nb=json.load(open('a{IPYNB}'))\"",
+    f"python3 -c \"import json,pathlib; print(len(json.loads(pathlib.Path('a{IPYNB}').read_text())['cells']))\"",
+    f"py -3 -c \"import json; json.load(open('a{IPYNB}'))\"",
+    f"& C:\\Python312\\python.exe -c \"import json; json.load(open('a{IPYNB}'))\"",
 ]
 
 

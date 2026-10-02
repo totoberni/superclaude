@@ -332,6 +332,7 @@ def dispatch(ctx: Ctx) -> int:
     """Esegue gli handler dell'evento e scrive UNA risposta. Ritorna l'exit code."""
     blocks: list[str] = []
     notes: list[str] = []
+    rewrite_notes: list[str] = []
     rewritten = False
     for event, tools, name, fn in _REGISTRY:
         if event != ctx.event or (tools and ctx.tool not in tools):
@@ -350,6 +351,7 @@ def dispatch(ctx: Ctx) -> int:
             # Le guardie successive devono ispezionare il testo già corretto
             ctx.tool_input = res.updated_input
             rewritten = True
+            rewrite_notes.extend(res.context)
         if res.block:
             if mode == "block" and ctx.event == "PreToolUse":
                 blocks.append(f"[{name}] {res.block}")
@@ -359,7 +361,14 @@ def dispatch(ctx: Ctx) -> int:
 
     if blocks:
         # Exit 2 + stderr: il motivo torna al modello e lo strumento non parte
-        sys.stderr.write("GUARD-BLOCK " + "\n".join(blocks) + "\n")
+        text = "GUARD-BLOCK " + "\n".join(blocks) + "\n"
+        if rewritten:
+            # Il blocco scarta updatedInput: senza questa riga il modello non sa che le
+            # correzioni automatiche si riapplicano da sole al nuovo tentativo
+            text += ("Also: auto-fixes in this call were not applied because of the block; they reapply "
+                     "automatically on retry, so change only what the block asks")
+            text += (": " + "; ".join(rewrite_notes) if rewrite_notes else "") + "\n"
+        sys.stderr.write(text)
         return 2
     if notes or rewritten:
         specific: dict[str, Any] = {"hookEventName": ctx.event}
