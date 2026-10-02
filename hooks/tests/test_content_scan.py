@@ -408,6 +408,100 @@ def test_firewall_does_not_apply_to_shell_commands(mk):
     assert len(res.context) == 1
 
 
+# --------------------------------------------------------------------------
+# Si riscrive solo se ogni trattino sta in un testo: virgolette, heredoc, here-string
+# --------------------------------------------------------------------------
+CC_HEREDOC = (
+    "git commit -m \"$(cat <<'EOF'\n"
+    f"feat(x): say \"quoted\" {EM} don't split\n"
+    "\n"
+    "Co-Authored-By: Claude <noreply@anthropic.com>\n"
+    "EOF\n"
+    ")\""
+)
+
+QUOTED_COMMITS = [
+    ("Bash", f'git commit -m "a {EM} b"', 'git commit -m "a; b"'),
+    ("Bash", f"git commit -m 'a {EM} b'", "git commit -m 'a; b'"),
+    ("PowerShell", f'git commit -m "a {EM} b"', 'git commit -m "a; b"'),
+    ("Bash", CC_HEREDOC, CC_HEREDOC.replace(f" {EM} ", "; ")),
+    ("Bash", f"git commit -F - <<-EOF\n\tsubject {EN} 10{EN}20\n\tEOF\n", "git commit -F - <<-EOF\n\tsubject; 10-20\n\tEOF\n"),
+    ("Bash", f"git commit -F - << \"END\"\nbody {EM} x $(not run)\nEND", "git commit -F - << \"END\"\nbody; x $(not run)\nEND"),
+    ("PowerShell", f"git commit -m @'\nsubject {EM} x, don't \"stop\"\n'@", "git commit -m @'\nsubject; x, don't \"stop\"\n'@"),
+    ("Bash", f"git commit -m \"a {EM} b\" -m 'c {EN} d'", "git commit -m \"a; b\" -m 'c; d'"),
+    ("PowerShell", f"git commit -m 'it''s a {EM} b'", "git commit -m 'it''s a; b'"),       # '' = apice escapato
+    ("PowerShell", f'git commit -m "say `"hi`" {EM} ok"', 'git commit -m "say `"hi`"; ok"'),
+    ("Bash", f'git commit -m "say \\"hi\\" {EM} ok"', 'git commit -m "say \\"hi\\"; ok"'),
+    ("Bash", f"git commit -m $'a {EM} b\\n'", "git commit -m $'a; b\\n'"),
+    ("Bash", f"git commit -m \"a {EM} b\"  # don't", "git commit -m \"a; b\"  # don't"),  # apice nel commento
+    ("PowerShell", f"pwsh -c \"git commit -m 'a {EM} b'\"", "pwsh -c \"git commit -m 'a; b'\""),
+]
+
+
+@pytest.mark.parametrize("tool,cmd,want", QUOTED_COMMITS)
+def test_commit_dash_inside_text_is_rewritten(mk, tool, cmd, want):
+    res = content_scan.handle(mk(tool, command=cmd))
+    assert shell_fixed(res) == want
+    assert len(res.context) == 1 and "replaced" in res.context[0]
+
+
+UNQUOTED_DASH_COMMITS = [
+    ("Bash", f"git commit -m fix{EM}thing"),
+    ("PowerShell", f"git commit -m fix{EM}thing"),
+    ("Bash", f'git commit -m "a" {EM} b'),                        # dopo una virgoletta chiusa
+    ("PowerShell", f"git commit -m 'a' {EN} b"),
+    ("Bash", f'git commit -m "a {EM} b'),                         # virgolette non chiuse
+    ("PowerShell", f"git commit -m 'a {EM} b"),
+    ("Bash", f'echo a{EM}b && git commit -m "x"'),                # segmento senza virgolette
+    ("PowerShell", f'echo a{EM}b; git commit -m "x"'),
+    ("Bash", f'git commit -m "$(echo a{EM}b)"'),                  # sostituzione di comando: è codice
+    ("Bash", f'git commit -m "`echo a{EM}b`"'),
+    ("PowerShell", f'git commit -m "$(echo a{EM}b)"'),
+    ("Bash", f"git commit -m a\\{EM}b"),                          # trattino escapato: resta codice
+    ("Bash", f'git commit -m "x"  # nota {EM} y'),                # commento: non è testo
+    ("Bash", f'git commit -m "a <<EOF"\necho x{EM}y\nEOF'),       # `<<` tra virgolette non apre un heredoc
+    ("Bash", f"git commit -F - <<EOF\n$(echo a{EM}b)\nEOF\n"),     # corpo che espande `$(`
+    ("Bash", f"git commit -F - <<EOF\nsubject {EM} x\n"),          # heredoc non chiuso
+    ("PowerShell", f'git commit -m @"\n$(echo a{EM}b)\n"@'),       # here-string che espande `$(`
+    ("PowerShell", f"git commit -m 'it{chr(0x2019)}s a {EM} b'"),  # apice tipografico: per PowerShell chiude
+    ("Bash", f'bash -c "git commit -m x{EM}y"'),                  # la shell annidata vede il trattino fuori
+    ("Bash", f'git commit -m "x" && echo "a{EM}b" | bash'),
+    ("PowerShell", f"cmd /c \"git commit -m 'a {EM} b'\""),        # cmd.exe non modellato
+]
+
+
+@pytest.mark.parametrize("tool,cmd", UNQUOTED_DASH_COMMITS)
+def test_commit_dash_outside_text_only_notes(mk, tool, cmd):
+    res = content_scan.handle(mk(tool, command=cmd))
+    assert res is not None and not res.block and res.updated_input is None
+    assert len(res.context) == 1
+    assert "outside quotes" in res.context[0] and "split the command" in res.context[0] and "reword" in res.context[0]
+
+
+@pytest.mark.parametrize("tool,cmd", [
+    ("Bash", f'git commit -m "a {EM} b" <<'),                     # `<<` in fondo
+    ("Bash", f"git commit -m 'a {EM} b' <<'EOF"),                 # delimitatore non chiuso
+    ("Bash", f'git commit -m "a {EM} b\\'),                       # escape in fondo, virgolette aperte
+    ("Bash", f'git commit -m "$(cat <<EOF {EM}'),
+    ("PowerShell", f"git commit -m @'\na {EM} b"),                 # `@'` senza chiusura
+    ("PowerShell", f"git commit -m @'\n{EM}"),
+    ("PowerShell", f"git commit -m 'a {EM} b' <# x"),
+])
+def test_malformed_commit_commands_note_without_raising(mk, tool, cmd):
+    res = content_scan.handle(mk(tool, command=cmd))
+    assert res is not None and not res.block and res.updated_input is None
+    assert "outside quotes" in res.context[0]
+
+
+def test_scanner_never_raises_on_token_soup():
+    """Il dispatcher lascia passare se un handler solleva: lo scanner non deve mai sollevare."""
+    import itertools
+    toks = ['"', "'", "$(", ")", "<<", "<<-", "EOF", "\n", "`", "\\", "#", "@'", "'@", '@"', '"@', EM, " ", "$'", "<#"]
+    for tool in ("Bash", "PowerShell"):
+        for combo in itertools.product(toks, repeat=3):
+            assert isinstance(content_scan._dashes_only_in_text("".join(combo) + EM, tool), bool)
+
+
 @pytest.mark.parametrize("ti", [{}, {"command": None}, {"command": 42}, {"command": ["git", "commit"]}])
 def test_malformed_shell_input_never_raises(mk, ti):
     assert content_scan.handle(mk("Bash", tool_input=ti)) is None

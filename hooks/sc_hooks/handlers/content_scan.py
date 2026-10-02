@@ -8,7 +8,9 @@ Due classi:
    su disco non contiene già, per Edit/MultiEdit quelle assenti da `old_string`
    (la regola guarda avanti: i trattini preesistenti restano come sono).
    Vale anche per i messaggi di commit scritti nella shell (Bash/PowerShell con
-   `git commit`): lì tutto il testo è nuovo, quindi si corregge ogni trattino.
+   `git commit`): lì tutto il testo è nuovo, quindi si corregge ogni trattino,
+   ma solo se ognuno sta in un testo (virgolette, corpo di heredoc o here-string).
+   Un trattino nel codice diventerebbe un `;` che spezza il comando: lì solo una nota.
    Nel codice un trattino è spesso un dato (regex, fixture, stringa di confronto):
    nei file di codice si corregge solo la parte di commento, nei file di dati
    nulla, nella prosa nulla dentro i blocchi recintati markdown. Ogni trattino
@@ -297,6 +299,238 @@ def _suspect_note(ids: list[str]) -> str:
             "(project files must not cite superclaude memory)")
 
 
+# --------------------------------------------------------------------------
+# Comandi di commit: un trattino si riscrive solo dentro un testo.
+# Fuori (`-m fix<trattino>thing`) la riscrittura in "; " spezzerebbe il comando.
+# --------------------------------------------------------------------------
+_UNQUOTED_NOTE = ("content-scan: commit command has an em/en dash outside quotes; not auto-fixed "
+                  "(a rewrite could split the command); reword it")
+# Operatore heredoc di Bash: `<<` o `<<-`, spazi facoltativi, delimitatore tra apici, tra virgolette o nudo
+_HEREDOC_OP = re.compile(r"""<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|([\w.]+))""")
+# `#` apre un commento solo a inizio parola
+_WORD_START = " \t\n;&|("
+# PowerShell tratta le virgolette tipografiche come virgolette vere: non modellate, si rinuncia
+_PS_TYPO_QUOTES = "\u2018\u2019\u201a\u201b\u201c\u201d\u201e"
+# Shell che rileggono un testo come codice (`bash -c "..."`, `| sh`, `iex "..."`): nome -> regole
+# con cui rileggerlo; None = shell non modellata (cmd.exe), quindi nessuna riscrittura
+_NESTED_SHELLS = {
+    **dict.fromkeys(("bash", "sh", "zsh", "wsl", "eval", "ssh", "su", "trap", "watch"), "Bash"),
+    **dict.fromkeys(("pwsh", "powershell", "iex", "invoke-expression"), "PowerShell"),
+    **dict.fromkeys(("cmd", "start-process"), None),
+}
+_SHELL_NAMES = "|".join(sorted(map(re.escape, _NESTED_SHELLS), key=len, reverse=True))
+# Nel codice: parola intera (`run.sh`, `--cmd`, `$cmd`, la cartella `sh/` non contano)
+_NESTED_SHELL = re.compile(rf"(?<![\w.$-])({_SHELL_NAMES})(?:\.exe)?(?![\w./\\-])", re.I)
+# Tra virgolette: il percorso di un eseguibile (`& "C:/.../bash.exe" -c ...`)
+_QUOTED_SHELL = re.compile(rf"(?:.*[/\\])?({_SHELL_NAMES})(?:\.exe)?", re.I | re.S)
+_MAX_NESTING = 2
+
+
+@dataclass
+class _Scan:
+    """Stato dell'analisi di un comando di shell."""
+    cmd: str
+    bash: bool                      # False = regole di PowerShell
+    is_text: bytearray              # 1 dove il carattere è testo
+    # Contesti aperti (tipo, inizio): "" codice, "(" sottocomando, "`" backtick di Bash, '"' virgolette
+    stack: list[tuple[str, int]] = field(default_factory=lambda: [("", 0)])
+    # Heredoc in attesa del corpo: (delimitatore, `<<-` toglie i tab, il corpo espande `$(`)
+    pending: list[tuple[str, bool, bool]] = field(default_factory=list)
+    # Testi trovati: (tipo, inizio, fine) del contenuto
+    spans: list[tuple[str, int, int]] = field(default_factory=list)
+
+    def mark(self, kind: str, start: int, end: int) -> int:
+        """Registra `cmd[start:end]` come testo; restituisce `end`."""
+        self.spans.append((kind, start, end))
+        for k in range(start, end):
+            self.is_text[k] = 1
+        return end
+
+
+def _line_end(cmd: str, i: int) -> int:
+    """Indice del primo a capo da `i` in poi (la lunghezza del comando se non c'è)."""
+    j = cmd.find("\n", i)
+    return len(cmd) if j < 0 else j
+
+
+def _quote_end(s: _Scan, i: int, kind: str) -> int | None:
+    """`i` sull'apice d'apertura: registra il contenuto e restituisce l'indice dopo la chiusura.
+
+    `kind` è "'" (nessun escape; il `''` di PowerShell equivale a due stringhe adiacenti)
+    oppure "$'" (stringa ANSI-C di Bash, escape con backslash). None se la stringa non si chiude.
+    """
+    esc = "\\" if kind == "$'" else None
+    j = i + 1
+    while j < len(s.cmd):
+        if s.cmd[j] == esc:
+            j += 2
+        elif s.cmd[j] == "'":
+            return s.mark(kind, i + 1, j) + 1
+        else:
+            j += 1
+    return None
+
+
+def _heredoc_open(s: _Scan, i: int) -> int | None:
+    """`i` su `<<`: mette in attesa l'heredoc, il cui corpo parte dal prossimo a capo nel codice.
+
+    None se l'operatore non si sa leggere.
+    """
+    if s.cmd.startswith("<<<", i):      # here-string di Bash: la parola che segue resta codice
+        return i + 3
+    m = _HEREDOC_OP.match(s.cmd, i)
+    if m is None:
+        return None
+    delim = next(g for g in m.group(2, 3, 4) if g is not None)
+    s.pending.append((delim, m.group(1) == "-", m.group(4) is not None))
+    return m.end()
+
+
+def _heredoc_bodies_end(s: _Scan, i: int) -> int | None:
+    """`i` all'inizio del primo corpo in attesa: registra i corpi e restituisce l'indice dopo
+    l'ultima riga delimitatrice.
+
+    None se un corpo non si chiude o se espande una sostituzione di comando:
+    lì dentro un trattino sarebbe codice, non testo.
+    """
+    cmd = s.cmd
+    for delim, strip_tabs, expands in s.pending:
+        start = i
+        while True:
+            if i >= len(cmd):
+                return None
+            end = _line_end(cmd, i)
+            if (cmd[i:end].lstrip("\t") if strip_tabs else cmd[i:end]) == delim:
+                break
+            i = end + 1
+        if expands and ("$(" in cmd[start:i] or "`" in cmd[start:i]):
+            return None
+        s.mark("h", start, i)
+        i = end + 1
+    s.pending.clear()
+    return min(i, len(cmd))
+
+
+def _here_string_end(s: _Scan, i: int) -> int | None:
+    """`i` su `@'`/`@"` a fine riga: registra il corpo e restituisce l'indice dopo la chiusura
+    (`'@`/`"@` a inizio riga). None se manca o se un `@"` espande una sottoespressione `$(`.
+    """
+    q, nl = s.cmd[i + 1], _line_end(s.cmd, i)
+    close = s.cmd.find("\n" + q + "@", nl)
+    if close < 0 or (q == '"' and "$(" in s.cmd[nl:close]):
+        return None
+    s.mark("h", nl + 1, close)
+    return close + 3
+
+
+def _span_step(s: _Scan, i: int) -> int | None:
+    """Strutture che partono da `i` nel codice: commento, corpi di heredoc, here-string.
+
+    Restituisce dove riprendere, `i` stesso se non ne parte nessuna, None se illeggibile.
+    """
+    cmd = s.cmd
+    if cmd[i] == "#" and (i == 0 or cmd[i - 1] in _WORD_START):
+        end = _line_end(cmd, i)
+        return None if _has_dash(cmd[i:end]) else end     # un commento non è testo del messaggio
+    if cmd[i] == "\n" and s.pending:
+        return _heredoc_bodies_end(s, i + 1)
+    if s.bash:
+        return _heredoc_open(s, i) if cmd.startswith("<<", i) else i
+    if cmd.startswith("<#", i):                            # commento a blocco di PowerShell: non modellato
+        return None
+    if cmd.startswith(("@'", '@"'), i) and not cmd[i + 2:_line_end(cmd, i)].strip():
+        return _here_string_end(s, i)
+    return i
+
+
+def _code_step(s: _Scan, i: int) -> int | None:
+    """Un passo nel codice: un trattino qui è fuori dal testo (None); i testi si saltano o si aprono."""
+    cmd, c = s.cmd, s.cmd[i]
+    if c in _DASHES:
+        return None
+    if c == ("\\" if s.bash else "`"):                    # carattere escapato: resta codice
+        return None if cmd[i + 1:i + 2] in _DASHES else i + 2
+    if c == "'" or (s.bash and cmd.startswith("$'", i)):
+        return _quote_end(s, i + 1, "$'") if c == "$" else _quote_end(s, i, "'")
+    nxt = _span_step(s, i)
+    if nxt != i:
+        return nxt
+    top = s.stack[-1][0]
+    if c in "\"(" or (s.bash and c == "`" and top != "`"):
+        s.stack.append((c, i))
+    elif (c == ")" and top == "(") or (s.bash and c == "`"):
+        s.stack.pop()
+    return i + 1
+
+
+def _dquote_step(s: _Scan, i: int) -> int:
+    """Un passo tra virgolette doppie: è tutto testo, salvo le sostituzioni che riaprono il codice."""
+    c, step = s.cmd[i], 1
+    if c == '"':
+        _, start = s.stack.pop()
+        s.spans.append(('"', start + 1, i))
+        return i + 1
+    if s.cmd.startswith("$(", i) or (s.bash and c == "`"):
+        s.stack.append(("(" if c == "$" else "`", i))
+        return i + (2 if c == "$" else 1)
+    if c == ("\\" if s.bash else "`"):
+        step = 2
+    for k in range(i, min(i + step, len(s.cmd))):
+        s.is_text[k] = 1
+    return i + step
+
+
+def _scan(cmd: str, tool: str) -> _Scan | None:
+    """Percorre il comando; None se un trattino sta nel codice o se qualcosa resta aperto o illeggibile."""
+    s = _Scan(cmd, tool != "PowerShell", bytearray(len(cmd)))
+    i: int | None = 0
+    while i is not None and i < len(cmd):
+        i = _dquote_step(s, i) if s.stack[-1][0] == '"' else _code_step(s, i)
+    return s if i is not None and len(s.stack) == 1 and not s.pending else None
+
+
+def _nested_shells(s: _Scan) -> set[str | None]:
+    """Regole delle shell annidate che rileggono i testi come codice (nomi nel codice o percorsi tra virgolette)."""
+    code = "".join(" " if t else c for c, t in zip(s.cmd, s.is_text))
+    names = [m.group(1) for m in _NESTED_SHELL.finditer(code)]
+    names += [m.group(1) for _, a, b in s.spans if (m := _QUOTED_SHELL.fullmatch(s.cmd, a, b))]
+    return {_NESTED_SHELLS[n.lower()] for n in names}
+
+
+def _inner_text(s: _Scan, kind: str, a: int, b: int) -> str | None:
+    """Contenuto di un testo come lo riceve la shell annidata; None se non si sa ricostruire."""
+    text = s.cmd[a:b]
+    if kind == "$'":
+        return None
+    if kind == '"':
+        if s.bash:
+            return re.sub(r'\\([$`"\\\n])', r"\1", text)
+        return re.sub(r"`(.)", r"\1", text, flags=re.S).replace('""', '"')
+    return text.replace("''", "'") if kind == "'" and not s.bash else text
+
+
+def _dashes_only_in_text(cmd: str, tool: str, depth: int = 0) -> bool:
+    """Vero se ogni trattino sta in un testo (virgolette, corpo di heredoc o di here-string),
+    anche per le shell annidate che rileggono quei testi come codice.
+    """
+    if tool == "PowerShell" and any(q in cmd for q in _PS_TYPO_QUOTES):
+        return False
+    s = _scan(cmd, tool)
+    if s is None:
+        return False
+    shells = _nested_shells(s)
+    if not shells:
+        return True
+    if None in shells or depth >= _MAX_NESTING:
+        return False
+    for kind, a, b in s.spans:
+        if _has_dash(cmd[a:b]):
+            inner = _inner_text(s, kind, a, b)
+            if inner is None or not all(_dashes_only_in_text(inner, t, depth + 1) for t in shells):
+                return False
+    return True
+
+
 def _commit_dashes(ctx: core.Ctx) -> core.Result | None:
     """Trattini nel testo di un `git commit` lanciato da Bash/PowerShell."""
     raw = _util.field(ctx, "command")
@@ -317,6 +551,8 @@ def _commit_dashes(ctx: core.Ctx) -> core.Result | None:
             "content-scan: commit message contains em/en dash; not auto-fixed because the "
             f"command also runs {m.group(0)}; reword it"
         )
+    if not _dashes_only_in_text(raw, ctx.tool):
+        return core.Result.note(_UNQUOTED_NOTE)
     fixed, count = _fix_new_lines(raw, set())
     return core.Result.rewrite(
         {**ctx.tool_input, "command": fixed},
