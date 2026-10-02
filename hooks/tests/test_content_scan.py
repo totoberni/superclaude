@@ -42,6 +42,12 @@ SUBSTITUTIONS = [
     ("north{EN}south", "north-south"),
     ("keep\nline {EM} two\n", "keep\nline; two\n"),
     ("crlf {EM} line\r\nnext", "crlf; line\r\nnext"),   # i fine riga CRLF restano CRLF
+    ("| Ricavi | {EM} |", "| Ricavi | - |"),     # cella di tabella vuota: resta un trattino
+    ("|{EN}|{EM}|", "|-|-|"),
+    ("| a {EM} b |", "| a; b |"),              # inciso dentro una cella: regola normale
+    ("a {EM}{EM} b", "a; b"),                  # una serie di trattini lunghi vale come uno
+    ("a{EM}{EM}b", "a; b"),
+    ("a {EM} {EM} b", "a; b"),
 ]
 
 
@@ -120,6 +126,8 @@ FORBIDDEN = [
     # id a una lettera: bloccano solo con un contesto di memoria sulla stessa riga
     "gotcha M-12 applies", "| W-2 | fix the loader |", "|M-4|", "Occ=2, see G-27", "lesson W-3",
     "a Mistake: M-9", "superclaude M-1", "the memory cell G-5", "good-idea W-8", "3 occurrences of M-2",
+    # anche i plurali del contesto
+    "see gotchas M-12", "lessons W-3", "two mistakes: M-9", "memories M-2", "good-ideas W-8",
 ]
 
 
@@ -187,6 +195,117 @@ def test_dash_rewrite_and_id_warning_share_one_result(mk, home):
 
 def test_single_letter_ids_outside_code_are_ignored(mk, home):
     assert content_scan.handle(mk("Write", file_path=win(home / "elsewhere" / "a.md"), content="fixes M-12")) is None
+
+
+# --------------------------------------------------------------------------
+# Codice e dati: nel codice si corregge solo il commento, il resto resta e avvisa
+# --------------------------------------------------------------------------
+def left_notes(res):
+    """Note sui trattini lasciati nel codice o nei dati."""
+    return [c for c in res.context if "untouched" in c]
+
+
+PY_DATA_LINES = [
+    f're.compile("[{EN}{EM}]")',                   # la regex cambierebbe significato
+    f's.replace("{EM}", ", ")',
+    f'assert normalize("a{EM}b") == "a, b"',
+    f'label = "Totale {EM} 2025"',
+    f'x = "a # b {EM} c"',                         # `#` dentro una stringa non apre un commento
+]
+
+
+@pytest.mark.parametrize("line", PY_DATA_LINES)
+def test_python_code_dashes_stay_byte_identical_and_warn(mk, home, line):
+    res = content_scan.handle(mk("Write", file_path=win(home / "code" / "proj" / "m.py"), content=f"import re\n{line}\n"))
+    assert res is not None and not res.block and res.updated_input is None
+    assert len(res.context) == 1 and "(lines 2)" in res.context[0]
+    assert "reword it" in res.context[0] and "keep it" in res.context[0]
+
+
+def test_python_comments_are_rewritten(mk, home):
+    src = f"# calcola il margine {EM} vedi nota\n    # rientrato {EN} ok\nx = 1  # nota {EM} vedi\n"
+    res = content_scan.handle(mk("Write", file_path=win(home / "code" / "proj" / "m.py"), content=src))
+    assert fixed(res) == "# calcola il margine; vedi nota\n    # rientrato; ok\nx = 1  # nota; vedi\n"
+    assert len(res.context) == 1 and "replaced 3" in res.context[0]
+
+
+def test_python_file_mixes_rewrite_and_one_warning(mk, home):
+    code = PY_DATA_LINES[:4]
+    src = "\n".join([f"# calcola il margine {EM} vedi nota", *code, f"y = \"#\" + 'a{EM}b'  # nota {EM} c", ""])
+    res = content_scan.handle(mk("Write", file_path=win(home / "code" / "proj" / "m.py"), content=src))
+    out = fixed(res).split("\n")
+    assert out[0] == "# calcola il margine; vedi nota"
+    assert out[1:5] == code                                       # codice identico byte per byte
+    assert out[5] == f"y = \"#\" + 'a{EM}b'  # nota; c"           # solo la coda di commento
+    assert len(res.context) == 2 and "replaced 2" in res.context[0]
+    assert left_notes(res) == [res.context[1]]
+    assert "left 6 " in res.context[1] and "(lines 2, 3, 4, 5, 6)" in res.context[1]
+
+
+@pytest.mark.parametrize("name,src,want,left", [
+    ("app.ts", f"const r = /[{EM}]/;  // separa {EM} qui", f"const r = /[{EM}]/;  // separa; qui", 1),
+    ("app.ts", f'const u = "http://x {EM} y";', None, 1),          # `//` tra virgolette non è un commento
+    ("app.js", f"/**\n * nota {EM} vedi\n */", "/**\n * nota; vedi\n */", 0),   # commento a blocco
+    ("lib.c", f"*p = '{EM}';", None, 1),                           # `*` iniziale seguito da codice
+    ("q.sql", f"SELECT 'a {EM} b' AS x -- nota {EM} vedi", f"SELECT 'a {EM} b' AS x -- nota; vedi", 1),
+    ("init.lua", f"-- commento {EM} intero", "-- commento; intero", 0),
+    ("run.sh", f'echo "a {EM} b"  # nota {EM} c', f'echo "a {EM} b"  # nota; c', 1),
+    ("cfg.YAML", f'sep: "{EM}"', None, 1),                          # estensione senza distinzione di maiuscole
+])
+def test_comment_marker_by_extension(mk, home, name, src, want, left):
+    res = content_scan.handle(mk("Write", file_path=win(home / "elsewhere" / name), content=src))
+    assert res is not None and not res.block
+    assert fixed(res) == want
+    notes = left_notes(res)
+    assert len(notes) == (1 if left else 0)
+    assert not left or f"left {left} " in notes[0]
+
+
+@pytest.mark.parametrize("name", ["data.json", "rows.csv", "rows.tsv", "x.XML", "log.jsonl", "nb.ipynb"])
+def test_data_files_are_never_rewritten(mk, home, name):
+    res = content_scan.handle(mk("Write", file_path=win(home / "elsewhere" / name), content=f'{{"sep": "{EM}", "r": "1{EN}2"}}\n'))
+    assert res is not None and not res.block and res.updated_input is None
+    assert len(res.context) == 1 and "left 2 em/en dash(es) in code or data untouched (lines 1)" in res.context[0]
+
+
+def test_markdown_fenced_block_is_left_as_code(mk, home):
+    src = f"intro {EM} testo\n```python\nsep = '{EM}'\n```\nfine {EM} testo\n"
+    res = content_scan.handle(mk("Write", file_path=win(home / "elsewhere" / "README.md"), content=src))
+    assert fixed(res) == f"intro; testo\n```python\nsep = '{EM}'\n```\nfine; testo\n"
+    assert len(res.context) == 2 and "replaced 2" in res.context[0] and "(lines 3)" in res.context[1]
+
+
+def test_markdown_fence_closes_only_on_matching_fence(mk, home):
+    src = f"~~~~\n```\nin {EM}\n```\n~~~~\nout {EM}"           # il ``` interno non chiude il ~~~~
+    res = content_scan.handle(mk("Write", file_path=win(home / "elsewhere" / "a.md"), content=src))
+    assert fixed(res) == f"~~~~\n```\nin {EM}\n```\n~~~~\nout;"
+    assert "(lines 3)" in left_notes(res)[0]
+
+
+def test_left_note_caps_line_numbers(mk, home):
+    src = "\n".join(f'v{i} = "{EM}"' for i in range(7))
+    note = content_scan.handle(mk("Write", file_path=win(home / "elsewhere" / "m.py"), content=src)).context[0]
+    assert "left 7 " in note and "(lines 1, 2, 3, 4, 5, ...)" in note
+
+
+def test_grandfathered_code_lines_do_not_warn(mk, home):
+    f = home / "code" / "proj" / "m.py"
+    f.write_text(f'SEP = "{EM}"\n', encoding="utf-8")
+    assert content_scan.handle(mk("Write", file_path=win(f), content=f'SEP = "{EM}"\nOTHER = 1\n')) is None
+    same = mk("Edit", file_path=win(f), old_string=f'SEP = "{EM}"', new_string=f'SEP = "{EM}"\nOTHER = 1')
+    assert content_scan.handle(same) is None
+    grown = mk("Edit", file_path=win(f), old_string=f'SEP = "{EM}"', new_string=f'SEP = "{EM}"\nNEW = "{EN}"  # a {EM} b')
+    res = content_scan.handle(grown)
+    assert fixed(res, "new_string") == f'SEP = "{EM}"\nNEW = "{EN}"  # a; b'
+    assert len(left_notes(res)) == 1 and "left 1 " in left_notes(res)[0] and "(lines 2)" in left_notes(res)[0]
+
+
+def test_code_rewrite_warning_and_id_warning_share_one_result(mk, home):
+    src = f'FORM = "W-2 {EM}"  # vedi W-2 {EM} ok'
+    res = content_scan.handle(mk("Write", file_path=win(home / "code" / "proj" / "tax.py"), content=src))
+    assert not res.block and res.updated_input["content"] == f'FORM = "W-2 {EM}"  # vedi W-2; ok'
+    assert len(res.context) == 3
+    assert "replaced 1" in res.context[0] and "left 1 " in res.context[1] and "'W-2'" in res.context[2]
 
 
 @pytest.mark.parametrize("ti", [
