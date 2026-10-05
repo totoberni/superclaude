@@ -37,7 +37,7 @@ def test_pre_row_layout_and_sanitising(comms):
 
 
 def test_post_writes_rich_spawn_and_outcome_with_header_once(comms):
-    resp = {"agentId": "a1c9-61bf!!", "status": "async_launched", "content": [{"type": "text", "text": "## Summary\nall good."}]}
+    resp = {"agentId": "a1c9-61bf!!", "content": [{"type": "text", "text": "## Summary\nall good."}]}
     for _ in range(2):
         sl.on_outcome(_ctx("PostToolUse", payload={"tool_response": resp}, subagent_type="w-coder",
                            description="d" * 130))
@@ -45,9 +45,50 @@ def test_post_writes_rich_spawn_and_outcome_with_header_once(comms):
     assert len(rich[0]) == 6 and rich[0][1:] == ["a1c9-61bf", "w-coder", "SPAWN", "d" * 40, ""]
     raw = (comms / "_outcomes.log").read_text(encoding="utf-8")
     assert raw.count("# Outcomes:") == 1 and raw.startswith("# Agent outcome log")
+    assert "LAUNCHED" in raw and "agent_id" in raw
     out = _rows(comms / "_outcomes.log")
-    assert len(out) == 2 and len(out[0]) == 6
+    assert len(out) == 2 and len(out[0]) == 7
     assert out[0][1:5] == ["meta", "w-coder", "d" * 120, "OK"] and out[0][5] == "## Summaryall good."
+    assert out[0][6] == "a1c9-61bf"
+
+
+def test_async_launch_dict_is_launched_not_ok(comms):
+    # Forma reale del tool_response di un lancio in background (il prompt completo e' dentro il dict)
+    resp = {"isAsync": True, "status": "async_launched", "agentId": "a596ec02f09d1618e!", "description": "d",
+            "resolvedModel": "m", "prompt": "## Summary\nfull spawn prompt.",
+            "outputFile": "C:\\x\\tasks\\a596ec02f09d1618e.output", "canReadOutputFile": True}
+    sl.on_outcome(_ctx("PostToolUse", payload={"tool_response": resp}, subagent_type="w-coder", description="job"))
+    out = _rows(comms / "_outcomes.log")
+    assert len(out) == 1 and len(out[0]) == 7
+    assert out[0][4] == "LAUNCHED" and out[0][6] == "a596ec02f09d1618e"
+
+
+@pytest.mark.parametrize("resp", [
+    "Async agent launched successfully. agentId: zz9",
+    {"content": "plain"},
+])
+def test_run_in_background_flag_alone_is_launched(comms, resp):
+    sl.on_outcome(_ctx("PostToolUse", payload={"tool_response": resp}, subagent_type="w-coder", description="job",
+                       run_in_background=True))
+    out = _rows(comms / "_outcomes.log")
+    assert len(out[0]) == 7 and out[0][4] == "LAUNCHED" and out[0][6] == ""
+
+
+def test_async_launch_text_prefix_alone_is_launched(comms):
+    sl.on_outcome(_ctx("PostToolUse", payload={"tool_response": "Async agent launched successfully. agentId: zz9"},
+                       subagent_type="w-coder", description="job"))
+    assert _rows(comms / "_outcomes.log")[0][4] == "LAUNCHED"
+
+
+def test_foreground_outcome_keeps_classify_and_agent_id_column(comms):
+    sl.on_outcome(_ctx("PostToolUse", payload={"tool_response": "## Summary\nall good."}, subagent_type="w-coder",
+                       description="job"))
+    sl.on_outcome(_ctx("PostToolUse", payload={"tool_response": {"agentId": "fg1", "content": "## Summary\nok."}},
+                       subagent_type="w-coder", description="job"))
+    out = _rows(comms / "_outcomes.log")
+    assert [len(r) for r in out] == [7, 7]
+    assert out[0][4] == "OK" and out[0][6] == ""
+    assert out[1][4] == "OK" and out[1][6] == "fg1"
 
 
 @pytest.mark.parametrize("resp,expected", [

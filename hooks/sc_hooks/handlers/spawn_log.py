@@ -11,7 +11,7 @@ I layout delle colonne sono un contratto: skill e statusline li leggono.
                     ts, "", agent_type, EXIT, agent_id
                     ts, "", agent_type, STOP, agent_id, duration_s, status, transcript_path
   _spawns-rich.log  ts, agent_id, subagent_type, SPAWN|EXIT, short_desc(<=40), outcome
-  _outcomes.log     ts, parent, subagent_type, description(<=120), outcome, last_120_chars
+  _outcomes.log     ts, parent, subagent_type, description(<=120), outcome, last_120_chars, agent_id
 """
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ from sc_hooks.core import Ctx, Result, on
 COMMS_DIR = core.CLAUDE_HOME / "comms"
 
 _OUTCOMES_HEADER = (
-    "# Agent outcome log. TSV: timestamp\\tparent_agent\\tsubagent_type\\tdescription\\toutcome\\tlast_120_chars\n"
-    "# Outcomes: OK | TRUNCATED | FAILED | UNKNOWN\n"
+    "# Agent outcome log. TSV: timestamp\\tparent_agent\\tsubagent_type\\tdescription\\toutcome\\tlast_120_chars\\tagent_id\n"
+    "# Outcomes: OK | TRUNCATED | FAILED | UNKNOWN | LAUNCHED (async launch: completion is the STOP row in _spawns.log)\n"
     "# Source hook: ~/.claude/hooks/sc_hooks/handlers/spawn_log.py\n"
 )
 _FAIL_RE = r"(^|\b)(Error:|Failed:|FAILED:|BLOCKED:|Traceback \(most recent|fatal:|panic:)"
@@ -148,6 +148,16 @@ def classify(text: str) -> str:
     return "OK" if full_len > 0 else "UNKNOWN"
 
 
+def _is_async_launch(ctx: Ctx, resp: Any) -> bool:
+    """Un lancio in background torna subito: l'esito reale arriva solo con la riga STOP."""
+    if ctx.tool_input.get("run_in_background") is True:
+        return True
+    if isinstance(resp, dict) and (resp.get("isAsync") is True or resp.get("status") == "async_launched"):
+        return True
+    # Forma testuale: difensiva, il hook oggi vede il dict e non il messaggio rivolto al modello
+    return response_text(resp).startswith("Async agent launched successfully")
+
+
 @on("PostToolUse", tools=("Agent",), name="spawn-log")
 def on_outcome(ctx: Ctx) -> Result | None:
     resp = ctx.payload.get("tool_response")
@@ -160,7 +170,8 @@ def on_outcome(ctx: Ctx) -> Result | None:
 
     text = response_text(resp)
     last_120 = _cell(text[-120:]) or "(empty)"
-    _append("_outcomes.log", [now, _parent(ctx), subagent, description, classify(text), last_120],
+    outcome = "LAUNCHED" if _is_async_launch(ctx, resp) else classify(text)
+    _append("_outcomes.log", [now, _parent(ctx), subagent, description, outcome, last_120, child_id],
             header=_OUTCOMES_HEADER)
     return None
 
