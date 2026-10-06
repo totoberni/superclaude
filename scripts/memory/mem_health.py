@@ -41,8 +41,15 @@ import re
 import sys
 from pathlib import Path
 
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[2] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import scan_mem_matrix as scan  # noqa: E402
+from db_wall import CrossProfileDBError  # noqa: E402
 
 # Separatore usato nelle righe di output. L'originale bash stampava un trattino
 # lungo; la regola del repo vieta i trattini lunghi, quindi qui e' ASCII puro.
@@ -59,12 +66,12 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
 def _db_path() -> Path:
-    """MEMORY_DB_PATH, altrimenti <CLAUDE_DIR o ~/.claude>/agent-memory/.memory.db."""
+    """MEMORY_DB_PATH, altrimenti <CLAUDE_DIR o data home del profilo>/agent-memory/.memory.db."""
     override = os.environ.get("MEMORY_DB_PATH", "").strip()
     if override:
         return Path(override).expanduser()
     claude = os.environ.get("CLAUDE_DIR", "").strip()
-    base = Path(claude).expanduser() if claude else Path.home() / ".claude"
+    base = Path(claude).expanduser() if claude else sc_profile.data_home()
     return base / "agent-memory" / ".memory.db"
 
 
@@ -333,6 +340,10 @@ def main(argv: list[str]) -> int:
             mode = "verbose"
     try:
         lines = report(mode)
+    except CrossProfileDBError as exc:
+        # Unica eccezione al "mai exit != 0": il muro tra profili fallisce chiuso
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
     except Exception as exc:  # strumento di report: mai un crash, mai exit != 0
         lines = [f"mem_health internal error: {exc}", "SCORE: 0/100"]
     sys.stdout.write("\n".join(lines) + "\n")

@@ -18,12 +18,12 @@ from typing import Any
 from sc_hooks import core
 from sc_hooks.core import Ctx, Result, on
 
-SYSTEM_DIR = core.CLAUDE_HOME / "agent-memory" / "_system"
+SYSTEM_DIR = core.DATA_HOME / "agent-memory" / "_system"
 COMPACT_DIR = SYSTEM_DIR / "_compact-snapshots"
 STOP_DIR = SYSTEM_DIR / "_stop-snapshots"
-PLANS_DIR = core.CLAUDE_HOME / "plans"
-SPAWN_LOG = core.CLAUDE_HOME / "comms" / "_spawns.log"
-EPHEMERAL_DIR = core.CLAUDE_HOME / "agents" / "_ephemeral"
+PLANS_DIR = core.DATA_HOME / "plans"
+SPAWN_LOG = core.DATA_HOME / "comms" / "_spawns.log"
+EPHEMERAL_DIR = core.CODE_HOME / "agents" / "_ephemeral"
 
 KEEP = 5
 TRANSCRIPT_LINES = 400

@@ -40,7 +40,7 @@ _MAX_OLD_FILE = 5_000_000          # oltre, niente diff: si analizza tutto il te
 _FIREWALL_PATHS = (
     "~/.claude/", ".claude/rules", "agent-memory", "shared/projects/", "class/meta",
     "memory.md", "mtm.md", "ltm.md",
-    ".memory.db", "memory_db.py",
+    ".memory.db", "memory_db.py", ".claude-deepseek",
 )
 _FIREWALL_PHRASES = (
     "meta says", "memory.md says", "according to the gotchas file", "see the project memory",
@@ -278,7 +278,7 @@ def _firewall_scan(text: str) -> tuple[str | None, list[str]]:
         if pat in low:
             return pat, []
     # Forma assoluta di ~/.claude/ (Windows `c:/...` e Git Bash `/c/...`)
-    home = _util.canon(core.CLAUDE_HOME) + "/"
+    home = _util.canon(core.CODE_HOME) + "/"
     msys = re.sub(r"^([a-z]):/", r"/\1/", home)
     if home in low or msys in low:
         return "~/.claude/", []
@@ -583,7 +583,7 @@ def handle(ctx: core.Ctx) -> core.Result | None:
 
     if raw_path:
         path = _util.canon(raw_path, ctx.cwd)
-        if _util.under(path, core.WORKSPACE_ROOT) and not _util.under(path, core.CLAUDE_HOME):
+        if _util.under(path, core.WORKSPACE_ROOT) and not _util.under(path, core.CODE_HOME):
             hit, suspects = _firewall_scan(text)
             if hit:
                 return core.Result.deny(

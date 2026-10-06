@@ -12,8 +12,16 @@ Il log e' TSV: timestamp, parent agent, subagent_type, poi campi liberi.
 import os
 import sys
 from collections import Counter
+from pathlib import Path
 
-LOG = os.path.join(os.path.expanduser("~"), ".claude", "comms", "_spawns.log")
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[1] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
+
+LOG = os.path.join(str(sc_profile.data_home()), "comms", "_spawns.log")
 
 
 def read_rows(path, since=""):

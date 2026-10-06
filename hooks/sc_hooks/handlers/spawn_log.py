@@ -24,7 +24,7 @@ from typing import Any
 from sc_hooks import core
 from sc_hooks.core import Ctx, Result, on
 
-COMMS_DIR = core.CLAUDE_HOME / "comms"
+COMMS_DIR = core.DATA_HOME / "comms"
 
 _OUTCOMES_HEADER = (
     "# Agent outcome log. TSV: timestamp\\tparent_agent\\tsubagent_type\\tdescription\\toutcome\\tlast_120_chars\\tagent_id\n"

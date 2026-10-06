@@ -1,6 +1,6 @@
 """Guardia git-policy: applica il flag `/git true|false` (ex guards/26-git-policy.sh).
 
-Il flag vive in `~/.claude/config/git-policy` (sovrascrivibile con
+Il flag vive nella data home del profilo attivo, in sc_profile.GIT_POLICY_REL (sovrascrivibile con
 SUPERCLAUDE_GIT_POLICY_FILE per i test). Come nella versione bash la lettura è
 fail-open: il blocco scatta SOLO se il file esiste, si legge e dice `disabled`
 (si accettano anche `false`, `off`, `0`, `no`); file assente o contenuto ignoto
@@ -17,6 +17,8 @@ from pathlib import Path
 
 from sc_hooks import core
 from sc_hooks.handlers import _util
+
+import sc_profile  # noqa: E402 - core ha gia' aggiunto <code home>/lib a sys.path
 
 NAME = "git-policy"
 
@@ -44,7 +46,10 @@ _ARG_PREFIX = re.compile(r"^(?:of=|-[A-Za-z]+[:=])")     # dd of=<f>, -Path:<f>,
 
 def policy_file() -> Path:
     override = os.environ.get("SUPERCLAUDE_GIT_POLICY_FILE", "").strip()
-    return Path(override) if override else core.CLAUDE_HOME / "config" / "git-policy"
+    if override:
+        return Path(override)
+    assert core.DATA_HOME is not None  # con PROFILE_ERROR gli handler non vengono caricati
+    return core.DATA_HOME / sc_profile.GIT_POLICY_REL
 
 
 def git_disabled() -> bool:

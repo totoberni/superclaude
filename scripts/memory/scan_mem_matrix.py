@@ -33,6 +33,15 @@ import sqlite3
 import sys
 from pathlib import Path
 
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[2] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from db_wall import CrossProfileDBError, assert_own_profile_path  # noqa: E402
+
 DEFAULT_OVERSIZE_BYTES = 8000
 DEFAULT_STALE_DAYS = 60
 
@@ -46,11 +55,11 @@ def env_int(name: str, default: int) -> int:
 
 
 def db_path() -> Path:
-    """Percorso del DB: MEMORY_DB_PATH, altrimenti ~/.claude/agent-memory/.memory.db."""
+    """Percorso del DB: MEMORY_DB_PATH, altrimenti il DB del profilo attivo (SC_PROFILE)."""
     override = os.environ.get("MEMORY_DB_PATH", "").strip()
     if override:
         return Path(override).expanduser()
-    return Path.home() / ".claude" / "agent-memory" / ".memory.db"
+    return sc_profile.memory_db_path()
 
 
 def now_expr() -> str:
@@ -63,7 +72,11 @@ def now_expr() -> str:
 
 
 def open_ro(path: Path) -> tuple[sqlite3.Connection | None, str]:
-    """Apre il DB in sola lettura. Restituisce (conn, "") oppure (None, motivo)."""
+    """Apre il DB in sola lettura. Restituisce (conn, "") oppure (None, motivo).
+
+    Solleva CrossProfileDBError se il DB appartiene a un altro profilo.
+    """
+    assert_own_profile_path(path)
     if not path.is_file():
         return None, f"DB not built ({path})"
     try:
@@ -201,12 +214,16 @@ def _unix_newlines() -> None:
 def main(argv: list[str]) -> int:
     _unix_newlines()
     fmt = argv[0] if argv else "table"
-    if fmt in ("--budgets", "table"):
-        sys.stdout.write("\n".join(table_lines()) + "\n")
-        return 0
-    if fmt == "--json":
-        sys.stdout.write(json_text())
-        return 0
+    try:
+        if fmt in ("--budgets", "table"):
+            sys.stdout.write("\n".join(table_lines()) + "\n")
+            return 0
+        if fmt == "--json":
+            sys.stdout.write(json_text())
+            return 0
+    except CrossProfileDBError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
     print(f"Unknown format: {fmt}", file=sys.stderr)
     return 1
 

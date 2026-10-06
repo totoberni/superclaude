@@ -259,6 +259,55 @@ def test_guards_are_registered_without_filters():
 
 
 # --------------------------------------------------------------------------
+# Read/Glob/Grep: entrano nel matcher solo per il firewall tra profili
+# --------------------------------------------------------------------------
+READ_TOOLS = ("Read", "Glob", "Grep")
+# Unico handler registrato senza `tools` oltre al firewall: un avviso one-shot che
+# costa una sola open(), quindi puo' girare anche sugli strumenti di lettura
+_TOOLLESS_OK: frozenset[str] = frozenset()
+
+
+def _may_run_on_read_tools(name: str, fn) -> bool:
+    # Il firewall si riconosce dal modulo, non dal nome scelto nel decoratore
+    return fn.__module__.endswith(".profile_firewall") or name in _TOOLLESS_OK
+
+
+def test_read_tools_reach_pretooluse_unfiltered():
+    hooks = load_hooks()
+    for tool in READ_TOOLS:
+        hit = [e for e in entries(hooks, "PreToolUse") if matches(e["matcher"], tool)]
+        assert len(hit) == 1, (tool, hit)
+        assert hit[0]["if"] is None, f"{tool}: il firewall non puo' stare dietro un filtro"
+
+
+def test_read_tools_do_not_wake_other_handlers():
+    """Stesso criterio di core.dispatch: `tools` vuoto vale per ogni strumento."""
+    for event, tools, name, fn in load_registry():
+        if event != "PreToolUse":
+            continue
+        runs_on = [t for t in READ_TOOLS if not tools or t in tools]
+        if runs_on:
+            assert _may_run_on_read_tools(name, fn), f"{name} gira anche su {runs_on}"
+
+
+@pytest.mark.parametrize("tool", READ_TOOLS)
+def test_dispatch_of_read_tool_runs_only_allowed_handlers(tool, mk, monkeypatch, capsys):
+    """Verifica sul dispatcher vero: ogni handler e' sostituito da un registratore."""
+    called: list[str] = []
+    allowed: set[str] = set()
+    patched = []
+    for event, tools, name, fn in load_registry():
+        if _may_run_on_read_tools(name, fn):
+            allowed.add(name)
+        patched.append((event, tools, name, lambda ctx, n=name: called.append(n)))
+    monkeypatch.setattr(core, "_REGISTRY", patched)
+    assert core.dispatch(mk(tool, file_path="C:/x/y.txt", pattern="*")) == 0
+    capsys.readouterr()
+    assert called, "nessun handler raggiunto: il registratore non funziona"
+    assert set(called) <= allowed, sorted(set(called) - allowed)
+
+
+# --------------------------------------------------------------------------
 # I controlli hanno denti: configurazioni sintetiche che DEVONO fallire
 # --------------------------------------------------------------------------
 def _write_json(tmp_path: Path, payload: dict) -> dict:

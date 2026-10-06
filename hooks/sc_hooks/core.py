@@ -24,10 +24,36 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-CLAUDE_HOME = Path.home() / ".claude"
-STATE_DIR = CLAUDE_HOME / "state"          # marcatori per sessione (ex session-timers/)
-LOG_DIR = CLAUDE_HOME / "logs"
-TMP_DIR = CLAUDE_HOME / "tmp"
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[2] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
+
+
+def resolve_profile(environ: dict[str, str] | None = None) -> tuple[str, Path | None, str]:
+    """(profilo attivo, data home, errore). Con SC_PROFILE ignoto: ("", None, messaggio).
+
+    Nessun ripiego su ~/.claude: un profilo sconosciuto deve fermare le guardie,
+    non scrivere i dati nel profilo sbagliato.
+    """
+    try:
+        name = sc_profile.active_profile(environ)
+        return name, sc_profile.data_home(name), ""
+    except sc_profile.ProfileError as exc:
+        return "", None, str(exc)
+
+
+# Codice e configurazione condivisi: sempre ~/.claude
+CODE_HOME = sc_profile.code_home()
+CLAUDE_HOME = CODE_HOME                    # alias storico: indica il CODICE, mai i dati
+PROFILE, _DATA_HOME, PROFILE_ERROR = resolve_profile()
+# Con PROFILE_ERROR valorizzato restano None: il dispatcher non carica gli handler
+DATA_HOME: Path | None = _DATA_HOME
+STATE_DIR: Path | None = DATA_HOME / "state" if DATA_HOME else None  # marcatori per sessione
+LOG_DIR: Path | None = DATA_HOME / "logs" if DATA_HOME else None
+TMP_DIR: Path | None = DATA_HOME / "tmp" if DATA_HOME else None
 WORKSPACE_ROOT = Path.home() / "code"
 
 SHELL_TOOLS = ("Bash", "PowerShell")
@@ -203,6 +229,9 @@ class Ctx:
         """
         sid = re.sub(r"[^A-Za-z0-9_.-]", "_", self.session_id or "").lstrip(".") or "no-session"
         safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key or "").lstrip(".") or "state"
+        if STATE_DIR is None:
+            # Irraggiungibile in produzione: con PROFILE_ERROR il dispatcher non carica gli handler
+            raise RuntimeError(f"no data home: {PROFILE_ERROR}")
         return STATE_DIR / sid / safe_key
 
     def once(self, key: str) -> bool:
@@ -227,10 +256,18 @@ class Result:
     # PreToolUse). Correggere sul posto costa molto meno di un blocco, che
     # obbliga il modello a rigenerare tutto l'output.
     updated_input: dict[str, Any] | None = None
+    # Motivo per cui chiedere conferma all'utente (solo PreToolUse): permissionDecision "ask"
+    ask_reason: str | None = None
 
     @staticmethod
     def deny(reason: str) -> "Result":
         return Result(block=reason)
+
+    # Mantenuto per DEC-007 (gli hook chiedono conferma per le operazioni rischiose):
+    # nessun chiamante in produzione per ora, lo coprono solo i test
+    @staticmethod
+    def ask(reason: str) -> "Result":
+        return Result(ask_reason=reason)
 
     @staticmethod
     def rewrite(tool_input: dict[str, Any], note: str = "") -> "Result":
@@ -297,6 +334,8 @@ def resolve_identity(payload: dict[str, Any]) -> tuple[str, str]:
 # I/O e dispatch
 # --------------------------------------------------------------------------
 def log_error(where: str, exc: BaseException) -> None:
+    if LOG_DIR is None:
+        return
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         with (LOG_DIR / "hooks.log").open("a", encoding="utf-8") as fh:
@@ -329,8 +368,15 @@ def read_ctx(event_arg: str | None) -> Ctx:
 
 
 def dispatch(ctx: Ctx) -> int:
-    """Esegue gli handler dell'evento e scrive UNA risposta. Ritorna l'exit code."""
+    """Esegue gli handler dell'evento e scrive UNA risposta. Ritorna l'exit code.
+
+    Precedenza (come Claude Code): un blocco vince su tutto; altrimenti una
+    richiesta di conferma ("ask"); altrimenti riscritture e note.
+    """
+    if PROFILE_ERROR:
+        return dispatch_profile_error(ctx)
     blocks: list[str] = []
+    asks: list[str] = []
     notes: list[str] = []
     rewrite_notes: list[str] = []
     rewritten = False
@@ -357,6 +403,12 @@ def dispatch(ctx: Ctx) -> int:
                 blocks.append(f"[{name}] {res.block}")
             else:
                 notes.append(f"GUARD-WARN [{name}]: {res.block}")
+        # Ramo "ask" mantenuto per DEC-007: oggi nessun handler di produzione restituisce Result.ask
+        if res.ask_reason:
+            if mode == "block" and ctx.event == "PreToolUse":
+                asks.append(f"[{name}] {res.ask_reason}")
+            else:
+                notes.append(f"GUARD-WARN [{name}]: {res.ask_reason}")
         notes.extend(res.context)
 
     if blocks:
@@ -370,8 +422,12 @@ def dispatch(ctx: Ctx) -> int:
             text += (": " + "; ".join(rewrite_notes) if rewrite_notes else "") + "\n"
         sys.stderr.write(text)
         return 2
-    if notes or rewritten:
+    if notes or rewritten or asks:
         specific: dict[str, Any] = {"hookEventName": ctx.event}
+        if asks:
+            # L'utente vede il motivo nel prompt; in auto mode il classificatore non puo' approvare da solo
+            specific["permissionDecision"] = "ask"
+            specific["permissionDecisionReason"] = "GUARD-ASK " + "\n".join(asks)
         if rewritten:
             # Sempre l'input COMPLETO: vale sia se Claude Code lo sostituisce sia se lo fonde
             specific["updatedInput"] = ctx.tool_input
@@ -379,3 +435,16 @@ def dispatch(ctx: Ctx) -> int:
             specific["additionalContext"] = "\n\n".join(notes)
         sys.stdout.write(json.dumps({"hookSpecificOutput": specific}, ensure_ascii=False))
     return 0
+
+
+def dispatch_profile_error(ctx: Ctx) -> int:
+    """SC_PROFILE ignoto: fail closed. PreToolUse negato, ogni altro evento non fa nulla."""
+    if ctx.event != "PreToolUse":
+        return 0
+    bad = os.environ.get(sc_profile.ENV_VAR, "")
+    sys.stderr.write(
+        f"GUARD-BLOCK [profile] {sc_profile.ENV_VAR}={bad!r} is not a known superclaude profile "
+        f"({PROFILE_ERROR}); every tool call is denied until the session is restarted with a valid "
+        f"{sc_profile.ENV_VAR} (unset = superclaude)\n"
+    )
+    return 2

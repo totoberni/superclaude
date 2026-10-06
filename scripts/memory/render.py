@@ -59,7 +59,15 @@ from typing import Optional
 
 KINDS = ("mermaid", "dot", "vega", "tikz", "markdown")
 
-CACHE_DIR = Path(os.path.expanduser("~/.claude/agent-memory/.render-cache"))
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[2] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
+
+# Cache dati del profilo attivo (SC_PROFILE)
+CACHE_DIR = sc_profile.data_home() / "agent-memory" / ".render-cache"
 
 # Pinned CDN bundles (major-version pinned for reproducibility). Each library
 # is requested once per document via ScriptRegistry.

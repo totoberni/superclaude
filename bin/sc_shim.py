@@ -16,7 +16,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-CLAUDE_HOME = Path.home() / ".claude"
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[1] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
+
+# Codice condiviso da tutti i profili; i dati seguono SC_PROFILE dentro gli script
+CLAUDE_HOME = sc_profile.code_home()
 SCRIPTS_DIR = CLAUDE_HOME / "scripts"
 MEMORY_CLI = SCRIPTS_DIR / "memory" / "memory_db.py"
 
@@ -105,6 +113,12 @@ def _expand_home(args: list[str]) -> list[str]:
 
 def main() -> int:
     _force_utf8()
+    # Profilo sconosciuto: errore e uscita non zero, mai un ripiego sul profilo di default
+    try:
+        sc_profile.active_profile()
+    except sc_profile.ProfileError as exc:
+        print(f"sc_shim: {exc}", file=sys.stderr)
+        return 2
     _offline_env()
     if len(sys.argv) < 2 or sys.argv[1] not in {"mem", "scpy"}:
         print("uso: sc_shim.py {mem|scpy} ...", file=sys.stderr)

@@ -18,7 +18,7 @@ from pathlib import Path
 from sc_hooks import core
 from sc_hooks.core import Ctx, Result, on
 
-CONFIG_FILE = core.CLAUDE_HOME / "hooks" / "no-commit-projects.local"
+CONFIG_FILE = core.CODE_HOME / "hooks" / "no-commit-projects.local"
 GIT_TIMEOUT_S = 5
 
 

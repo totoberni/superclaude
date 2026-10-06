@@ -47,7 +47,15 @@ import threading
 import time
 from pathlib import Path
 
-DEFAULT_PROGRESS_PATH = Path.home() / ".claude" / ".nb-progress.json"
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[1] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
+
+# Dato del profilo attivo: lo legge statusline_telemetry dalla stessa data home
+DEFAULT_PROGRESS_PATH = sc_profile.data_home() / ".nb-progress.json"
 SCHEMA_VERSION = 1
 DEFAULT_CELL_TIMEOUT = 300.0
 DEFAULT_HEARTBEAT_S = 0.5

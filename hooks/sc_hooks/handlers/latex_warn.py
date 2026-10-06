@@ -14,7 +14,7 @@ from pathlib import Path
 from sc_hooks import core
 from sc_hooks.core import Ctx, Result, on
 
-CACHE_DIR = core.CLAUDE_HOME / ".latex-warn-cache"
+CACHE_DIR = core.DATA_HOME / ".latex-warn-cache"
 MAX_LOG_BYTES = 8 * 1024 * 1024
 
 # (regex sul log, sostituzione che toglie i campi volatili). Pagina, numero di riga

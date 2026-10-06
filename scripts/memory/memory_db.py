@@ -18,8 +18,21 @@ import hashlib
 import html as _html
 import re
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Iterable
+
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[2] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
+# db_wall sta accanto a questo file: serve anche quando il modulo e' caricato da percorso
+_HERE = str(Path(__file__).resolve().parent)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from db_wall import CrossProfileDBError, assert_own_profile_path  # noqa: E402,F401
 
 try:
     import sqlite_vec
@@ -28,14 +41,16 @@ except ImportError:  # il sottocomando `sql` e i tool di sola lettura non ne han
 
 # --- Constants ---------------------------------------------------------------
 
-DB_PATH = Path.home() / ".claude" / "agent-memory" / ".memory.db"
+# DB del profilo attivo (SC_PROFILE); resta una costante di modulo perche' i test la sostituiscono
+DB_PATH = sc_profile.memory_db_path()
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 EMBED_DIM = 384
 VEC_CHUNK_SIZE = 256  # vec0 chunk slots; tight fit for our corpus (~393KB/256 rows @384-dim vs 1.57MB at the 1024 default). Single source of truth — used in _SCHEMA AND compact().
 # Pinned, persistent model cache. The FastEmbed default ($TMPDIR/fastembed_cache)
 # is ephemeral AND differs per shell/sandbox, causing "model not found" across
 # contexts (warm-up shell vs hook/skill runtime). Pin it so it is found everywhere.
-EMBED_CACHE_DIR = Path.home() / ".claude" / ".cache" / "fastembed"
+# Codice condiviso, non dato: tutti i profili usano lo stesso modello (anche offline).
+EMBED_CACHE_DIR = sc_profile.code_home() / ".cache" / "fastembed"
 # --- Hybrid retrieval tuning (ALL query-time; stored vectors are NOT affected) ---
 # Reciprocal Rank Fusion constant. Lower k => sharper emphasis on each arm's top
 # ranks. Tuned to the 20-30 band (was 60): the corpus is small and jargon-dense, so
@@ -122,6 +137,8 @@ def _embed_query(text: str) -> list[float]:
 
 def _connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
     """Open a connection with the sqlite-vec extension loaded."""
+    # Muro tra profili prima di creare cartelle o file
+    assert_own_profile_path(Path(db_path).expanduser())
     # Su un'installazione nuova ~/.claude/agent-memory/ non esiste ancora:
     # sqlite3 non crea le cartelle e fallirebbe con "unable to open database file".
     Path(db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -670,7 +687,8 @@ def migrate(root: Path | str, db_path: Path | str = DB_PATH) -> dict:
     EXCLUDE: _system/**, **/_archive/**, **/archive/**, _compact-snapshots,
              _stop-snapshots
     """
-    root = Path(root)
+    # Anche il corpus MD sorgente e' memoria: mai leggere quello di un altro profilo
+    root = assert_own_profile_path(Path(root))
     files = sorted(_iter_curated(root))
     upserted = 0
     for fp in files:
@@ -1441,7 +1459,7 @@ def run_sql(query: str, db_path: Path | str = DB_PATH) -> tuple[list[str], list[
     FileNotFoundError se il DB non esiste, sqlite3.Error per errori SQL.
     """
     q = _check_readonly_sql(query)
-    p = Path(db_path).expanduser()
+    p = assert_own_profile_path(Path(db_path).expanduser())
     if not p.is_file():
         raise FileNotFoundError(f"DB not found: {p}")
     conn = sqlite3.connect(p.resolve().as_uri() + "?mode=ro", uri=True)
@@ -1722,6 +1740,10 @@ if __name__ == "__main__":
     ns = parser.parse_args()
 
     db = Path(ns.db).expanduser() if ns.db else DB_PATH
+    try:
+        assert_own_profile_path(db)
+    except CrossProfileDBError as e:
+        _die(str(e), 3)
 
     if ns.cmd is None:
         parser.print_help()
@@ -1767,6 +1789,12 @@ if __name__ == "__main__":
             body = sys.stdin.read()
         else:
             p = Path(ns.text_file).expanduser()
+            # Stesso muro di --db, prima di ogni accesso al disco: un corpo letto dalla
+            # data home di un altro profilo porterebbe i suoi dati in questo DB
+            try:
+                assert_own_profile_path(p)
+            except CrossProfileDBError as e:
+                _die(f"--text-file refused: {e}", 3)
             if not p.exists():
                 _die(f"--text-file not found: {p}")
             body = p.read_text(encoding="utf-8", errors="replace")

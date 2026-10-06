@@ -20,10 +20,10 @@ from sc_hooks import core
 from sc_hooks.core import Ctx, Result, on
 
 HISTORY_LOG = core.LOG_DIR / "session-history.log"
-HISTORY_JSONL = core.CLAUDE_HOME / "history.jsonl"
-HISTORY_BACKUP_DIR = core.CLAUDE_HOME / "_backups" / "history"
-MEMORY_DB = core.CLAUDE_HOME / "agent-memory" / ".memory.db"
-MEMORY_BACKUP_DIR = core.CLAUDE_HOME / "_backups" / "memory"
+HISTORY_JSONL = core.DATA_HOME / "history.jsonl"
+HISTORY_BACKUP_DIR = core.DATA_HOME / "_backups" / "history"
+MEMORY_DB = core.sc_profile.memory_db_path(core.PROFILE)
+MEMORY_BACKUP_DIR = core.DATA_HOME / "_backups" / "memory"
 
 HISTORY_LOG_LINES = 500
 HISTORY_ROTATE_BYTES = 10 * 1024 * 1024

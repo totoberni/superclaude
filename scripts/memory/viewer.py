@@ -46,7 +46,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import memory_db  # noqa: E402  (path injected above)
 import render  # noqa: E402
 
-GATE_PATH = Path.home() / ".claude" / "agent-memory" / ".viewer" / "gate.html"
+# Pagina dati del profilo attivo (SC_PROFILE); sc_profile arriva gia' importato da memory_db
+GATE_PATH = memory_db.sc_profile.data_home() / "agent-memory" / ".viewer" / "gate.html"
 
 # Mirror memory_db's notation detection so multi-memory pages segment the same
 # way while threading a shared ScriptRegistry. (Single source of the regex/kind
@@ -381,6 +382,11 @@ def main(argv: list[str]) -> int:
     args = p.parse_args(argv)
 
     db_path = str(Path(args.db).expanduser())
+    try:
+        memory_db.assert_own_profile_path(db_path)
+    except memory_db.CrossProfileDBError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
 
     if args.gate:
         page, n_real = build_gate(db_path)

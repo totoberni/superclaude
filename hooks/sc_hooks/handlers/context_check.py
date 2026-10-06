@@ -12,7 +12,7 @@ import time
 from sc_hooks import core
 from sc_hooks.core import Ctx, Result, on
 
-CONTEXT_FILE = core.CLAUDE_HOME / ".context-latest.json"
+CONTEXT_FILE = core.DATA_HOME / ".context-latest.json"
 
 AUTOCOMPACT_MARGIN = 33000   # l'auto-compact scatta a window_size - 33000
 WARN_MARGIN = 20000          # avviso entro 20000 token da quella soglia
@@ -30,7 +30,8 @@ def _pos_int(value: object) -> int:
     return n if n > 0 else 0
 
 
-@on("PreToolUse", name="context-check")
+# Strumenti del matcher storico: Read/Glob/Grep sono nel matcher solo per il firewall dei profili
+@on("PreToolUse", tools=core.SHELL_TOOLS + core.WRITE_TOOLS + ("Agent",), name="context-check")
 def handle(ctx: Ctx) -> Result | None:
     try:
         with open(CONTEXT_FILE, "rb") as fh:

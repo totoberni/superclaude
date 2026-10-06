@@ -12,6 +12,14 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timezone, date, timedelta
+from pathlib import Path
+
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[1] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # PRICING TABLE  (USD per 1,000,000 tokens, per model family)                 #
@@ -95,9 +103,11 @@ BILLING_DAY = 8                     # day-of-month the recurring invoice posts
 EUR_USD_RATE = 1.08                 # comparison only; configurable
 # --------------------------------------------------------------------------- #
 
-PROJECTS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "projects")
-CACHE_PATH = os.path.join(os.path.expanduser("~"), ".claude", ".cost-cache.json")
-LEDGER_PATH = os.path.join(os.path.expanduser("~"), ".claude", ".cost-ledger.json")
+# Trascritti e cache sono dati del profilo attivo (SC_PROFILE)
+DATA_HOME = str(sc_profile.data_home())
+PROJECTS_DIR = os.path.join(DATA_HOME, "projects")
+CACHE_PATH = os.path.join(DATA_HOME, ".cost-cache.json")
+LEDGER_PATH = os.path.join(DATA_HOME, ".cost-ledger.json")
 
 # ---- TIER ADVISOR CONFIG (self-calibrated ESTIMATE — Anthropic publishes no absolute weekly limits) ----
 CURRENT_TIER = "X20"
@@ -111,7 +121,7 @@ TIER_CALIB_MAX_PCT = 95.0      # ignore near-saturation readings
 #   util5 = TIER_RATIO_X20_OVER_X5 * (seven_day_pct/100),
 # so the X5->X20 flip point is seven_day_pct ~= 100*TIER_SAFETY_MARGIN/TIER_RATIO_X20_OVER_X5 (~56.7%).
 # The recommendation hinges on TIER_RATIO_X20_OVER_X5; at low pct (e.g. 7%) the X5 call has wide margin.
-RATE_LATEST_PATH = os.path.join(os.path.expanduser("~"), ".claude", ".rate-latest.json")
+RATE_LATEST_PATH = os.path.join(DATA_HOME, ".rate-latest.json")
 
 
 def normalize_model(name):

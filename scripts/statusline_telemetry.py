@@ -4,14 +4,31 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[1] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
 
 HOME = os.path.expanduser("~")
-NB_PROGRESS_PATH = os.path.join(HOME, ".claude", ".nb-progress.json")
-COST_CACHE_PATH = os.path.join(HOME, ".claude", ".cost-cache.json")
-RATE_LATEST_PATH = os.path.join(HOME, ".claude", ".rate-latest.json")
+# Cache e stato appartengono alla data home del profilo attivo (SC_PROFILE)
+try:
+    DATA_HOME = str(sc_profile.data_home())
+except sc_profile.ProfileError:
+    if __name__ != "__main__":
+        raise
+    # La statusline viene ridisegnata di continuo: una riga sola, mai un traceback
+    print(f"{sc_profile.ENV_VAR} invalid: {os.environ.get(sc_profile.ENV_VAR, '').strip()}")
+    sys.exit(0)
+NB_PROGRESS_PATH = os.path.join(DATA_HOME, ".nb-progress.json")
+COST_CACHE_PATH = os.path.join(DATA_HOME, ".cost-cache.json")
+RATE_LATEST_PATH = os.path.join(DATA_HOME, ".rate-latest.json")
 # Il refresh lancia direttamente cost_cache_computer.py (accanto a questo file), senza bash.
 COST_REFRESH_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cost_cache_computer.py")
-COST_REFRESH_STAMP = os.path.join(HOME, ".claude", ".cost-refresh.stamp")
+COST_REFRESH_STAMP = os.path.join(DATA_HOME, ".cost-refresh.stamp")
 COST_REFRESH_MIN_INTERVAL_S = 120  # non rilanciare il refresh piu' spesso di cosi'
 IS_WINDOWS = os.name == "nt"
 # --- tunables -------------------------------------------------------------
@@ -1164,7 +1181,7 @@ def _persist_rate_sample(stdin, now):
         pass
 
 
-CONTEXT_LATEST_PATH = os.path.join(HOME, ".claude", ".context-latest.json")
+CONTEXT_LATEST_PATH = os.path.join(DATA_HOME, ".context-latest.json")
 
 
 def _replace_retry(tmp, dst, attempts=5, delay=0.02):

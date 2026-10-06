@@ -39,6 +39,13 @@ from pathlib import Path
 
 import yaml
 
+# sc_profile vive in <code home>/lib: il percorso si ricava da questo file, cosi'
+# funziona sia dall'albero live sia da una copia di staging
+_LIB_DIR = str(Path(__file__).resolve().parents[2] / "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+import sc_profile  # noqa: E402
+
 # --------------------------------------------------------------------------
 # Dati: pesi, voti, penalità (fonte di verità)
 # --------------------------------------------------------------------------
@@ -202,6 +209,11 @@ class RunContext:
     python: Path             # interprete del venv, oppure quello corrente se il venv manca
     settings: dict | None
     settings_error: str | None
+    data_root: Path | None = None  # data home (settings.json, agent-memory); None = root
+
+    @property
+    def data(self) -> Path:
+        return self.root if self.data_root is None else self.data_root
 
 
 @dataclass
@@ -520,7 +532,9 @@ def run_smokes(root: Path, targets: dict[str, tuple[str, list[str]]]) -> list[Fi
             problem = smoke_once(targets[event], event, home, env)
             if problem:
                 found.append(Finding("hooks", "smoke", rel(root, root / "hooks" / "dispatch.py"), f"{event}: {problem}"))
-        found += handler_error_findings(root, home / ".claude" / "logs" / "hooks.log")
+        # Gli hook del sandbox scrivono nella data home del profilo, relativa alla HOME finta
+        sandbox_data = home / sc_profile.data_home().relative_to(Path.home())
+        found += handler_error_findings(root, sandbox_data / "logs" / "hooks.log")
     return found
 
 
@@ -618,7 +632,7 @@ def memory_component(ctx: RunContext) -> tuple[int, str, list[Finding]]:
         return 0, "mem_health.py missing", [Finding("memory", "mem_health", rel(ctx.root, script), "missing", 100)]
     try:
         proc = subprocess.run([str(ctx.python), "-B", str(script)], capture_output=True, timeout=MEM_TIMEOUT_S,
-                              env=child_env(CLAUDE_DIR=str(ctx.root)), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                              env=child_env(CLAUDE_DIR=str(ctx.data)), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
         text = proc.stdout.decode("utf-8", "replace")
     except (OSError, subprocess.SubprocessError) as exc:
         text = f"could not run: {exc}"
@@ -628,7 +642,7 @@ def memory_component(ctx: RunContext) -> tuple[int, str, list[Finding]]:
     score = max(0, min(100, score))
     findings = []
     if score < 100:
-        db = rel(ctx.root, ctx.root / "agent-memory" / ".memory.db")
+        db = rel(ctx.root, ctx.data / "agent-memory" / ".memory.db")
         findings.append(Finding("memory", "mem_health", db, f"mem_health.py SCORE {score}/100: {summary}", 100 - score))
     return score, f"mem_health.py {score}/100", findings
 
@@ -870,12 +884,21 @@ TABLE_SCORERS = {
 RATIO_SCORERS = {"memory": memory_component, "regression": regression_component}
 
 
-def build_context(root: Path) -> RunContext:
-    settings, err = load_json(root / "settings.json")
+def default_data_root(root: Path) -> Path:
+    """Data home del profilo attivo se root e' l'installazione reale, altrimenti root stessa."""
+    if sc_profile.is_within(root, sc_profile.code_home()) and sc_profile.is_within(sc_profile.code_home(), root):
+        return sc_profile.data_home()
+    return root
+
+
+def build_context(root: Path, data_root: Path | None = None) -> RunContext:
+    data = default_data_root(root) if data_root is None else data_root
+    # settings.json e' il primo di SETTINGS_FILES; settings.local.json non porta la tabella degli hook
+    settings, err = load_json(data / sc_profile.SETTINGS_FILES[0])
     if err is None and not isinstance(settings, dict):
         settings, err = None, "top level is not an object"
     py = venv_python(root)
-    return RunContext(root, py if py.is_file() else Path(sys.executable), settings, err)
+    return RunContext(root, py if py.is_file() else Path(sys.executable), settings, err, data)
 
 
 def score_component(ctx: RunContext, key: str, label: str, weight: int) -> Component:
@@ -894,8 +917,8 @@ def aggregate(components: list[Component]) -> tuple[int, str]:
     return score, grade
 
 
-def run(root: Path) -> dict:
-    ctx = build_context(root)
+def run(root: Path, data_root: Path | None = None) -> dict:
+    ctx = build_context(root, data_root)
     components = [score_component(ctx, key, label, weight) for key, label, weight in COMPONENTS]
     score, grade = aggregate(components)
     return {
@@ -947,7 +970,9 @@ def render_markdown(report: dict) -> str:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="super_health.py", description="Superclaude health score /100.")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
-    parser.add_argument("--root", type=Path, default=Path.home() / ".claude", help="install root (default ~/.claude)")
+    parser.add_argument("--root", type=Path, default=sc_profile.code_home(), help="install root (default ~/.claude)")
+    parser.add_argument("--data-root", type=Path, default=None,
+                        help="profile data home (default: SC_PROFILE data home for the real install, else --root)")
     return parser.parse_args(argv)
 
 
@@ -959,7 +984,8 @@ def main(argv: list[str]) -> int:
             pass
     args = parse_args(argv)
     try:
-        report = run(args.root.expanduser())
+        root = args.root.expanduser()
+        report = run(root) if args.data_root is None else run(root, args.data_root.expanduser())
     except Exception:  # noqa: BLE001 - crash interno: exit 2 con traceback
         traceback.print_exc()
         return 2

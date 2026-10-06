@@ -33,7 +33,9 @@ def main() -> int:
             pass
     try:
         ctx = core.read_ctx(sys.argv[1] if len(sys.argv) > 1 else None)
-        _load_handlers()
+        if not core.PROFILE_ERROR:
+            # Con un profilo ignoto gli handler non si caricano: i loro percorsi dati non esistono
+            _load_handlers()
         return core.dispatch(ctx)
     except Exception as exc:  # noqa: BLE001 - mai bloccare la sessione per un bug
         core.log_error("dispatch", exc)

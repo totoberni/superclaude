@@ -13,7 +13,7 @@ from __future__ import annotations
 from sc_hooks import core
 from sc_hooks.core import Ctx, Result, on
 
-DB_PATH = core.CLAUDE_HOME / "agent-memory" / ".memory.db"
+DB_PATH = core.sc_profile.memory_db_path(core.PROFILE)
 
 MAX_TOTAL = 9800        # tetto complessivo del testo iniettato
 MAX_SLICE = 4000        # tetto della recovery slice
@@ -22,7 +22,7 @@ RECOVERY_TERMS = "recovery context current state handoff"
 
 POINTER = (
     "MEMORY (read this first): your persistent memory is a hybrid-search SQLite DB at "
-    "~/.claude/agent-memory/.memory.db, queried with the `mem` command. There is NO MEMORY.md "
+    f"~/{core.DATA_HOME.name}/agent-memory/.memory.db, queried with the `mem` command. There is NO MEMORY.md "
     "and there are NO MD memory files to read. BEFORE you rely on any assumption about a "
     "project, library, tool, convention, or past decision, FIRST query it:\n"
     '  mem search "<your topic> gotchas" -k 8\n'
