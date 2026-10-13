@@ -280,6 +280,23 @@ def test_read_tools_reach_pretooluse_unfiltered():
         assert hit[0]["if"] is None, f"{tool}: il firewall non puo' stare dietro un filtro"
 
 
+# Ogni strumento nativo che esegue comandi o legge/scrive file: senza PreToolUse sarebbe
+# invisibile a firewall, git-policy, content-scan e write-acl
+COMMAND_AND_FILE_TOOLS = ("Bash", "PowerShell", "Monitor", "Read", "Write", "Edit", "MultiEdit",
+                          "NotebookEdit", "Glob", "Grep")
+
+
+@pytest.mark.parametrize("tool", COMMAND_AND_FILE_TOOLS)
+def test_command_and_file_tools_reach_pretooluse_unfiltered(tool):
+    hit = [e for e in entries(load_hooks(), "PreToolUse") if matches(e["matcher"], tool)]
+    assert len(hit) == 1, (tool, hit)
+    assert hit[0]["if"] is None, f"{tool}: una guardia non puo' stare dietro un filtro"
+
+
+def test_shell_tools_include_every_command_runner():
+    assert set(core.SHELL_TOOLS) == {"Bash", "PowerShell", "Monitor"}
+
+
 def test_read_tools_do_not_wake_other_handlers():
     """Stesso criterio di core.dispatch: `tools` vuoto vale per ogni strumento."""
     for event, tools, name, fn in load_registry():
@@ -311,7 +328,7 @@ def test_dispatch_of_read_tool_runs_only_allowed_handlers(tool, mk, monkeypatch,
 # I controlli hanno denti: configurazioni sintetiche che DEVONO fallire
 # --------------------------------------------------------------------------
 def _write_json(tmp_path: Path, payload: dict) -> dict:
-    """Passa dal testo JSON vero e proprio, come fara' apply-hooks-v2.ps1."""
+    """Passa dal testo JSON vero e proprio, come fa scripts/settings/apply_settings.py."""
     target = tmp_path / "hooks.json"
     target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return json.loads(target.read_text(encoding="utf-8"))

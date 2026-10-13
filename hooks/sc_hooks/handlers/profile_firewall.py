@@ -101,11 +101,35 @@ _ENV_DROP = re.compile(
 )
 _NEW_ENV_PROCESS = re.compile(r"(?<![\w-])(?:start-process|saps|start)\b[^\n;|]*?\s-usen\w*", re.I)
 
+# Chiave DeepSeek (entrambi i profili): helper, voce del portachiavi o di cmdkey, store-key.py eseguito
+_KEY_HELPER = re.compile(r"(?<![\w-])(?:key-helper|get-storedcredential)(?![\w-])", re.I)
+_KEY_SERVICE = re.compile(r"(?<![\w-])claude-deepseek(?![\w-])", re.I)
+_KEYRING_GET = re.compile(r"(?<![\w-])keyring\b.*?(?<![\w-])get(?:_password|_credential)?\b", re.I | re.S)
+_CMDKEY = re.compile(r"(?<![\w-])cmdkey\b", re.I)
+_STORE_KEY = frozenset({"store-key", "store-key.py"})
+_LAUNCHERS = frozenset({"py", "uv", "uvx", "pipx"}) | _SHELLS | _RUNNERS
+_KEY_DENY = ("the DeepSeek key is never read by agents: commands that reference the key helper, the "
+             "claude-deepseek keyring or cmdkey entry, Get-StoredCredential, or that run store-key.py are "
+             "denied in every profile; the owner runs them in a terminal")
+
+
+def _glob_regex(pattern: str) -> str:
+    return "".join(r"[^" + _STOP + r"/]*" if c == "*" else re.escape(c) for c in pattern)
+
+
+# File privati fuori dalle data home citati nel testo (`~/.claude.json`, `$HOME/.claude.json.backup`)
+_PRIVATE_MENTION = re.compile(
+    r"(?<![\w.\-])(?:" + "|".join(_glob_regex(p) for pats in sc_profile.PROFILE_PRIVATE_FILES.values()
+                                  for p in pats) + r")(?![\w.\-])",
+    re.I,
+)
+
 
 @dataclass(frozen=True)
 class _Hit:
     profile: str           # profilo della data home che contiene il percorso
     rel: str               # percorso relativo a quella home, minuscolo; "" = la home stessa
+    private: bool = False  # file privato del profilo fuori dalla data home: rel e' relativo alla HOME
 
     @property
     def first(self) -> str:
@@ -127,6 +151,8 @@ def _code_dir() -> str:
 def _expand(text: str, home: str = "") -> str:
     """Espande le grafie della HOME (~, $HOME, ${HOME}, $env:X, ${env:X}, %X%) e /mnt/c, /c."""
     home = home or str(Path.home()).replace("\\", "/")
+    # \\?\C:, \\localhost\C$, ... prima di tutto: il `?` non e' un carattere jolly, `$` non e' una variabile
+    text = sc_profile.local_form(text)
     text = _HOME_SPELLING.sub(lambda _m: home, text)
     text = _MNT.sub(lambda m: m.group(1) + ":", text)
     return _MSYS.sub(lambda m: m.group(1) + ":", text)
@@ -210,16 +236,21 @@ class _Scanner:
         self.code_owner = _code_profile()
         self.home_fwd = str(Path.home()).replace("\\", "/")
         self.home_text = _util.canon(self.home_fwd)
+        self.home_forms = {self.home_text} | {_util.canon(f) for f in sc_profile.resolved_forms(Path.home())}
         self.budget = _MAX_REALPATH
         self._cwds: dict[str, list[str]] = {}
 
     def locate(self, path: str) -> list[_Hit]:
+        path = sc_profile.local_form(path)
         hits: list[_Hit] = []
         for name, roots in self.homes.items():
             for root in roots:
                 if sc_profile.is_within(path, root):
                     hits.append(_Hit(name, path[len(root):].lstrip("/")))
                     break
+        owner = sc_profile.private_file_owner(path, self.home_forms) if path else None
+        if owner:
+            hits.append(_Hit(owner, path.replace("\\", "/").rsplit("/", 1)[-1].lower(), private=True))
         return hits
 
     def real_forms(self, path: str) -> set[str]:
@@ -234,7 +265,7 @@ class _Scanner:
 
     def cwd_forms(self, cwd: str) -> list[str]:
         if cwd not in self._cwds:
-            base = _util.canon(cwd or os.getcwd())
+            base = _util.canon(sc_profile.local_form(cwd or os.getcwd()))
             self._cwds[cwd] = sorted(self.real_forms(base)) if base else []
         return self._cwds[cwd]
 
@@ -281,6 +312,17 @@ class _Scanner:
                 hit = self._mention(text, m, name, at_home)
                 if hit:
                     hits.append(hit)
+        return hits + self._private_mentions(text, cwd, at_home)
+
+    def _private_mentions(self, text: str, cwd: str, at_home: bool) -> list[_Hit]:
+        """Citazioni dei file privati nella HOME (`~/.claude.json`): contano sotto la HOME, o nude con la cwd li'."""
+        hits: list[_Hit] = []
+        for m in _PRIVATE_MENTION.finditer(text):
+            owner = sc_profile.private_owner_of_name(m.group(0))
+            prefix = _PREFIX_RUN.search(text[max(0, m.start() - 260):m.start()]).group(0).rstrip("/")
+            base = sc_profile.local_form(cwd) or None
+            if owner and (_util.canon(prefix, base) in self.home_forms if prefix else at_home):
+                hits.append(_Hit(owner, m.group(0).lower(), private=True))
         return hits
 
     def _mention(self, text: str, m: re.Match[str], profile: str, at_home: bool) -> _Hit | None:
@@ -301,6 +343,8 @@ class _Scanner:
 # Politica
 # --------------------------------------------------------------------------
 def _display(hit: _Hit) -> str:
+    if hit.private:
+        return "~/" + hit.rel
     base = "~/" + sc_profile.profiles()[hit.profile].name
     return f"{base}/{hit.rel}" if hit.rel else base
 
@@ -318,6 +362,11 @@ def _owner_only(where: str) -> str:
 
 def _verdict(active: str, hit: _Hit, write: bool) -> str | None:
     where = _display(hit)
+    if hit.private:
+        return None if hit.profile == active else (
+            f"{active} may not access {where}: it is a private file of the {hit.profile} profile outside "
+            "its data home (claude.ai account, per-project permissions, MCP servers); read or write it "
+            f"only from the {hit.profile} profile")
     code = _code_profile()
     if hit.profile == active:
         owner_only = hit.rel in _SETTINGS or (active != code and hit.rel == _GIT_POLICY)
@@ -513,6 +562,8 @@ def _git_reason(cmd: str, cwd: str, active: str, scan: _Scanner) -> str | None:
 
 def _command_reason(cmd: str, cwd: str, active: str, scan: _Scanner) -> str | None:
     """Controlli sull'intero comando (anche dentro stringhe annidate)."""
+    if _KEY_HELPER.search(cmd) or (_KEY_SERVICE.search(cmd) and (_KEYRING_GET.search(cmd) or _CMDKEY.search(cmd))):
+        return _KEY_DENY
     if _PROFILE_CHANGE.search(cmd):
         return (f"commands that change {sc_profile.ENV_VAR} are denied (a subprocess must not switch "
                 f"profile); this session is {active}, start the other profile from its own launcher")
@@ -525,7 +576,19 @@ def _command_reason(cmd: str, cwd: str, active: str, scan: _Scanner) -> str | No
     return _git_reason(cmd, cwd, active, scan)
 
 
+def _runs_store_key(seg: str) -> bool:
+    """Il segmento esegue store-key.py (direttamente o tramite python, uv, una shell, ...)?"""
+    m = _LEAD.match(seg)
+    stems = [_stem(t) for t in _util.tokens(seg[m.end():] if m else seg)]
+    if not stems:
+        return False
+    launcher = stems[0] in _LAUNCHERS or stems[0].startswith("python")
+    return stems[0] in _STORE_KEY or (launcher and any(s in _STORE_KEY for s in stems[1:]))
+
+
 def _segment_reason(seg: str, here: str, active: str, scan: _Scanner) -> str | None:
+    if _runs_store_key(seg):
+        return _KEY_DENY
     programs = _programs(seg)
     if active != scan.code_owner and programs & _CLAUDE_CLI:
         return (f"{active} may not launch the claude CLI: with the env scrub a child claude starts the "
@@ -585,9 +648,21 @@ def handle(ctx: core.Ctx) -> core.Result | None:
         reason = _reason(ctx, active)
     except Exception as exc:  # noqa: BLE001 - qualunque difetto della guardia
         core.log_error(NAME, exc)
-        # Nel profilo predefinito un difetto della guardia non blocca il lavoro; negli altri fail closed
+        # Nel profilo predefinito un difetto della guardia non blocca il lavoro, salvo citazioni
+        # testuali di un'altra data home; negli altri profili fail closed
         if active == sc_profile.DEFAULT_PROFILE:
-            return None
-        reason = (f"fail closed: the profile firewall failed ({type(exc).__name__}) under the {active} "
-                  "profile; the call is denied, see the hooks log")
+            reason = _fail_open_reason(ctx, active, exc)
+        else:
+            reason = (f"fail closed: the profile firewall failed ({type(exc).__name__}) under the {active} "
+                      "profile; the call is denied, see the hooks log")
     return core.Result.deny(reason) if reason else None
+
+
+def _fail_open_reason(ctx: core.Ctx, active: str, exc: Exception) -> str | None:
+    """Controllo di riserva che non puo' fallire: sottostringa del nome di un'altra data home nell'input grezzo."""
+    raw = str(ctx.tool_input).lower()
+    mark = next((d for p, d in sc_profile.DATA_HOME_DIRS.items() if p != active and d.lower() in raw), None)
+    if mark is None:
+        return None
+    return (f"fail closed: the profile firewall failed ({type(exc).__name__}) and the tool input names "
+            f"~/{mark}; the call is denied, see the hooks log")

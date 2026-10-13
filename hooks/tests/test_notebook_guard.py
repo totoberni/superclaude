@@ -268,4 +268,4 @@ def test_malformed_input(mk, tool, ti):
 
 def test_registration_covers_all_tools():
     (tools,) = [set(t) for e, t, n, _ in core._REGISTRY if n == "notebook-guard" and e == "PreToolUse"]
-    assert tools == {"NotebookEdit", "Write", "Edit", "MultiEdit", "Bash", "PowerShell"}
+    assert tools == {"NotebookEdit", "Write", "Edit", "MultiEdit", "Bash", "PowerShell", "Monitor"}

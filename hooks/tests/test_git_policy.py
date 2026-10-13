@@ -154,3 +154,46 @@ def test_non_dict_tool_input_and_bad_cwd(mk, flag):
     ctx = mk("Bash", role="worker", command="git push")
     ctx.cwd = None
     assert denied(git_policy.handle(ctx))
+
+
+# Profilo non default (deepseek): git sempre spento salvo flag esplicito, override ignorato.
+
+@pytest.fixture
+def deepseek(monkeypatch):
+    monkeypatch.setenv("SC_PROFILE", "deepseek")
+
+
+DEEPSEEK_CMDS = ["git commit -m x", "git push", "git -C /c/repo commit -m x", "git -C /c/repo push"]
+
+
+@pytest.mark.parametrize("cmd", DEEPSEEK_CMDS)
+def test_deepseek_without_flag_denies(mk, home, deepseek, cmd):
+    assert denied(git_policy.handle(mk("Bash", command=cmd)))
+
+
+def test_deepseek_unreadable_flag_denies(mk, home, deepseek):
+    (home / ".claude" / "config" / "git-policy").mkdir()
+    assert denied(git_policy.handle(mk("Bash", command="git push")))
+
+
+@pytest.mark.parametrize("cmd", DEEPSEEK_CMDS)
+def test_deepseek_flag_false_override_true_still_denies(mk, flag, deepseek, tmp_path, monkeypatch, cmd):
+    flag("false")
+    other = tmp_path / "override-flag"
+    other.write_text("enabled", encoding="utf-8")
+    monkeypatch.setenv("SUPERCLAUDE_GIT_POLICY_FILE", str(other))
+    assert denied(git_policy.handle(mk("Bash", command=cmd)))
+
+
+@pytest.mark.parametrize("cmd", DEEPSEEK_CMDS)
+def test_deepseek_flag_true_allows(mk, flag, deepseek, cmd):
+    flag("true")
+    assert git_policy.handle(mk("Bash", command=cmd)) is None
+
+
+def test_default_profile_missing_flag_allows_and_override_honoured(mk, home, tmp_path, monkeypatch):
+    assert git_policy.handle(mk("Bash", command="git push")) is None
+    other = tmp_path / "override-flag"
+    other.write_text("disabled", encoding="utf-8")
+    monkeypatch.setenv("SUPERCLAUDE_GIT_POLICY_FILE", str(other))
+    assert denied(git_policy.handle(mk("Bash", command="git -C /c/repo push")))

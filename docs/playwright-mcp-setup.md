@@ -43,7 +43,7 @@ When ready to enable, add to `~/.claude/settings.json` under a new `mcpServers` 
 }
 ```
 
-**Important**: Do NOT add this config until explicitly instructed by the user. `settings.json` is owner-managed (see `docs/win11-migration/apply-settings.ps1`); the owner makes the edit, keeping a backup and validating the JSON afterwards.
+**Important**: Do NOT add this config until explicitly instructed by the user. `settings.json` is owner-managed (see `bin/apply-settings.ps1 -Profile superclaude`); the owner makes the edit, keeping a backup and validating the JSON afterwards.
 
 ## Agent Updates (when ready)
 

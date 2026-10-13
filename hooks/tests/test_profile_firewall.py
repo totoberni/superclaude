@@ -416,7 +416,7 @@ def test_spellings_deepseek_to_sc(run, home, idx):
 
 @pytest.mark.parametrize("idx", range(14))
 def test_spellings_of_allowed_paths_stay_allowed(run, home, idx):
-    assert run(SC, "Bash", command=f"cat {_spellings(home, '.claude-deepseek/bin/key-helper.py')[idx]}") is None
+    assert run(SC, "Bash", command=f"cat {_spellings(home, '.claude-deepseek/bin/launcher.py')[idx]}") is None
     assert run(DS, "Bash", command=f"cat {_spellings(home, '.claude/scripts/memory/mem.py')[idx]}") is None
 
 
@@ -444,10 +444,10 @@ def test_relative_paths_deepseek(run, home, cwd_rel, cmd):
 
 
 def test_relative_paths_allowed(run, home):
-    assert run(SC, "Bash", cwd=ds(home, "bin"), command="cat key-helper.py") is None
+    assert run(SC, "Bash", cwd=ds(home, "bin"), command="cat launcher.py") is None
     assert run(DS, "Bash", cwd=sc(home, "scripts"), command="python memory/mem.py stats") is None
     # `git status` con cwd in ~/.claude/scripts ora e' negato (regola B, git): vedi test_s3_*
-    assert run(SC, "Read", cwd=ds(home), file_path="bin/key-helper.py") is None
+    assert run(SC, "Read", cwd=ds(home), file_path="bin/launcher.py") is None
     assert run(SC, "Read", cwd=ds(home), file_path="plans/p/plan.md")
 
 
@@ -589,9 +589,9 @@ def test_s2_deepseek_copies_out_of_shared_code_allowed(run, home, cmd):
 
 
 def test_s2_setup_entries_still_writable_by_superclaude(run, home):
-    assert run(SC, "Bash", cwd=home / "code", command="cp -t ~/.claude-deepseek/bin key-helper.py") is None
+    assert run(SC, "Bash", cwd=home / "code", command="cp -t ~/.claude-deepseek/bin launcher.py") is None
     assert run(SC, "PowerShell", cwd=home / "code",
-               command="Copy-Item -Destination ~/.claude-deepseek/bin -Path ./key-helper.py") is None
+               command="Copy-Item -Destination ~/.claude-deepseek/bin -Path ./launcher.py") is None
     assert run(SC, "Bash", cwd=home / "code", command="cp -t ~/.claude-deepseek/plans x.md")
 
 
@@ -675,3 +675,180 @@ def test_s6_internal_error_fails_closed_only_outside_default_profile(run, home, 
     assert reason and "fail closed" in reason and "RuntimeError" in reason
     assert run(SC, "Bash", cwd=home / "code", command="git status") is None
     assert logged == [f"{fw.NAME}:boom", f"{fw.NAME}:boom"]
+
+
+
+# --------------------------------------------------------------------------
+# W2-A1-A3-A6-A10: file privati, forme device/UNC, chiave DeepSeek, Monitor, riserva fail-open
+# --------------------------------------------------------------------------
+def fill(text: str, home: Path) -> str:
+    fwd = str(home).replace("\\", "/")
+    return text.replace("{home}", fwd).replace("{win}", win(home)).replace("{msys}", msys(home))
+
+
+PRIVATE = [".claude.json", ".claude.json.backup", ".claude.json.backup.1712345678", ".CLAUDE.JSON"]
+
+
+@pytest.mark.parametrize("name", PRIVATE)
+@pytest.mark.parametrize("tool", ["Read", "Write", "Edit"])
+def test_a1_private_file_denied_to_deepseek_only(run, home, tool, name):
+    p = home / name
+    for spelled in (str(p), win(p), msys(p), str(p).replace("\\", "/")):
+        reason = run(DS, tool, file_path=spelled)
+        assert reason and "private file of the superclaude profile" in reason, spelled
+        assert run(SC, tool, file_path=spelled) is None, spelled
+
+
+A1_SHELL = [
+    ("Bash", "cat ~/.claude.json"), ("Bash", "cat $HOME/.claude.json"), ("Bash", "cat ${HOME}/.claude.json.backup"),
+    ("Bash", 'cat "{home}/.claude.json"'), ("Bash", "cat {msys}/.claude.json"), ("Bash", "cp ~/.claude.json /tmp/x"),
+    ("Bash", "echo x > ~/.claude.json"), ("Bash", "cd ~ && cat .claude.json"),
+    ("Bash", "python -c \"print(open(r'{win}\\.claude.json').read())\""),
+    ("PowerShell", "Get-Content ~\\.claude.json"), ("PowerShell", "Get-Content $env:USERPROFILE\\.claude.json"),
+    ("PowerShell", "Get-Content ${env:USERPROFILE}/.claude.json.backup.17"),
+    ("PowerShell", "type %USERPROFILE%\\.claude.json"), ("PowerShell", "Get-Content '{win}\\.claude.json'"),
+    ("Monitor", "tail -f ~/.claude.json"),
+]
+
+
+@pytest.mark.parametrize("tool,cmd", A1_SHELL)
+def test_a1_private_file_shell_spellings(run, home, tool, cmd):
+    command = fill(cmd, home)
+    reason = run(DS, tool, cwd=home / "code", command=command)
+    assert reason and "private file of the superclaude profile" in reason
+    assert run(SC, tool, cwd=home / "code", command=command) is None
+
+
+def test_a1_bare_name_counts_only_with_cwd_at_home(run, home):
+    assert run(DS, "Bash", cwd=home, command="cat .claude.json")
+    assert run(DS, "Bash", cwd=home / "code" / "proj", command="cat .claude.json") is None
+
+
+@pytest.mark.parametrize("tool,ti", [
+    ("Read", {"file_path": "{home}/.claude-deepseek/.claude.json"}),
+    ("Write", {"file_path": "{home}/.claude-deepseek/.claude.json"}),
+    ("Read", {"file_path": "{home}/code/proj/.claude.json"}),
+    ("Read", {"file_path": "{home}/.claude.jsonx"}),
+    ("Bash", {"command": "cat ~/.claude-deepseek/.claude.json"}),
+    ("Bash", {"command": "cat ~/code/proj/.claude.json ./.claude.json"}),
+])
+def test_a1_deepseek_own_and_project_claude_json_allowed(run, home, tool, ti):
+    assert run(DS, tool, cwd=home / "code" / "proj", **{k: fill(v, home) for k, v in ti.items()}) is None
+
+
+def _short(p: Path) -> str:
+    import ctypes
+    buf = ctypes.create_unicode_buffer(1024)
+    n = ctypes.windll.kernel32.GetShortPathNameW(str(p), buf, 1024)
+    return buf.value if n else ""
+
+
+def test_a1_short_name(run, home):
+    cj = home / ".claude.json"
+    cj.write_text("{}")
+    short = _short(cj)
+    if "~" not in short.rsplit("\\", 1)[-1]:
+        pytest.skip("8.3 names disabled")
+    assert run(DS, "Read", file_path=short)
+    assert run(DS, "Bash", cwd=home / "code", command=f'type "{short}"')
+    assert run(SC, "Read", file_path=short) is None
+
+
+def device_forms(p: Path) -> dict[str, str]:
+    w = win(p)
+    d, rest = w[0], w[2:]
+    return {"qmark": "\\\\?\\" + w, "dot": "\\\\.\\" + w, "unc-qmark": "\\\\?\\UNC\\localhost\\" + d + "$" + rest,
+            "localhost": "\\\\localhost\\" + d + "$" + rest, "loopback": "\\\\127.0.0.1\\" + d + "$" + rest,
+            "fwd-qmark": "//?/" + w.replace("\\", "/"), "fwd-localhost": "//localhost/" + d + "$" + rest.replace("\\", "/")}
+
+
+@pytest.mark.parametrize("form", list(device_forms(Path("C:/x"))))
+@pytest.mark.parametrize("profile,which,rel", [
+    (DS, sc, "agent-memory/.memory.db"), (SC, ds, "agent-memory/.memory.db"), (DS, sc, "plans/p/plan.md"),
+    (SC, ds, "plans/p/plan.md"),
+])
+def test_a3_device_and_unc_forms_denied(run, home, form, profile, which, rel):
+    path = device_forms(which(home, rel))[form]
+    assert run(profile, "Read", file_path=path), path
+    assert run(profile, "Bash", cwd=home / "code", command=f"cat '{path}'"), path
+    assert run(profile, "PowerShell", cwd=home / "code", command=f'Get-Content "{path}"'), path
+
+
+@pytest.mark.parametrize("form", list(device_forms(Path("C:/x"))))
+def test_a3_device_forms_of_private_file(run, home, form):
+    path = device_forms(home / ".claude.json")[form]
+    assert run(DS, "Read", file_path=path), path
+    assert run(DS, "Bash", cwd=home / "code", command=f"cat '{path}'"), path
+    assert run(SC, "Read", file_path=path) is None
+
+
+@pytest.mark.parametrize("form", list(device_forms(Path("C:/x"))))
+@pytest.mark.parametrize("profile,which,rel", [
+    (DS, sc, "skills/s/SKILL.md"), (SC, sc, "agent-memory/.memory.db"), (DS, ds, "agent-memory/.memory.db"),
+    (SC, ds, "bin/mem"),
+])
+def test_a3_device_forms_keep_allowed_access(run, home, form, profile, which, rel):
+    path = device_forms(which(home, rel))[form]
+    assert run(profile, "Read", file_path=path) is None, path
+    assert run(profile, "Bash", cwd=home / "code", command=f"cat '{path}'") is None, path
+
+
+def test_a3_device_form_cwd(run, home):
+    cwd = device_forms(sc(home, "agent-memory"))["qmark"]
+    assert run(DS, "Bash", cwd=cwd, command="cat .memory.db")
+
+
+KEY_CMDS = [
+    ("Bash", "python ~/.claude-deepseek/bin/key-helper.py"), ("Bash", "cat ~/.claude/bin/key-helper.py"),
+    ("PowerShell", "& $HOME\\.claude-deepseek\\bin\\key-helper.ps1"), ("Bash", "key-helper"),
+    ("Bash", "keyring get claude-deepseek api"), ("Bash", "python -m keyring get claude-deepseek api"),
+    ("Bash", "python -c \"import keyring; print(keyring.get_password('claude-deepseek', 'api'))\""),
+    ("Bash", "python -c \"import keyring as k; k.get_credential('claude-deepseek', None)\""),
+    ("PowerShell", "cmdkey /list:claude-deepseek"), ("PowerShell", "Get-StoredCredential -Target claude-deepseek"),
+    ("PowerShell", "Get-StoredCredential"), ("Bash", "python store-key.py"),
+    ("Bash", "py -3 ~/.claude/scripts/store-key.py"), ("Bash", "./store-key.py"), ("Bash", "uv run store-key.py"),
+    ("Bash", "bash -c 'python store-key.py'"), ("PowerShell", "python3.12 C:\\x\\store-key.py --force"),
+    ("Monitor", "python store-key.py"), ("Monitor", "keyring get claude-deepseek api"),
+]
+
+
+@pytest.mark.parametrize("profile", [SC, DS])
+@pytest.mark.parametrize("tool,cmd", KEY_CMDS)
+def test_a6_key_access_denied_in_both_profiles(run, home, profile, tool, cmd):
+    reason = run(profile, tool, cwd=home / "code", command=cmd)
+    assert reason and "the DeepSeek key is never read by agents" in reason
+
+
+@pytest.mark.parametrize("profile", [SC, DS])
+@pytest.mark.parametrize("cmd", [
+    "keyring --list-backends", "keyring get other-service api", "cmdkey /list", "git add store-key.py",
+    "grep -n set store-key.py", "python -c \"import keyring; keyring.get_password('other', 'x')\"",
+])
+def test_a6_unrelated_keyring_and_store_key_mentions_allowed(run, home, profile, cmd):
+    assert run(profile, "Bash", cwd=home / "code", command=cmd) is None
+
+
+@pytest.mark.parametrize("profile,which", [(DS, sc), (SC, ds)])
+def test_monitor_is_screened_like_bash(run, home, profile, which):
+    cmd = f"cat {which(home, 'agent-memory/.memory.db')}"
+    assert run(profile, "Monitor", cwd=home / "code", command=cmd, description="m")
+    assert run(profile, "Bash", cwd=home / "code", command=cmd)
+
+
+@pytest.mark.parametrize("profile", [SC, DS])
+def test_monitor_without_command_passes(run, home, profile):
+    assert run(profile, "Monitor", cwd=home / "code", description="m") is None
+    assert run(profile, "Monitor", cwd=home / "code", command="tail -f build.log") is None
+
+
+def test_a10_superclaude_fail_open_except_ds_home_mentions(run, home, monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(fw, "_reason", boom)
+    monkeypatch.setattr(core, "log_error", lambda where, exc: None)
+    reason = run(SC, "Bash", cwd=home / "code", command="cat ~/.claude-deepseek/plans/p/plan.md")
+    assert reason and "fail closed" in reason and "RuntimeError" in reason
+    assert run(SC, "Read", file_path=win(home) + "\\.Claude-DeepSeek\\x")
+    assert run(SC, "Monitor", command="tail ~/.claude-deepseek/tmp/x")
+    assert run(SC, "Bash", cwd=home / "code", command="cat ~/.claude/plans/p/plan.md") is None
+    assert run(SC, "Read", file_path=str(home / "code" / "x.py")) is None

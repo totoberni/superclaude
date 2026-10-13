@@ -4,7 +4,7 @@ How the guards described in `~/.claude/docs/guard-subsystem.md` are switched on,
 
 ## Registration
 
-The dispatcher is registered into `~/.claude/settings.json` by `docs/win11-migration/apply-settings.ps1`, run by the owner (agents do not edit `settings.json`). The script writes one `dispatch.py <Event>` command per hook event; until it has been run, no guard is active. New handlers need no further registration: any module dropped into `~/.claude/hooks/sc_hooks/handlers/` is imported by the dispatcher on the next event.
+The dispatcher is registered into `~/.claude/settings.json` by `bin/apply-settings.ps1 -Profile superclaude`, run by the owner (agents do not edit `settings.json`). The script writes one `dispatch.py <Event>` command per hook event; until it has been run, no guard is active. New handlers need no further registration: any module dropped into `~/.claude/hooks/sc_hooks/handlers/` is imported by the dispatcher on the next event.
 
 ## Modes and kill switches
 

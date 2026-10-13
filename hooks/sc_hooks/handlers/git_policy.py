@@ -23,6 +23,7 @@ import sc_profile  # noqa: E402 - core ha gia' aggiunto <code home>/lib a sys.pa
 NAME = "git-policy"
 
 _DISABLED_WORDS = ("disabled", "false", "off", "0", "no")
+_ENABLED_WORDS = ("enabled", "true", "on", "1", "yes")
 
 # Verbi che cambiano la storia o la pubblicano. `reset` e `tag` hanno regole a parte.
 _MUTATING = frozenset({
@@ -44,19 +45,34 @@ _WRITERS = re.compile(
 _ARG_PREFIX = re.compile(r"^(?:of=|-[A-Za-z]+[:=])")     # dd of=<f>, -Path:<f>, -FilePath=<f>
 
 
+def _non_default_profile() -> bool:
+    # Un profilo illeggibile o ignoto conta come non default: si sceglie il lato restrittivo.
+    try:
+        return sc_profile.active_profile() != sc_profile.DEFAULT_PROFILE
+    except sc_profile.ProfileError:
+        return True
+
+
 def policy_file() -> Path:
+    # Fuori dal profilo di default l'override via ambiente e' ignorato (git sempre spento).
     override = os.environ.get("SUPERCLAUDE_GIT_POLICY_FILE", "").strip()
-    if override:
+    if override and not _non_default_profile():
         return Path(override)
     assert core.DATA_HOME is not None  # con PROFILE_ERROR gli handler non vengono caricati
     return core.DATA_HOME / sc_profile.GIT_POLICY_REL
 
 
 def git_disabled() -> bool:
+    # Profilo di default: flag assente o illeggibile = abilitato (fail-open).
+    # Altri profili: flag assente o illeggibile = disabilitato (fail-closed); solo un
+    # flag esplicitamente abilitante sblocca git.
+    fail_closed = _non_default_profile()
     try:
         word = policy_file().read_text(encoding="utf-8-sig", errors="replace").strip().lower()
     except (OSError, ValueError):
-        return False
+        return fail_closed
+    if fail_closed:
+        return word not in _ENABLED_WORDS
     return word in _DISABLED_WORDS
 
 

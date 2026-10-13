@@ -39,7 +39,7 @@ Workers are spawned through the Agent tool, not launched directly. A plain sessi
 
 1. Adopt this repository as `~/.claude` (`C:\Users\<user>\.claude`).
 2. Create the dedicated `uv` venv at `~/.claude/.venv` and install the packages listed in `dependencies.yml`.
-3. The owner runs `docs/win11-migration/apply-settings.ps1`, which registers the hook dispatcher, permissions and environment variables into `settings.json`.
+3. The owner runs `bin/apply-settings.ps1 -Profile superclaude`, which registers the hook dispatcher and the shared permission rules into `settings.json`.
 
 Everything installs at user scope; nothing requires admin rights.
 
@@ -99,7 +99,7 @@ Each prints a ready-to-paste `/loop` block and stops; the human arms it. A sched
 
 ## Configuration
 
-`settings.json` controls permissions (`allow`/`deny` command lists), environment variables, and hook registration. It is written by `docs/win11-migration/apply-settings.ps1`, run by the owner. There is no sandbox on native Windows: enforcement is the write-ACL guard plus `permissions.deny`.
+`settings.json` controls permissions (`allow`/`deny` command lists), environment variables, and hook registration. It is written by `bin/apply-settings.ps1 -Profile superclaude`, run by the owner. There is no sandbox on native Windows: enforcement is the write-ACL guard plus `permissions.deny`.
 
 Guard kill switches: `SUPERCLAUDE_GUARDS=off` disables every guard; `SUPERCLAUDE_GUARD_<NAME>=off|warn|block` sets one.
 

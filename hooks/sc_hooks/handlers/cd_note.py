@@ -128,6 +128,9 @@ def _note(start: str, to: str) -> str:
 
 @core.on("PreToolUse", tools=core.SHELL_TOOLS, name=NAME, default_mode="warn")
 def handle(ctx: core.Ctx) -> core.Result | None:
+    # Monitor gira in un processo a parte: un suo cd non sposta la shell della sessione
+    if ctx.tool == "Monitor":
+        return None
     cmd = _util.command_of(ctx)
     start = core.norm_path(ctx.cwd) if isinstance(ctx.cwd, str) else ""
     if not start or not _quotes_balanced(cmd):

@@ -2,7 +2,7 @@
 name: meta
 description: "Cross-project supervisor that reads project state and coordinates w-* worker swarms. Never writes project code. Use proactively when managing multiple projects."
 tools: Read, Write, Edit, Bash, PowerShell, Glob, Grep, Agent, SendMessage, Skill, WebSearch, WebFetch
-model: opus[1m]
+model: opus
 memory: user
 maxTurns: 50
 ---

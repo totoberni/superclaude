@@ -56,7 +56,8 @@ LOG_DIR: Path | None = DATA_HOME / "logs" if DATA_HOME else None
 TMP_DIR: Path | None = DATA_HOME / "tmp" if DATA_HOME else None
 WORKSPACE_ROOT = Path.home() / "code"
 
-SHELL_TOOLS = ("Bash", "PowerShell")
+# Monitor esegue comandi di shell in background: senza di lui ogni guardia sui comandi sarebbe cieca
+SHELL_TOOLS = ("Bash", "PowerShell", "Monitor")
 WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
 _DRIVE_MSYS = re.compile(r"^/([a-zA-Z])(/|$)")        # /c/Users/...  (Git Bash)
@@ -299,8 +300,29 @@ def on(event: str, tools: Iterable[str] = (), name: str = "",
     return deco
 
 
+PROFILE_FIREWALL = "profile-firewall"
+
+
+def non_default_profile() -> bool:
+    """True se il profilo attivo non e' quello predefinito, o se l'ambiente lo dice comunque.
+
+    Si guardano sia il profilo risolto all'import sia SC_PROFILE nell'ambiente:
+    basta uno dei due per trattare la sessione come isolata (fail closed).
+    """
+    if PROFILE != sc_profile.DEFAULT_PROFILE:
+        return True
+    raw = os.environ.get(sc_profile.ENV_VAR, "").strip().lower()
+    return raw not in ("", sc_profile.DEFAULT_PROFILE)
+
+
 def guard_mode(name: str, default: str = "block") -> str:
-    """Interruttori: SUPERCLAUDE_GUARDS=off, SUPERCLAUDE_GUARD_<NOME>=off|warn|block."""
+    """Interruttori: SUPERCLAUDE_GUARDS=off, SUPERCLAUDE_GUARD_<NOME>=off|warn|block.
+
+    Sotto un profilo non predefinito il firewall tra profili e' l'isolamento
+    stesso: nessun interruttore puo' spegnerlo o declassarlo ad avviso.
+    """
+    if name == PROFILE_FIREWALL and non_default_profile():
+        return "block"
     if os.environ.get("SUPERCLAUDE_GUARDS", "").lower() == "off":
         return "off"
     key = "SUPERCLAUDE_GUARD_" + re.sub(r"[^A-Z0-9]", "_", name.upper())
@@ -375,6 +397,9 @@ def dispatch(ctx: Ctx) -> int:
     """
     if PROFILE_ERROR:
         return dispatch_profile_error(ctx)
+    mismatch = transcript_mismatch(ctx)
+    if mismatch:
+        return dispatch_transcript_mismatch(ctx, mismatch)
     blocks: list[str] = []
     asks: list[str] = []
     notes: list[str] = []
@@ -447,4 +472,45 @@ def dispatch_profile_error(ctx: Ctx) -> int:
         f"({PROFILE_ERROR}); every tool call is denied until the session is restarted with a valid "
         f"{sc_profile.ENV_VAR} (unset = superclaude)\n"
     )
+    return 2
+
+
+def transcript_owners(raw: str) -> set[str]:
+    """Profili la cui data home contiene il transcript (forma assoluta e realpath)."""
+    path = fs_path(raw)
+    if path is None:
+        return set()
+    return {owner for form in sc_profile.resolved_forms(path)
+            for owner in [sc_profile.profile_of_path(form)] if owner}
+
+
+def transcript_mismatch(ctx: Ctx) -> str | None:
+    """Motivo del rifiuto se il transcript appartiene a un profilo diverso da quello attivo.
+
+    Vale per ogni evento: un hook che gira con il profilo sbagliato scriverebbe
+    snapshot, log e iniezioni nella data home dell'altro profilo.
+    """
+    raw = ctx.payload.get("transcript_path") if isinstance(ctx.payload, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        owners = transcript_owners(raw)
+    except (OSError, ValueError) as exc:
+        # Percorso non risolvibile: nel profilo predefinito si prosegue, negli altri fail closed
+        if not non_default_profile():
+            return None
+        return (f"fail closed: transcript_path {raw} could not be resolved ({type(exc).__name__}) under the "
+                f"{PROFILE} profile; every tool call is denied")
+    if not owners or PROFILE in owners:
+        return None
+    owner = sorted(owners)[0]
+    return (f"fail closed: transcript_path {raw} belongs to the {owner} profile but {sc_profile.ENV_VAR} "
+            f"selects {PROFILE}; every tool call is denied until the session restarts with the {owner} launcher")
+
+
+def dispatch_transcript_mismatch(ctx: Ctx, reason: str) -> int:
+    """Transcript di un altro profilo: PreToolUse negato, ogni altro evento non fa nulla."""
+    if ctx.event != "PreToolUse":
+        return 0
+    sys.stderr.write(f"GUARD-BLOCK [profile] {reason}\n")
     return 2

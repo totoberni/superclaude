@@ -140,7 +140,7 @@ def test_default_mode_warn_never_blocks(monkeypatch, capsys):
     assert core.dispatch(_ctx()) == 2
 
 
-@pytest.mark.parametrize("sid", ["..", ".", "...", "../..", "", "..\..", "/", "a/../.."])
+@pytest.mark.parametrize("sid", ["..", ".", "...", "../..", "", "..\\..", "/", "a/../.."])
 def test_state_file_never_escapes_state_dir(sid):
     """Un session_id ostile non deve mai far uscire lo stato da STATE_DIR/<nome>/."""
     ctx = core.Ctx(event="SessionEnd", payload={}, session_id=sid, tool="", tool_input={},

@@ -71,7 +71,7 @@ PENALTIES: dict[str, dict[str, tuple[int, int, str]]] = {
         "hook_target": (10, 40, "a settings.json hook entry names a missing interpreter, a missing or foreign dispatch.py, or the wrong event"),
         "smoke": (10, 40, "sandboxed dispatch.py smoke run failed: exit != 0, timeout, non-JSON stdout, or no memory injection on SessionStart/SubagentStart"),
         "handler_error": (5, 20, "a handler raised during the sandboxed smoke run (fail-open, logged to hooks.log)"),
-        "shell_form": (5, 5, "settings.json hooks are shell-form while hooks/hooks.json is exec-form (apply-hooks-v2.ps1 not applied)"),
+        "shell_form": (5, 5, "settings.json hooks are shell-form while hooks/hooks.json is exec-form (bin/apply-settings.ps1 -Profile superclaude not applied)"),
     },
     "skills": {
         "frontmatter": (10, 40, "skills/*/SKILL.md has no parseable YAML frontmatter"),
@@ -452,7 +452,7 @@ def shell_form_findings(hooks_cfg: object, registered: dict[str, list[dict]]) ->
     if not (cfg_exec and shell):
         return []
     detail = (f"{len(shell)} event(s) registered in shell form ({', '.join(shell)}) while "
-              "hooks/hooks.json is exec-form: run docs/win11-migration/apply-hooks-v2.ps1")
+              "hooks/hooks.json is exec-form: run bin/apply-settings.ps1 -Profile superclaude")
     return [Finding("hooks", "shell_form", "settings.json", detail)]
 
 

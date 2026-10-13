@@ -89,3 +89,50 @@ def test_shared_code_entries_hold_code_and_model_cache_only() -> None:
     entries = set(sc_profile.SHARED_CODE_ENTRIES)
     assert {"scripts", "bin", "lib", "hooks", ".venv", ".cache"} <= entries
     assert not entries & {"agent-memory", "plans", "comms", "tmp", "logs", "settings.json", "projects"}
+
+
+
+# W2-A1-A3-A6-A10: forme device/UNC e file privati fuori dalle data home
+@pytest.mark.parametrize("raw,want", [
+    (r"\\?\C:\Users\x", r"C:\Users\x"), (r"\\?\UNC\localhost\C$\Users\x", r"C:\Users\x"),
+    (r"\\localhost\c$\Users\x", r"c:\Users\x"), (r"\\127.0.0.1\D$\x", r"D:\x"), ("//?/C:/Users/x", "C:/Users/x"),
+    (r"\\.\C:\x", r"C:\x"), ("//LOCALHOST/C$/x", "C:/x"), ("cat '//localhost/C$/a' && type \\\\?\\C:\\b", "cat 'C:/a' && type C:\\b"),
+    (r"\\server\share\x", r"\\server\share\x"), (r"\\?\UNC\server\share\x", r"\\?\UNC\server\share\x"),
+    ("C:/plain", "C:/plain"), ("", ""),
+])
+def test_local_form(raw: str, want: str) -> None:
+    assert sc_profile.local_form(raw) == want
+
+
+@pytest.mark.parametrize("name,owner", [
+    (".claude.json", "superclaude"), (".claude.json.backup", "superclaude"), (".claude.json.backup.123", "superclaude"),
+    (".CLAUDE.JSON", "superclaude"), (".claude.jsonx", None), ("claude.json", None), (".claude.json.bak", None),
+])
+def test_private_file_owner(home: Path, name: str, owner: str | None) -> None:
+    assert sc_profile.private_owner_of_name(name) == owner
+    assert sc_profile.private_file_owner(home / name) == owner
+    assert sc_profile.private_file_owner(home / "sub" / name) is None
+    assert sc_profile.private_file_owner(home / ".claude-deepseek" / name) is None
+
+
+def test_foreign_profile_of_private_files(home: Path) -> None:
+    cj = home / ".claude.json"
+    assert sc_profile.foreign_profile_of(cj, "deepseek") == "superclaude"
+    assert sc_profile.foreign_profile_of(cj, "superclaude") is None
+    assert sc_profile.foreign_profile_of("\\\\?\\" + str(cj), "deepseek") == "superclaude"
+    ds_cj = home / ".claude-deepseek" / ".claude.json"
+    assert sc_profile.foreign_profile_of(ds_cj, "superclaude") == "deepseek"
+    assert sc_profile.foreign_profile_of(ds_cj, "deepseek") is None
+
+
+def test_foreign_profile_of_device_forms(home: Path) -> None:
+    for profile, other in (("deepseek", ".claude"), ("superclaude", ".claude-deepseek")):
+        w = str(home / other / "agent-memory" / ".memory.db")
+        forms = ("\\\\?\\" + w, "\\\\localhost\\" + w[0] + "$" + w[2:], "\\\\?\\UNC\\127.0.0.1\\" + w[0] + "$" + w[2:],
+                 "//?/" + w.replace("\\", "/"))
+        for form in forms:
+            assert sc_profile.foreign_profile_of(form, profile) is not None, form
+
+
+def test_profiles_built_from_data_home_dirs(home: Path) -> None:
+    assert {n: p.name for n, p in sc_profile.profiles().items()} == sc_profile.DATA_HOME_DIRS

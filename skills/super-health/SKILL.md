@@ -61,7 +61,7 @@ still listed, with `0 (capped)`.
 | `hook_target` | 10 | 40 | a settings hook names a missing interpreter, a missing or foreign `dispatch.py`, or the wrong event |
 | `smoke` | 10 | 40 | smoke run: exit != 0, timeout, non-JSON stdout, or no memory injection on SessionStart/SubagentStart |
 | `handler_error` | 5 | 20 | a handler raised during the smoke run (fail-open, logged to the sandbox `hooks.log`) |
-| `shell_form` | 5 | 5 | settings hooks are shell-form while hooks.json is exec-form: `docs/win11-migration/apply-hooks-v2.ps1` not applied yet |
+| `shell_form` | 5 | 5 | settings hooks are shell-form while hooks.json is exec-form: `bin/apply-settings.ps1 -Profile superclaude` not applied yet |
 
 **Skills (15)**
 

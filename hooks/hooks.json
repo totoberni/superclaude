@@ -1,5 +1,5 @@
 {
-  "_comment": "Registrazione degli hook superclaude: unica fonte di verita'. Ha la forma esatta del valore della chiave 'hooks' di settings.json, con due segnaposto ({{PYTHON}} = interprete di base, {{DISPATCH}} = hooks/dispatch.py) che apply-hooks-v2.ps1 sostituisce. Forma exec ovunque: 'args' e' la lista degli argomenti, niente shell e niente espansione di variabili. I filtri 'if' compaiono solo dove nessuna guardia viene ristretta: la tabella delle decisioni sta in apply-hooks-v2.ps1.",
+  "_comment": "Registrazione degli hook superclaude: unica fonte di verita'. Ha la forma esatta del valore della chiave 'hooks' di settings.json, con due segnaposto ({{PYTHON}} = interprete di base, {{DISPATCH}} = hooks/dispatch.py) che scripts/settings/apply_settings.py sostituisce (lanciatore: bin/apply-settings.ps1 -Profile superclaude|deepseek). Forma exec ovunque: 'args' e' la lista degli argomenti, niente shell e niente espansione di variabili. I filtri 'if' compaiono solo dove nessuna guardia viene ristretta: la tabella delle decisioni sta in docs/hooks-registration.md.",
   "SessionStart": [
     {
       "matcher": "",
@@ -28,7 +28,7 @@
   ],
   "PreToolUse": [
     {
-      "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|Agent|Read|Glob|Grep",
+      "matcher": "Bash|PowerShell|Monitor|Write|Edit|MultiEdit|NotebookEdit|Agent|Read|Glob|Grep",
       "hooks": [
         {
           "type": "command",

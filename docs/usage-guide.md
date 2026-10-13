@@ -9,7 +9,7 @@
 ```
 ~/.claude/
   CLAUDE.md                        # Global user instructions
-  settings.json                    # Permissions, hooks, env (written by apply-settings.ps1)
+  settings.json                    # Permissions, hooks, env (hooks and rules written by bin/apply-settings.ps1)
   hooks/                           # dispatch.py + sc_hooks/ (core.py, handlers/)
   rules/                           # Auto-loaded rules (numbered order)
   agents/                          # meta + w-* workers (+ _ephemeral/, _pending_promotion/)
@@ -128,7 +128,7 @@ Handler roster by event: `~/.claude/docs/agent-manifest.md` § Hooks. Design: `~
 
 **Hierarchy**: User (`~/.claude/`) -> Project (`.claude/`) -> Local (`.claude/*.local.*`). Hooks MERGE across levels.
 
-**Settings**: `~/.claude/settings.json` — permissions, env, hooks. Written by `docs/win11-migration/apply-settings.ps1`, run by the owner; agents do not edit it.
+**Settings**: `~/.claude/settings.json` — permissions, env, hooks. Written by `bin/apply-settings.ps1 -Profile superclaude`, run by the owner; agents do not edit it.
 
 **Enforcement**: there is no sandbox on native Windows. Write scopes are enforced by the write-ACL guard plus `permissions.deny`.
 

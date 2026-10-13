@@ -78,7 +78,7 @@ Canonical catalogue with one-line purposes: `~/.claude/skills/README.md`.
 
 ## Hooks
 
-One Python dispatcher per hook event: `~/.claude/hooks/dispatch.py <Event>`. Handlers live under `~/.claude/hooks/sc_hooks/handlers/` and register with `@on(event, tools, name)`; results are aggregated into a single JSON response. Design: `~/.claude/docs/guard-subsystem.md`. Registration into `settings.json`: `docs/win11-migration/apply-settings.ps1`, run by the owner.
+One Python dispatcher per hook event: `~/.claude/hooks/dispatch.py <Event>`. Handlers live under `~/.claude/hooks/sc_hooks/handlers/` and register with `@on(event, tools, name)`; results are aggregated into a single JSON response. Design: `~/.claude/docs/guard-subsystem.md`. Registration into `settings.json`: `bin/apply-settings.ps1 -Profile superclaude`, run by the owner.
 
 | Handler module | Event(s) | Purpose |
 |----------------|----------|---------|
