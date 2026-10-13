@@ -13,6 +13,14 @@ Project-specific traps that apply only to certain technology stacks. Loaded as p
 - Prefer `monkeypatch` over `@patch` decorators in test fixtures — monkeypatch auto-restores and doesn't leak between tests. `@patch` can leak if the test errors before the decorator's cleanup runs.
 - `del sys.modules["X"]; import X` creates a NEW module object. Code that already imported from the old module still holds OLD references. The fix is save/restore in sys.modules, not re-import.
 
+## ISTAT SDMX Quota Is Machine-Wide
+
+- esploradati.istat.it (SDMX) allows 5 queries per minute per IP; going over triggers a silent 1 to 2 day block (TCP timeouts, curl 000 after about 20 s). The quota belongs to the office IP, so every session, project and worker on this laptop shares it.
+- Before dispatching ANY worker that touches ISTAT SDMX (any project): grep `~/.claude/comms/_spawns.log` for ISTAT workers of the last 48 h from any session; never run two ISTAT workers at once.
+- Inline in every such dispatch: one request every 15 s from a single script with a disk cache, a hard request cap, one probe first, stop at the first timeout; listing dataflows counts as a query. Static files on www.istat.it are a different host.
+- A block is never evaded by switching network or IP for an automated fetcher (rate-limit circumvention): wait for the lapse or write to the ISTAT Contact Centre.
+- Source: geoscraper 2026-09-22 (own worker over-queried) + 2026-10-05 (probably another session's worker on the shared IP). Occ=2, promoted.
+
 ## HDL Register-Lag in NBA Blocks
 
 - In Verilog non-blocking assignment (NBA) `always @(posedge clk)` blocks, `reg_a <= x; reg_b <= reg_a` reads the OLD value of `reg_a` (pre-clock-edge). This is by design but causes bugs when the intent is to use the newly-computed value.
