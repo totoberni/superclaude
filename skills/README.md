@@ -1,6 +1,6 @@
 # Superclaude Skill System: Reference
 
-The skills under `~/.claude/skills/*/SKILL.md` (54 of them) are the invocable capability layer of superclaude. Each skill is a self-contained protocol, a slash command a user types (`/plan`) and, by default, a capability the model can select autonomously through the Skill tool. This file is the mechanical reference. The entry-point summary lives in the global `~/.claude/README.md`; this file does not repeat it. It owns the mechanics: the frontmatter contract, the two-token protocol, single-pass review, the scheduled wf-* monitors, and the catalogue.
+The skills under `~/.claude/skills/*/SKILL.md` (56 of them) are the invocable capability layer of superclaude. Each skill is a self-contained protocol, a slash command a user types (`/plan`) and, by default, a capability the model can select autonomously through the Skill tool. This file is the mechanical reference. The entry-point summary lives in the global `~/.claude/README.md`; this file does not repeat it. It owns the mechanics: the frontmatter contract, the two-token protocol, single-pass review, the scheduled wf-* monitors, and the catalogue.
 
 ## Skill anatomy
 
@@ -78,7 +78,7 @@ Human gates are never auto-cleared. Design approval (`brainstorm`), memory delet
 
 ## Skill catalogue by category
 
-All 54 skills, grouped by their `category` frontmatter, with the one-line "Use when" purpose.
+All 56 skills, grouped by their `category` frontmatter, with the one-line "Use when" purpose.
 
 **delegation** (4)
 | Skill | Use when |
@@ -88,7 +88,7 @@ All 54 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `promote` | promoting a recurring autocommission pattern to a permanent w-* |
 | `swarm-status` | viewing a live snapshot of in-flight workers and reviewer queue |
 
-**workflow** (13)
+**workflow** (14)
 | Skill | Use when |
 |---|---|
 | `brainstorm` | gating design before implementing a feature or architecture |
@@ -100,6 +100,7 @@ All 54 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `review` | invoking w-reviewer on staged changes, general/infra/security |
 | `verify` | enforcing evidence-before-claims before reporting completion |
 | `wrap-up` | bundling post-work outcome, mistake, good-idea, and recovery |
+| `declutter` | tidying a finished project: git safety net, delete runtime and intermediate files, optionally zip sources |
 | `notebook` | doing atomic .ipynb edit, execute, or validate work |
 | `wf-hpc-watch` | polling a long-running SLURM job, acting only on state change |
 | `wf-nb-watch` | watching a long notebook run, dispatching a fix on BROKEN or HUNG |
@@ -140,7 +141,7 @@ All 54 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `mem-health` | scoring memory DB health across DB-aware criteria |
 | `super-health` | scoring superclaude health across its subsystems |
 
-**domain** (9)
+**domain** (10)
 | Skill | Use when |
 |---|---|
 | `research` | running scientific research, design, literature, review, report |
@@ -151,6 +152,7 @@ All 54 skills, grouped by their `category` frontmatter, with the one-line "Use w
 | `gas-patterns` | working with Google Apps Script conventions and gotchas |
 | `windows-gotchas` | a failure may stem from native Windows: shells, paths, Python, locks |
 | `deliverable-it` | building an Italian deliverable: client report, relazione, market intelligence |
+| `report` | writing a branded LaTeX PDF report: executive default or --scientific |
 | `etl-check` | pre-flight checking a Databricks ETL pipeline before a job run |
 
 **code-quality** (2)

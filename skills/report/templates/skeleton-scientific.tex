@@ -1,0 +1,139 @@
+% Rapporto scientifico: compilare con xelatex, biber, xelatex, xelatex.
+% Prima della consegna: sostituire ogni segnaposto <<...>> e cancellare le righe % GUIDA.
+
+% Configurazione
+\newcommand{\ReportLang}{italian}% italian | english
+\newcommand{\ReportBrand}{Nomisma}
+\newcommand{\ReportProject}{<<PROGETTO>>}
+\newcommand{\ReportTitle}{<<TITOLO>>}
+\newcommand{\ReportSubtitle}{<<SOTTOTITOLO: Rapporto tecnico>>}
+\newcommand{\ReportAuthor}{<<NOME COGNOME>>}
+\newcommand{\ReportRole}{<<RUOLO>>}
+\newcommand{\ReportDate}{<<GIORNO MESE ANNO>>}
+
+\input{report-base}
+
+% Aggiunte per la modalità scientifica
+\usepackage{csquotes}
+\usepackage[backend=biber,style=authoryear,maxcitenames=2,uniquename=false]{biblatex}
+\addbibresource{references.bib}
+% Niente lineette lunghe negli intervalli di pagine (i moduli di lingua le reimpostano)
+\DefineBibliographyExtras{italian}{\protected\def\bibrangedash{-}}
+\DefineBibliographyExtras{english}{\protected\def\bibrangedash{-}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\begin{document}
+
+\maketitleblock
+
+\section*{Abstract}
+
+% GUIDA: problema, metodo, dati, risultato principale con incertezza, limite principale; 150-250 parole.
+<<Problema; metodo; dati; risultato principale (con intervallo di confidenza); limite principale.>>
+
+% GUIDA: l'indice va sempre subito dopo l'abstract.
+\tableofcontents
+
+\section{Introduzione}
+\label{sec:intro}
+
+% GUIDA: domanda di ricerca, perché conta, contributo in punti verificabili, letteratura essenziale citata.
+<<Domanda di ricerca e motivazione>> \parencite{<<chiave>>}.
+
+\section{Dati}
+\label{sec:dati}
+
+% GUIDA: provenienza, periodo, unità, criteri di inclusione, preprocessing, divisione in training/validazione/test.
+<<Fonte, periodo, numero di osservazioni (\num{0}), preprocessing; le fonti sono elencate in \cref{tab:fonti}.>>
+
+\begin{tabella}
+\begin{xltabular}{\linewidth}{|P{3.0cm}|L|R{2.0cm}|P{3.5cm}|}
+\rowcolor{white}\caption{<<Fonti dei dati>>}\label{tab:fonti}\\
+\hline
+\rowcolor{navy}\hd{Fonte} & \hd{Contenuto} & \hd{Osservazioni} & \hd{Licenza e versione}\\ \hline
+\endfirsthead
+\hline
+\rowcolor{navy}\hd{Fonte} & \hd{Contenuto} & \hd{Osservazioni} & \hd{Licenza e versione}\\ \hline
+\endhead
+<<Fonte>> & <<Contenuto>> & \num{0} & <<Licenza; versione; data di estrazione>>\\ \hline
+\end{xltabular}
+\end{tabella}
+
+\FloatBarrier
+
+\section{Metodo}
+\label{sec:metodo}
+
+% GUIDA: formalizzazione del problema, notazione (ogni simbolo definito una volta), specificazione del modello.
+Sia $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^{n}$ con $x_i \in \R^{d}$ e $y_i \in \{0,1\}$. <<Specificazione del modello.>>
+\begin{equation}
+  \hat{\theta} = \argmin_{\theta} \; \frac{1}{n}\sum_{i=1}^{n} \ell\bigl(f_\theta(x_i), y_i\bigr) + \lambda \lVert \theta \rVert_2^2
+  \label{eq:obiettivo}
+\end{equation}
+% GUIDA: stima o addestramento: ottimizzatore, iperparametri e come sono stati scelti (solo sulla validazione).
+<<Dettagli di stima: ottimizzatore, iperparametri, criterio di arresto.>>
+
+\section{Esperimenti e valutazione}
+\label{sec:valutazione}
+
+% GUIDA: divisione dei dati, baseline, metriche con incertezza (IC o più seed), ablazioni, controlli di robustezza.
+<<Disegno della valutazione: divisione, baseline, metriche, numero di seed.>>
+
+\section{Risultati}
+\label{sec:risultati}
+
+% GUIDA: ogni numero con la sua incertezza e il riferimento alla tabella o figura che lo produce.
+<<Risultato principale: \num{0.000} (IC 95\%: [\num{0.000}; \num{0.000}], \num{5} seed), \cref{tab:risultati}.>>
+
+% GUIDA: tabella breve in un float con \caption e \label, citata con \cref; le tabelle lunghe usano xltabular (vedi Dati).
+\begin{table}[!htbp]
+\begin{tabella}
+\caption{<<Risultati sul test set: media e deviazione standard su 5 seed>>}\label{tab:risultati}
+\begin{tabularx}{\linewidth}{|L|R{2.6cm}|R{2.6cm}|}
+\hline
+\rowcolor{navy}\hd{Modello} & \hd{<<Metrica 1>>} & \hd{<<Metrica 2>>}\\ \hline
+<<Baseline>> & \num{0.000 +- 0.000} & \num{0.000 +- 0.000}\\ \hline
+<<Modello proposto>> & \num{0.000 +- 0.000} & \num{0.000 +- 0.000}\\ \hline
+\end{tabularx}
+\end{tabella}
+\end{table}
+
+% GUIDA: figure con didascalia autosufficiente; sostituire example-image con il file in figures/.
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.7\linewidth]{example-image}
+  \caption{<<Che cosa mostra la figura e che cosa se ne deve concludere>>}
+  \label{fig:principale}
+\end{figure}
+
+\FloatBarrier
+
+\section{Discussione e limiti}
+\label{sec:discussione}
+
+% GUIDA: che cosa i risultati dimostrano e che cosa no; minacce alla validità (interna, esterna, di costrutto).
+<<Interpretazione, minacce alla validità, che cosa resta aperto.>>
+
+\section{Riproducibilità}
+\label{sec:riproducibilita}
+
+% GUIDA: codice e versione (commit), ambiente e versioni delle librerie, seed, provenienza dei dati, comando per rieseguire.
+\begin{itemize}
+\item \textbf{Codice}: <<repository o archivio, commit o versione>>.
+\item \textbf{Ambiente}: <<linguaggio e librerie con versione; hardware>>.
+\item \textbf{Seed}: <<elenco dei seed>>.
+\item \textbf{Dati}: <<provenienza, data di estrazione, checksum>>.
+\end{itemize}
+
+\printbibliography[title={Bibliografia}]
+
+% GUIDA: solo per edizioni riviste, sempre ultima sezione. Ogni confronto con la versione precedente sta qui e solo qui. Per un'edizione unica, cancellare il blocco.
+% \section{Note di versione}
+%
+% <<Che cosa è cambiato rispetto alla versione precedente e perché.>>
+%
+% \FloatBarrier
+
+\end{document}

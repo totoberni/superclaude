@@ -1,0 +1,149 @@
+% Rapporto esecutivo: compilare con xelatex (due passaggi).
+% Prima della consegna: sostituire ogni segnaposto <<...>> e cancellare le righe % GUIDA.
+% Ordine delle sezioni: che cosa, perché, come, che cosa abbiamo trovato,
+% interpretazione e limiti, note di versione (solo edizioni riviste).
+
+% Configurazione
+\newcommand{\ReportLang}{italian}% italian | english
+\newcommand{\ReportBrand}{Nomisma}
+\newcommand{\ReportProject}{<<PROGETTO>>}% testatina e piede; vuoto per il solo marchio
+\newcommand{\ReportTitle}{<<TITOLO: il risultato in una riga, con la scala>>}
+\newcommand{\ReportSubtitle}{<<SOTTOTITOLO: Rapporto di sintesi sul lavoro svolto e sui risultati>>}
+\newcommand{\ReportAuthor}{<<NOME COGNOME>>}
+\newcommand{\ReportRole}{<<RUOLO>>}
+\newcommand{\ReportDate}{<<GIORNO MESE ANNO>>}
+
+\input{report-base}
+
+\begin{document}
+
+\maketitleblock
+
+\section{In sintesi}
+
+% GUIDA: due o tre frasi: che cosa è stato fatto, su quale scala, con quale sforzo (volumi, fonti incrociate, verifiche).
+<<Che cosa abbiamo fatto, per quante unità, incrociando quante fonti e con quante verifiche.>>
+
+% GUIDA: da 3 a 5 punti con i numeri principali; nessun codice, nessun nome di variabile.
+\begin{riquadro}
+\begin{itemize}
+\item \textbf{<<Etichetta>>}: <<numero principale e che cosa significa>>.
+\item \textbf{<<Etichetta>>}: <<secondo risultato>>.
+\item \textbf{<<Etichetta>>}: <<verifiche svolte e loro esito>>.
+\end{itemize}
+\end{riquadro}
+
+% GUIDA: l'indice va sempre subito dopo il riquadro di sintesi.
+\tableofcontents
+
+\section{Il punto di partenza}
+
+% GUIDA: che cosa: la domanda del cliente, l'oggetto, la definizione adottata e il vincolo principale, in parole semplici.
+<<La richiesta, la definizione adottata e che cosa doveva garantire il risultato.>>
+
+\section{Perché conta}
+
+% GUIDA: perché: la rilevanza per il lettore e la decisione che il risultato sostiene. Se è breve, si può unire alla sezione precedente.
+<<A chi serve il risultato e quale decisione sostiene.>>
+
+\section{Come funziona il metodo}
+
+% GUIDA: come: è la parte più completa del rapporto. Una sottosezione per blocco; ogni idea tecnica spiegata con parole comuni.
+<<Il metodo in una frase.>>
+
+\subsection{Le fonti dei dati}
+
+% GUIDA: perché nessuna fonte basta da sola; poi la tabella delle fonti, citata nel testo con Tabella~\ref.
+<<Perché servono più fonti e come sono state scelte; la Tabella~\ref{tab:fonti} riporta per ciascuna che cosa contiene, perché la usiamo, data e copertura.>>
+
+% GUIDA: quali alternative sono state valutate e scartate, e perché (prova dell'ampiezza della ricerca).
+<<Alternative considerate e scartate, con il motivo.>>
+
+% GUIDA: tabella lunga: xltabular con didascalia e intestazione ripetuta; la tabella breve va invece in un float (vedi Risultati).
+\begin{tabella}
+\begin{xltabular}{\linewidth}{|P{3.0cm}|L|P{3.3cm}|P{4.0cm}|}
+\rowcolor{white}\caption{<<Le fonti dei dati>>}\label{tab:fonti}\\
+\hline
+\rowcolor{navy}\hd{Fonte} & \hd{Che cosa contiene} & \hd{Perché la usiamo} & \hd{Copertura e note}\\ \hline
+\endfirsthead
+\hline
+\rowcolor{navy}\hd{Fonte} & \hd{Che cosa contiene} & \hd{Perché la usiamo} & \hd{Copertura e note}\\ \hline
+\endhead
+<<Fonte>> & <<Contenuto>> & <<Criterio che alimenta>> & <<Licenza; aggiornamento; unità abbinate>>\\ \hline
+\end{xltabular}
+\end{tabella}
+
+\subsection{I passi, nell'ordine}
+
+% GUIDA: passi numerati in linguaggio quotidiano, ciascuno con il suo perché; i codici delle regole compaiono solo in tabella.
+\textbf{1. <<Primo passo>>.} <<Che cosa fa e perché.>>
+
+\textbf{2. <<Secondo passo>>.} <<Che cosa fa e perché.>>
+
+\subsection{Le soglie e la loro taratura}
+
+% GUIDA: ogni soglia con il suo valore, il motivo, le alternative considerate e che cosa avrebbero prodotto; più esplicita dove la scelta sembra strana o asimmetrica.
+<<Valore della soglia, perché è stata scelta, alternative e loro effetto.>>
+
+\subsection{I controlli}
+
+% GUIDA: taratura, controlli incrociati, revisione dei casi dubbi; ogni indice spiegato a parole (vedi esempio del kappa).
+<<Come è stato controllato il risultato e con quale esito.>>
+
+% GUIDA: una frase onesta sul metodo se sono stati usati strumenti assistiti dall'intelligenza artificiale.
+<<Le verifiche mirate sono state svolte con strumenti di ricerca assistiti dall'intelligenza artificiale; ogni giudizio è registrato con la sua fonte.>>
+
+\FloatBarrier
+
+\section{Risultati}
+
+% GUIDA: prima la tabella, poi la lettura in due o tre frasi; percentuali da \pct, conteggi da \num. Ogni tabella sta in un float con \caption e \label ed è citata con Tabella~\ref.
+La Tabella~\ref{tab:risultati} riporta <<che cosa mostra la tabella>>.
+
+\begin{table}[!htbp]
+\begin{tabella}
+\caption{<<Che cosa mostra la tabella dei risultati>>}\label{tab:risultati}
+\begin{tabularx}{\linewidth}{|L|R{2.0cm}|R{1.5cm}|}
+\hline
+\rowcolor{navy}\hd{<<Categoria>>} & \hd{<<Unità>>} & \hd{\%}\\ \hline
+<<Voce>> & \num{0} & \num{0.0}\\ \hline
+\rowcolor{white}\textbf{Totale} & \textbf{\num{0}} & \textbf{\num{100.0}}\\ \hline
+\end{tabularx}
+\end{tabella}
+\end{table}
+
+<<Che cosa dicono i numeri, con il confronto più informativo.>>
+
+\FloatBarrier
+
+\section{Limiti e come leggere i risultati}
+
+% GUIDA: ogni limite con la sua dimensione (quante unità, quale quota) e come tenerne conto.
+\begin{itemize}
+\item \textbf{<<Limite>>.} <<Quanto pesa e come leggerlo.>>
+\end{itemize}
+
+\FloatBarrier
+
+\section{Materiali consegnati}
+
+% GUIDA: elenco dei file consegnati; il codice si cita di passaggio e rinvia al suo README.
+\begin{itemize}
+\item \textbf{<<Il file principale>>} \texttt{<<nome\_file.xlsx>>}: <<che cosa contiene>>.
+\item \textbf{<<Il pacchetto di codice>>} \texttt{<<nome\_pacchetto.zip>>}: <<permette di riprodurre il processo>>; installazione e uso sono descritti nel README contenuto nell'archivio.
+\end{itemize}
+
+\FloatBarrier
+
+% GUIDA: solo per edizioni riviste, sempre ultima sezione. Ogni confronto con la versione precedente, vecchia soglia o vecchio numero sta qui e solo qui; il resto del rapporto si legge come se non esistesse una versione precedente. Per un'edizione unica, cancellare il blocco.
+% \section{Note di versione}
+%
+% <<Che cosa è cambiato rispetto alla versione precedente e perché.>>
+%
+% \subsection{<<Il confronto dei risultati>>}
+%
+% <<Confronto con i numeri della versione precedente.>>
+%
+% \FloatBarrier
+
+\end{document}
