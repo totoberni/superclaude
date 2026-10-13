@@ -373,10 +373,43 @@ KEY_COMMANDS = [
 ]
 
 
-def test_ds_denies_monitor_and_claude_json() -> None:
-    for rule in ("Monitor", "Read(~/.claude.json)", "Edit(~/.claude.json)",
+def test_ds_denies_claude_json() -> None:
+    for rule in ("Read(~/.claude.json)", "Edit(~/.claude.json)",
                  "Read(~/.claude.json.backup*)", "Edit(~/.claude.json.backup*)"):
         assert rule in DS_DENY
+
+
+def _blanket_monitor_rules(rules: list[str]) -> list[str]:
+    # "Monitor", "Monitor(...)" e un "*" nudo colpirebbero lo strumento Monitor nel suo insieme
+    return [r for r in rules if r in ("Monitor", "*") or r.startswith("Monitor(")]
+
+
+@pytest.mark.parametrize("path", ALL_FILES, ids=lambda p: p.name)
+def test_no_blanket_monitor_rule(path: Path) -> None:
+    # Nessuna regola nativa nomina Monitor: i suoi comandi passano dal firewall in PreToolUse
+    data = load(path)
+    lists = data.get("permissions", data)
+    for key in ("allow", "deny", "ask"):
+        assert _blanket_monitor_rules(lists.get(key, [])) == [], (path.name, key)
+
+
+# tools-reference.md § Monitor tool: lo strumento non e' disponibile quando e' impostato
+# DISABLE_TELEMETRY o CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC (DO_NOT_TRACK e DISABLE_GROWTHBOOK
+# spengono anche il fetch dei feature flag, env-vars.md § Features that need feature-flag fetching).
+MONITOR_BLOCKING_ENV = ("DISABLE_TELEMETRY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+                        "DO_NOT_TRACK", "DISABLE_GROWTHBOOK")
+DS_PRIVACY_ENV = ("DISABLE_AUTOUPDATER", "DISABLE_ERROR_REPORTING", "DISABLE_FEEDBACK_COMMAND",
+                  "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY")
+
+
+def test_ds_env_keeps_monitor_and_powershell() -> None:
+    env = DS["env"]
+    for var in MONITOR_BLOCKING_ENV:
+        assert var not in env, var
+    # Con una chiave apiKeyHelper lo strumento PowerShell non e' attivo di default (tools-reference.md § PowerShell tool)
+    assert env["CLAUDE_CODE_USE_POWERSHELL_TOOL"] == "1"
+    for var in DS_PRIVACY_ENV:
+        assert env[var] == "1", var
 
 
 @pytest.mark.parametrize("tool,command", KEY_COMMANDS)

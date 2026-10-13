@@ -69,7 +69,7 @@ def test_shell_tools_is_exactly_bash_powershell_monitor():
 
 @pytest.mark.parametrize("profile", PROFILES, indirect=True)
 def test_monitor_without_command_passes_untouched(profile, home, full_registry, capsys):
-    ti = {"url": "ws://127.0.0.1:9000/stream", "description": "watch the socket"}
+    ti = {"ws": {"url": "wss://example.org/feed"}, "description": "watch the socket"}
     ctx = _ctx(home, "PreToolUse", "Monitor", **dict(ti))
     assert core.dispatch(ctx) == 0
     out = capsys.readouterr()

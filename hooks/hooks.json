@@ -52,13 +52,24 @@
       ]
     },
     {
-      "matcher": "Write|Edit|MultiEdit",
+      "matcher": "Edit|MultiEdit",
       "hooks": [
         {
           "type": "command",
           "command": "{{PYTHON}}",
           "args": ["-S", "{{DISPATCH}}", "PostToolUse"],
           "if": "Edit(//**/*.tex)",
+          "timeout": 10
+        }
+      ]
+    },
+    {
+      "matcher": "Write",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "{{PYTHON}}",
+          "args": ["-S", "{{DISPATCH}}", "PostToolUse"],
           "timeout": 10
         }
       ]

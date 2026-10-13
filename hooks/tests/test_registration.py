@@ -48,6 +48,9 @@ _GUARD_MARKERS = ("deny(", "rewrite(", "updated_input")
 _ALWAYS_GUARDS = frozenset({"baseline-stash"})
 
 _RULE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*\([^()]*\)$")
+# Documentazione permessi: le regole di percorso su questi strumenti sono accettate
+# ma mai consultate (si usa Edit(...) o Read(...)), quindi come `if` sarebbero inerti
+_UNCONSULTED_RULE_TOOLS = ("Write", "MultiEdit", "NotebookEdit", "Glob")
 # In forma exec `command` e' un solo eseguibile: gli spazi sono legittimi
 # ("C:/Program Files/..."), le virgolette e gli operatori di shell no.
 _SHELL_CHARS = re.compile(r"""["'|&><;]""")
@@ -155,6 +158,12 @@ def filter_problems(hooks: dict) -> list[str]:
                 problems.append(f"{event}: 'if' non viene valutato su questo evento")
             if not isinstance(cond, str) or not _RULE_RE.match(cond):
                 problems.append(f"{event}: 'if' {cond!r} non e' nella sintassi delle regole di permesso")
+            elif cond.split("(", 1)[0] in _UNCONSULTED_RULE_TOOLS:
+                # Le regole di percorso su Write/MultiEdit/NotebookEdit sono accettate ma mai consultate
+                problems.append(f"{event}: 'if' {cond!r} usa una regola di percorso che non viene consultata")
+            elif cond.startswith("Edit(") and matches(entry["matcher"], "Write"):
+                # Verificato dal vivo: un filtro Edit(...) non scatta sulle chiamate Write
+                problems.append(f"{event}: 'if' {cond!r} spegne l'hook per Write, che il matcher accetta")
     return problems
 
 
@@ -297,6 +306,16 @@ def test_shell_tools_include_every_command_runner():
     assert set(core.SHELL_TOOLS) == {"Bash", "PowerShell", "Monitor"}
 
 
+def test_every_bash_handler_covers_all_shell_tools():
+    """Un handler su Bash deve coprire anche PowerShell e Monitor; `tools` vuoto vale per tutti."""
+    gaps = [
+        (name, tools) for event, tools, name, fn in load_registry()
+        if event == "PreToolUse" and tools and "Bash" in tools
+        and not set(core.SHELL_TOOLS) <= set(tools)
+    ]
+    assert not gaps, f"handler PreToolUse su Bash che non coprono tutti gli SHELL_TOOLS: {gaps}"
+
+
 def test_read_tools_do_not_wake_other_handlers():
     """Stesso criterio di core.dispatch: `tools` vuoto vale per ogni strumento."""
     for event, tools, name, fn in load_registry():
@@ -365,6 +384,28 @@ def test_filter_on_a_non_tool_event_is_rejected(tmp_path):
 def test_malformed_filter_is_rejected(tmp_path):
     hooks = _write_json(tmp_path, {"PreToolUse": [_entry("PreToolUse", "Bash", cond="*.tex")]})
     assert filter_problems(hooks)
+
+
+def test_edit_filter_on_a_write_matcher_is_rejected(tmp_path):
+    """Un filtro Edit(...) su una entry che accetta Write spegne latex-warn per Write."""
+    hooks = _write_json(tmp_path, {"PostToolUse": [
+        _entry("PostToolUse", "Write|Edit|MultiEdit", cond="Edit(//**/*.tex)")]})
+    assert any("Write" in p for p in filter_problems(hooks))
+
+
+@pytest.mark.parametrize("cond", ["Write(//**/*.tex)", "MultiEdit(*.tex)", "NotebookEdit(*.ipynb)"])
+def test_unconsulted_path_rule_is_rejected(tmp_path, cond):
+    hooks = _write_json(tmp_path, {"PostToolUse": [_entry("PostToolUse", "Write", cond=cond)]})
+    assert filter_problems(hooks)
+
+
+def test_latex_warn_reaches_every_file_writer():
+    """Write, Edit e MultiEdit arrivano a latex-warn; Write senza filtro, gli altri su .tex."""
+    post = entries(load_hooks(), "PostToolUse")
+    for tool, cond in (("Write", None), ("Edit", "Edit(//**/*.tex)"), ("MultiEdit", "Edit(//**/*.tex)")):
+        hit = [e for e in post if matches(e["matcher"], tool)]
+        assert len(hit) == 1, (tool, hit)
+        assert hit[0]["if"] == cond, (tool, hit[0]["if"])
 
 
 def test_filter_over_a_guard_is_rejected(tmp_path):

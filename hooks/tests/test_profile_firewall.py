@@ -21,15 +21,15 @@ VAR = "SC_" + "PROFILE"          # costruita a pezzi: il nome compare comunque n
 
 @pytest.fixture
 def run(home, mk, monkeypatch):
-    """run(profilo, strumento, cwd=None, transcript=None, **tool_input) -> motivo del blocco o None."""
+    """run(profilo, strumento, cwd=None, transcript=None, role="plain", **tool_input) -> motivo o None."""
     for rel in ("agent-memory", "plans/p", "comms", "config", "skills/s", "scripts", "hooks"):
         (home / SC_DIR / rel).mkdir(parents=True, exist_ok=True)
     for rel in ("agent-memory", "plans/p", "comms", "config", "bin", ".venv", "tmp", "projects/x"):
         (home / DS_DIR / rel).mkdir(parents=True, exist_ok=True)
 
-    def _run(profile, tool, cwd=None, transcript=None, **ti):
+    def _run(profile, tool, cwd=None, transcript=None, role="plain", **ti):
         monkeypatch.setattr(core, "PROFILE", profile)
-        ctx = mk(tool, cwd=None if cwd is None else str(cwd), **ti)
+        ctx = mk(tool, role=role, cwd=None if cwd is None else str(cwd), **ti)
         if transcript is not None:
             ctx.payload["transcript_path"] = str(transcript)
         res = fw.handle(ctx)
@@ -201,12 +201,23 @@ def test_c_own_settings_readable(run, home):
     assert run(DS, "Read", file_path=str(ds(home, "settings.json"))) is None
 
 
-def test_c_deepseek_git_policy_owner_only(run, home):
-    reason = run(DS, "Write", file_path=str(ds(home, "config/git-policy")), content="true")
-    assert reason and "owner-only" in reason
-    assert run(DS, "Read", file_path=str(ds(home, "config/git-policy"))) is None
-    # Il flag superclaude resta materia di write-acl (per ruolo), non di questa guardia
-    assert run(SC, "Write", file_path=str(sc(home, "config/git-policy")), content="true") is None
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("role", ["meta", "plain"])
+@pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
+def test_c_own_git_policy_writable(home, mk, monkeypatch, profile, which, role, tool):
+    # Il flag git del proprio profilo segue /git in entrambi i profili: meta e plain lo scrivono
+    which(home, "config").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(core, "PROFILE", profile)
+    flag = str(which(home, "config/git-policy"))
+    assert fw.handle(mk(tool, role=role, file_path=flag, content="true", old_string="a", new_string="b")) is None
+    assert fw.handle(mk("Read", role=role, file_path=flag)) is None
+
+
+@pytest.mark.parametrize("profile,which", [(SC, ds), (DS, sc)])
+@pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
+def test_c_cross_profile_git_policy_write_denied(run, home, profile, which, tool):
+    reason = run(profile, tool, file_path=str(which(home, "config/git-policy")), content="true")
+    assert reason and f"{profile} may not" in reason
 
 
 @pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds), (SC, ds)])
@@ -230,9 +241,327 @@ def test_c_shell_reads_of_settings_allowed(run, home, profile, which, template):
     assert run(profile, "Bash", command=template.format(p=which(home, "settings.json"))) is None
 
 
-def test_c_shell_write_to_ds_git_policy(run, home):
-    assert run(DS, "Bash", command=f"echo true > {ds(home, 'config/git-policy')}")
-    assert run(DS, "Bash", command=f"cat {ds(home, 'config/git-policy')}") is None
+GIT_FLAG_SHELL = ["echo true > {p}", "echo false >> {p}", "Set-Content -Path {p} -Value true",
+                  "Out-File -FilePath {p} -InputObject true", "cp flag.txt {p}", "cat {p}"]
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("form", [str, win, msys])
+@pytest.mark.parametrize("template", GIT_FLAG_SHELL)
+def test_c_shell_write_to_own_git_policy(run, home, profile, which, form, template):
+    tool = "PowerShell" if "-" in template.split()[0] else "Bash"
+    assert run(profile, tool, command=template.format(p=form(which(home, "config/git-policy")))) is None
+
+
+@pytest.mark.parametrize("profile,which", [(SC, ds), (DS, sc)])
+@pytest.mark.parametrize("form", [str, win, msys])
+@pytest.mark.parametrize("template", GIT_FLAG_SHELL)
+def test_c_shell_cross_profile_git_policy_denied(run, home, profile, which, form, template):
+    tool = "PowerShell" if "-" in template.split()[0] else "Bash"
+    reason = run(profile, tool, command=template.format(p=form(which(home, "config/git-policy"))))
+    assert reason and f"{profile} may not" in reason
+
+
+# --------------------------------------------------------------------------
+# C. flag git del proprio profilo: i worker non lo scrivono in nessuna grafia (meta e plain si')
+# --------------------------------------------------------------------------
+FLAG_MSG = "workers may not change the git policy flag; ask the owner to run /git"
+FLAG_SPELLINGS = ["canonical", "forward", "upper", "dev-question", "dev-dot", "unc-localhost", "junction",
+                  "trailing-dot", "data-stream", "index-alloc", "i30"]
+
+
+def _flag_spelling(home: Path, which, kind: str) -> str:
+    flag = win(which(home, "config/git-policy"))
+    if kind == "junction":
+        # Giunzione nella HOME finta verso la cartella config del profilo: solo il disco la risolve
+        junction(home / "jn", which(home, "config"))
+        return win(home / "jn" / "git-policy")
+    return {
+        "canonical": flag,
+        "forward": flag.replace("\\", "/"),
+        "upper": flag.upper(),
+        "dev-question": "\\\\?\\" + flag,
+        "dev-dot": "\\\\.\\" + flag,
+        "unc-localhost": f"\\\\localhost\\{flag[0]}$\\" + flag[3:],
+        "trailing-dot": flag + ".",
+        "data-stream": flag + "::$DATA",
+        "index-alloc": flag[: -len("git-policy")].rstrip("\\") + "::$INDEX_ALLOCATION\\git-policy",
+        "i30": flag[: -len("git-policy")].rstrip("\\") + ":$I30:$INDEX_ALLOCATION\\git-policy",
+    }[kind]
+
+
+def _file_input(tool: str, path: str) -> dict:
+    if tool == "NotebookEdit":
+        return {"notebook_path": path, "new_source": "enabled"}
+    return {"file_path": path, "content": "enabled", "old_string": "disabled", "new_string": "enabled"}
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("kind", FLAG_SPELLINGS)
+@pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
+def test_c_worker_file_write_to_own_git_policy_denied(run, home, profile, which, kind, tool):
+    path = _flag_spelling(home, which, kind)
+    reason = run(profile, tool, role="worker", **_file_input(tool, path))
+    assert reason == FLAG_MSG
+
+
+def _flag_shell_cases(home: Path, which) -> list[tuple[str, str]]:
+    flag = win(which(home, "config/git-policy"))
+    conf = win(which(home, "config"))
+    # Sorgente fuori dalle data home con lo stesso nome del flag: la copia in cartella scrive config/git-policy
+    src = home / "src" / "git-policy"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("enabled", encoding="utf-8")
+    s = win(src)
+    return [
+        ("PowerShell", f"Set-Content -LiteralPath '\\\\?\\{flag}' -Value enabled"),
+        ("PowerShell", f"'enabled' | Tee-Object -FilePath {flag}"),
+        ("Bash", f"xcopy /Y {s} {flag}"),
+        ("Bash", f"curl -s -o {flag} https://example.org"),
+        ("PowerShell", f"Invoke-WebRequest -Uri https://example.org -OutFile {flag}"),
+        ("Bash", f"cp {s} {conf.replace(chr(92), '/')}/"),
+        ("PowerShell", f"Copy-Item {s} -Destination {conf}"),
+        ("Monitor", f"curl -s -o {flag} https://example.org"),
+    ]
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("idx", range(8))
+def test_c_worker_shell_write_to_own_git_policy_denied(run, home, profile, which, idx):
+    tool, cmd = _flag_shell_cases(home, which)[idx]
+    assert run(profile, tool, role="worker", command=cmd) == FLAG_MSG
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("role", ["meta", "plain"])
+def test_c_meta_and_plain_write_own_git_policy(run, home, profile, which, role):
+    flag = win(which(home, "config/git-policy"))
+    assert run(profile, "Write", role=role, file_path=flag, content="enabled") is None
+    assert run(profile, "PowerShell", role=role, command=f"Set-Content -LiteralPath '{flag}' -Value enabled") is None
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+def test_c_worker_reads_own_git_policy(run, home, profile, which):
+    flag = win(which(home, "config/git-policy"))
+    assert run(profile, "Read", role="worker", file_path=flag) is None
+    assert run(profile, "PowerShell", role="worker", command=f"Get-Content '{flag}'") is None
+
+
+@pytest.mark.parametrize("profile,which", [(SC, ds), (DS, sc)])
+def test_c_worker_cross_profile_flag_keeps_cross_profile_message(run, home, profile, which):
+    reason = run(profile, "Write", role="worker", file_path=win(which(home, "config/git-policy")), content="x")
+    assert reason and f"{profile} may not" in reason
+
+
+def test_c_worker_flag_check_survives_exhausted_realpath_budget(run, home, monkeypatch):
+    # Il confronto col flag non dipende dal tetto di realpath (heredoc lunghi esauriscono il budget)
+    monkeypatch.setattr(fw, "_MAX_REALPATH", 0)
+    path = _flag_spelling(home, ds, "junction")
+    assert run(DS, "Write", role="worker", file_path=path, content="enabled") == FLAG_MSG
+    assert run(DS, "Bash", role="worker", command=f"curl -s -o {path} https://example.org") == FLAG_MSG
+
+
+PADDING = 4000
+
+
+def _count_realpath(monkeypatch) -> list[int]:
+    """Contatore delle risoluzioni su disco: si contano le chiamate, mai i tempi."""
+    calls = [0]
+    real = fw.os.path.realpath
+
+    def counted(*args, **kwargs):
+        calls[0] += 1
+        return real(*args, **kwargs)
+    monkeypatch.setattr(fw.os.path, "realpath", counted)
+    return calls
+
+
+@pytest.mark.parametrize("profile", [SC, DS])
+def test_m2_written_tokens_keep_the_realpath_budget(run, home, monkeypatch, profile):
+    # rm -f con migliaia di bersagli qualsiasi: solo i token che possono essere il flag superano il tetto
+    cmd = "rm -f " + " ".join(f"out/f{i}.txt" for i in range(PADDING))
+    calls = _count_realpath(monkeypatch)
+    assert run(profile, "Bash", role="worker", cwd=home / "code" / "proj", command=cmd) is None
+    assert calls[0] <= fw._MAX_REALPATH + 10, calls[0]
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("kind", ["junction", "short-name"])
+def test_m2_flag_after_padding_still_denied(run, home, profile, which, kind):
+    if kind == "junction":
+        path = _flag_spelling(home, which, "junction")
+    else:
+        flag = which(home, "config/git-policy")
+        flag.write_text("disabled", encoding="utf-8")
+        path = _short(flag)
+        if "~" not in path.rsplit("\\", 1)[-1]:
+            pytest.skip("8.3 names disabled")
+    cmd = "rm -f " + " ".join(f"out/f{i}.txt" for i in range(PADDING)) + " " + path.replace("\\", "/")
+    assert run(profile, "Bash", role="worker", cwd=home / "code" / "proj", command=cmd) == FLAG_MSG
+
+
+def _stream_cases(home: Path, which) -> list[tuple[str, str]]:
+    flag = win(which(home, "config/git-policy"))
+    conf = win(which(home, "config"))
+    fwd = flag.replace("\\", "/")
+    return [
+        ("PowerShell", f"Set-Content -LiteralPath '{flag}::$DATA' -Value enabled"),
+        ("PowerShell", f"cmd /c 'echo enabled> {flag}::$DATA'"),
+        ("PowerShell", f"Set-Content -LiteralPath '{conf}::$INDEX_ALLOCATION\\git-policy' -Value enabled"),
+        ("PowerShell", f"Set-Content -LiteralPath '{conf}:$I30:$INDEX_ALLOCATION\\git-policy' -Value enabled"),
+        ("Bash", f'cmd //c "echo enabled> {fwd}::\\$DATA"'),
+        ("PowerShell", f'Set-Content -LiteralPath "{flag}::`$DATA" -Value enabled'),
+    ]
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("idx", range(6))
+def test_b1_worker_stream_designator_flag_writes_denied(run, home, profile, which, idx):
+    tool, cmd = _stream_cases(home, which)[idx]
+    assert run(profile, tool, role="worker", command=cmd) == FLAG_MSG
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("role", ["meta", "plain"])
+@pytest.mark.parametrize("idx", range(6))
+def test_b1_meta_and_plain_stream_designator_flag_writes_allowed(run, home, profile, which, role, idx):
+    tool, cmd = _stream_cases(home, which)[idx]
+    assert run(profile, tool, role=role, command=cmd) is None
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("tool,template", [
+    ("PowerShell", "Set-Content -LiteralPath '{conf}\\other.txt' -Value x"),
+    ("PowerShell", "Set-Content -LiteralPath '{conf}\\other.txt::$DATA' -Value x"),
+    ("PowerShell", 'Set-Content -Path "$env:FOO\\x.txt" -Value 1'),
+    ("PowerShell", "Write-Output $env:FOO; Set-Content -Path $env:TEMP\\x.txt -Value 1"),
+    ("Bash", "echo $HOME && cp a.txt $HOME/code/proj/b.txt"),
+    ("Bash", "echo x > $FOO/out.txt"),
+])
+def test_b1_variables_and_other_files_allowed(run, home, profile, which, tool, template):
+    cmd = template.format(conf=win(which(home, "config")))
+    assert run(profile, tool, role="worker", cwd=home / "code" / "proj", command=cmd) is None
+
+
+# --------------------------------------------------------------------------
+# M-1. scritture a livello di cartella che cambiano il flag senza nominarlo
+# --------------------------------------------------------------------------
+def _dir_cases(home: Path, which) -> list[tuple[str, str]]:
+    conf, root = win(which(home, "config")), win(which(home))
+    fconf, froot = conf.replace("\\", "/"), root.replace("\\", "/")
+    stage = home / "stage"
+    stage.mkdir(parents=True, exist_ok=True)
+    st = win(stage)
+    fst = st.replace("\\", "/")
+    return [
+        ("Bash", f"rm -r {fconf}"),
+        ("PowerShell", f"Remove-Item {conf} -Recurse -Force"),
+        ("Bash", f"mv {fconf} {fconf}.old"),
+        ("PowerShell", f"Rename-Item {conf} config.old"),
+        ("PowerShell", f"Rename-Item -NewName config.old -Path {conf}"),
+        ("PowerShell", f"Move-Item {conf} {st}\\old"),
+        ("PowerShell", f"Copy-Item {st}\\* -Destination {conf} -Force"),
+        ("Bash", f"cp {fst}/* {fconf}/"),
+        ("Bash", f"cp -r {fst}/. {fconf}/"),
+        ("Bash", f"tar -xf x.tar -C {fconf}"),
+        ("PowerShell", f"tar -xf x.tar -C {conf}"),
+        ("Bash", f"tar --extract --file=x.tar --directory={fconf}"),
+        ("PowerShell", f"Expand-Archive x.zip -DestinationPath {conf} -Force"),
+        ("PowerShell", f"Expand-Archive x.zip {conf}"),
+        ("Bash", f"unzip -o x.zip -d {fconf}"),
+        ("Bash", f"7z x x.7z -o{fconf}"),
+        ("PowerShell", f"robocopy {st} {conf}"),
+        ("PowerShell", f"robocopy {st} {conf} /E"),
+        ("PowerShell", f"robocopy {st} {conf} git-policy"),
+        ("PowerShell", f"robocopy {st} {conf} *"),
+        ("PowerShell", f"robocopy {st} {conf} git-*"),
+        ("Bash", f"rm -f {fconf}/*"),
+        ("Bash", f"rm -rf {froot}"),
+        ("PowerShell", f"Remove-Item {root} -Recurse -Force"),
+        ("Bash", f"mv {froot} {froot}.bak"),
+        ("Bash", f"tar -xf x.tar -C {froot}"),
+    ]
+
+
+DIR_CASES = 26
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("idx", range(DIR_CASES))
+def test_m1_worker_directory_level_flag_writes_denied(run, home, profile, which, idx):
+    tool, cmd = _dir_cases(home, which)[idx]
+    assert run(profile, tool, role="worker", cwd=home / "code" / "proj", command=cmd) == FLAG_MSG
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("role", ["meta", "plain"])
+@pytest.mark.parametrize("idx", range(DIR_CASES))
+def test_m1_meta_and_plain_directory_level_writes_allowed(run, home, profile, which, role, idx):
+    tool, cmd = _dir_cases(home, which)[idx]
+    assert run(profile, tool, role=role, cwd=home / "code" / "proj", command=cmd) is None
+
+
+def test_m1_case_count(home):
+    assert len(_dir_cases(home, sc)) == DIR_CASES
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+@pytest.mark.parametrize("tool,template", [
+    ("PowerShell", "Set-Content -Path {conf}\\other.txt -Value x"),
+    ("PowerShell", "Remove-Item {conf}\\other.txt"),
+    ("Bash", "cp a.txt {fconf}/"),
+    ("Bash", "mv a.txt {fconf}/"),
+    ("PowerShell", "Copy-Item a.txt -Destination {conf}"),
+    ("PowerShell", "Copy-Item {st}\\*.txt -Destination {conf}"),
+    ("PowerShell", "robocopy {st} {conf} other.txt"),
+    ("PowerShell", "robocopy {st} {conf} *.txt /E"),
+    ("Bash", "ls {fconf}"),
+    ("PowerShell", "Get-ChildItem {conf}"),
+    ("Bash", "rm -f {fconf}/*.log"),
+    ("Bash", "rm -rf {froot}/*/__pycache__"),
+    ("Bash", "mkdir -p {fconf}"),
+    ("Bash", "tar -czf out.tgz -C {fconf} ."),
+    ("Bash", "rm -r {proj}/config"),
+    ("PowerShell", "Remove-Item {proj}\\config -Recurse -Force"),
+    ("Bash", "tar -xf x.tar -C {proj}"),
+    ("PowerShell", "Expand-Archive x.zip -DestinationPath {proj}\\config"),
+    ("Bash", "cp {fst}/* {proj}/config/"),
+])
+def test_m1_worker_directory_over_block_controls(run, home, profile, which, tool, template):
+    conf = win(which(home, "config"))
+    proj = home / "code" / "proj"
+    stage = home / "stage"
+    stage.mkdir(parents=True, exist_ok=True)
+    cmd = template.format(conf=conf, fconf=conf.replace("\\", "/"), st=win(stage),
+                          froot=win(which(home)).replace("\\", "/"),
+                          fst=win(stage).replace("\\", "/"),
+                          proj=win(proj) if tool == "PowerShell" else win(proj).replace("\\", "/"))
+    assert run(profile, tool, role="worker", cwd=proj, command=cmd) is None
+    assert run(profile, "Write", role="worker", file_path=f"{conf}\\other.txt", content="x") is None
+
+
+@pytest.mark.parametrize("profile,which", [(SC, ds), (DS, sc)])
+def test_m1_cross_profile_directory_writes_keep_cross_profile_message(run, home, profile, which):
+    conf = win(which(home, "config")).replace("\\", "/")
+    for role in ("worker", "plain"):
+        reason = run(profile, "Bash", role=role, cwd=home / "code" / "proj", command=f"rm -r {conf}")
+        assert reason and f"{profile} may not" in reason
+
+
+@pytest.mark.parametrize("profile", [SC, DS])
+def test_m1_directory_targets_keep_the_realpath_budget(run, home, monkeypatch, profile):
+    # rm -rf con migliaia di cartelle qualsiasi: la regola sulle cartelle non forza risoluzioni su disco
+    cmd = "rm -rf " + " ".join(f"out/d{i}" for i in range(PADDING))
+    calls = _count_realpath(monkeypatch)
+    assert run(profile, "Bash", role="worker", cwd=home / "code" / "proj", command=cmd) is None
+    assert calls[0] <= fw._MAX_REALPATH + 10, calls[0]
+
+
+@pytest.mark.parametrize("profile,which", [(SC, sc), (DS, ds)])
+def test_m1_config_after_padding_still_denied(run, home, profile, which):
+    conf = win(which(home, "config")).replace("\\", "/")
+    cmd = "rm -rf " + " ".join(f"out/d{i}" for i in range(PADDING)) + " " + conf
+    assert run(profile, "Bash", role="worker", cwd=home / "code" / "proj", command=cmd) == FLAG_MSG
 
 
 def test_c_deepseek_shell_write_into_shared_code(run, home):

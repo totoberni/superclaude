@@ -6,8 +6,14 @@ A. profilo superclaude: sotto ~/.claude-deepseek solo le voci di installazione
 B. profilo deepseek: sotto ~/.claude solo LETTURA delle voci condivise
    (sc_profile.SHARED_CODE_ENTRIES), nessuna scrittura, nessun git nel repository
    ~/.claude; la shell puo' citare solo percorsi condivisi;
-C. entrambi: settings.json / settings.local.json di ogni profilo e, per deepseek,
-   il proprio config/git-policy sono scritti solo dal proprietario;
+C. entrambi: settings.json / settings.local.json di ogni profilo sono scritti solo
+   dal proprietario; il flag /git del proprio profilo (sc_profile.GIT_POLICY_REL) non
+   e' scritto dai worker in nessuna grafia (forme device e UNC, giunzioni, punto finale, ::$DATA),
+   meta e sessione plain lo scrivono; il confronto col flag non dipende dal tetto di realpath;
+   un worker non cambia il flag nemmeno a livello di cartella: niente cancellazione, spostamento
+   o rinomina della cartella config o della data home, e niente scritture di nomi ignoti nel
+   testo (sorgente con caratteri jolly o `.`, estrazione di archivi con tar, Expand-Archive,
+   unzip, 7z, robocopy senza filtri o con un filtro che copre il flag) dentro di esse;
 D. entrambi: un comando shell che CAMBIA la variabile SC_PROFILE (assegnazione,
    export/unset/set/setx, env -u, $env:, Env:, SetEnvironmentVariable) e' negato;
    citarla soltanto (grep, pytest -k, messaggi di commit, echo) e' permesso;
@@ -23,6 +29,7 @@ giunzioni NTFS), nessun sottoprocesso.
 """
 from __future__ import annotations
 
+import fnmatch
 import functools
 import os
 import re
@@ -37,8 +44,21 @@ import sc_profile  # noqa: E402 - core ha gia' aggiunto <code home>/lib a sys.pa
 NAME = "profile-firewall"
 
 _SETTINGS = frozenset(name.lower() for name in sc_profile.SETTINGS_FILES)
-_GIT_POLICY = sc_profile.GIT_POLICY_REL.lower()
 _MAX_REALPATH = 64                    # tetto alle risoluzioni su disco per chiamata (heredoc lunghi)
+_FLAG_DENY = "workers may not change the git policy flag; ask the owner to run /git"
+_FLAG_NAME = sc_profile.GIT_POLICY_REL.rsplit("/", 1)[-1].lower()
+_FLAG_PARTS = tuple(sc_profile.GIT_POLICY_REL.lower().split("/"))
+# Cartelle che contengono il flag dentro la data home: "" (la home stessa) e "config"
+_FLAG_DIRS = frozenset("/".join(_FLAG_PARTS[:k]) for k in range(len(_FLAG_PARTS)))
+_FLAG_DIR_NAMES = frozenset(_FLAG_PARTS[:-1]) | {d.lower() for d in sc_profile.DATA_HOME_DIRS.values()}
+_SHORT_MARK = re.compile(r"~\d")                                  # nome corto 8.3
+# Win32 apre `nome.`, `nome ` e `nome::$DATA` come `nome`
+_WIN32_TAIL = re.compile(r"[. ]*(?:::\$data)?[. ]*$", re.I)
+# Designatori di stream che nominano il flusso principale o la cartella stessa: `f::$DATA`,
+# `cartella::$INDEX_ALLOCATION\f`, `cartella:$I30:$INDEX_ALLOCATION\f`; non `:nome` (stream con nome).
+# Il `$` puo' arrivare escapato dalla shell (`\$` in bash, `` `$ `` in PowerShell)
+_STREAM = re.compile(r"(?:::[\\`]?\$data|::[\\`]?\$index_allocation|:[\\`]?\$i30:[\\`]?\$index_allocation)"
+                     r"(?=[\\/]|[. ]*$)", re.I)
 
 _SHELLS = frozenset({"cmd", "bash", "sh", "zsh", "pwsh", "powershell", "wsl"})
 _RUNNERS = frozenset({"npx", "start", "start-process", "saps", ".", "call", "&"})
@@ -52,7 +72,11 @@ _WRITE_VERBS = frozenset({
 })
 _COPY_VERBS = frozenset({"cp", "copy", "copy-item", "cpi", "xcopy", "robocopy", "install"})  # destinazione dopo la sorgente
 _MOVE_VERBS = frozenset({"mv", "move", "move-item", "mi"})
-_JOIN_VERBS = (_COPY_VERBS - {"robocopy"}) | _MOVE_VERBS   # robocopy: `src dst file...`, niente unione
+_JOIN_VERBS = (_COPY_VERBS - {"robocopy"}) | _MOVE_VERBS   # robocopy: `src dst file...`, unione coi filtri
+_DELETE_VERBS = frozenset({"remove-item", "ri", "rm", "del", "erase", "rmdir", "rd"})
+_RENAME_VERBS = frozenset({"ren", "rename", "rename-item", "rni"})
+_SEVEN_ZIP = frozenset({"7z", "7za", "7zr", "7zz"})
+_TAR_EXTRACT = re.compile(r"-[A-Za-z]*x[A-Za-z]*|--extract|--get")
 _NULL_SINKS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "nul"})
 
 # Destinazioni con nome: PowerShell accetta ogni abbreviazione non ambigua (-Des... -Destination)
@@ -158,6 +182,37 @@ def _expand(text: str, home: str = "") -> str:
     return _MSYS.sub(lambda m: m.group(1) + ":", text)
 
 
+def _fold(path: str) -> str:
+    """Percorso canonico come lo apre Win32: senza punti e spazi finali dei componenti ne' `::$DATA`."""
+    return "/".join(c if c in ("", ".", "..") else _WIN32_TAIL.sub("", c) for c in path.split("/"))
+
+
+def _may_be_flag(text: str, whole: bool = False) -> bool:
+    """Il nome finale puo' essere il flag /git: lo stesso nome (anche come prodotto di `_dest_joins`)
+    o un nome corto 8.3 (`GIT-PO~1`), che solo il disco riconduce al nome lungo; per una cartella
+    scritta per intero (`whole`) anche `config` o il nome di una data home."""
+    base = _fold(text.replace("\\", "/").rstrip("/")).rsplit("/", 1)[-1].lower()
+    return (base == _FLAG_NAME or bool(_SHORT_MARK.search(base))
+            or (whole and base in _FLAG_DIR_NAMES))
+
+
+def _may_name_flag(tok: str) -> bool:
+    """Il token puo' coprire il flag o la sua cartella? Senza jolly si'; con jolly solo se l'ultimo
+    componente e' il primo con jolly e ne copre il nome (`<home>/*/__pycache__` non tocca config)."""
+    parts = [p for p in re.split(r"[\\/]", tok) if p]
+    for k, part in enumerate(parts):
+        if any(c in _GLOB for c in part):
+            low = part.lower()
+            return k == len(parts) - 1 and ("{" in low or any(fnmatch.fnmatchcase(n, low) for n in _FLAG_PARTS))
+    return True
+
+
+def _unknown_name(src: str) -> bool:
+    """Una sorgente i cui file scritti non si leggono nel testo: `.`, `..` o un glob che puo' coprire il flag."""
+    name = src.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+    return name in ("", ".", "..") or (any(c in _GLOB for c in name) and _may_name_flag(name))
+
+
 def _glob_root(text: str) -> str:
     """Parte fissa di un glob: le cartelle prima del primo componente con caratteri jolly."""
     keep: list[str] = []
@@ -182,6 +237,8 @@ def _candidate(tok: str, home: str) -> str:
         t = _util.unquote(m.group("val"))
     elif t.startswith("-"):
         return ""
+    # Il `$` di `::$DATA` non e' una variabile: senza il designatore il token resta un percorso
+    t = _STREAM.sub("", t)
     if any(c.isspace() or c in _NOT_PATH for c in t):
         return ""
     t = _expand(t, home)
@@ -239,6 +296,9 @@ class _Scanner:
         self.home_forms = {self.home_text} | {_util.canon(f) for f in sc_profile.resolved_forms(Path.home())}
         self.budget = _MAX_REALPATH
         self._cwds: dict[str, list[str]] = {}
+        # Flag /git di ogni profilo con le sue forme reali, risolte una volta fuori dal budget
+        self.flags = {_fold(_util.canon(f)): name for name, p in sc_profile.profiles().items()
+                      for f in sc_profile.resolved_forms(p / sc_profile.GIT_POLICY_REL)}
 
     def locate(self, path: str) -> list[_Hit]:
         path = sc_profile.local_form(path)
@@ -251,11 +311,14 @@ class _Scanner:
         owner = sc_profile.private_file_owner(path, self.home_forms) if path else None
         if owner:
             hits.append(_Hit(owner, path.replace("\\", "/").rsplit("/", 1)[-1].lower(), private=True))
+        flag = self.flags.get(_fold(path))
+        if flag and not any(h.profile == flag for h in hits):
+            hits.append(_Hit(flag, sc_profile.GIT_POLICY_REL))   # flag con la cartella config fuori dalla home
         return hits
 
-    def real_forms(self, path: str) -> set[str]:
-        """Forma data piu' forma risolta su disco (giunzioni, symlink), entro il budget."""
-        if self.budget <= 0:
+    def real_forms(self, path: str, force: bool = False) -> set[str]:
+        """Forma data piu' forma risolta su disco (giunzioni, symlink), entro il budget salvo `force`."""
+        if self.budget <= 0 and not force:
             return {path}
         self.budget -= 1
         try:
@@ -281,17 +344,22 @@ class _Scanner:
 
     def path_hits(self, raw: str, cwd: str) -> list[_Hit]:
         """Bersaglio di uno strumento file: sempre risolto anche su disco."""
-        forms = {f for p in self._resolve(_expand(raw), cwd) for f in self.real_forms(p)}
+        forms = {f for p in self._resolve(_expand(raw), cwd) for f in self.real_forms(p, force=True)}
         return [h for f in forms for h in self.locate(f)]
 
-    def token_hits(self, tok: str, cwd: str) -> list[_Hit]:
+    def token_hits(self, tok: str, cwd: str, force: bool = False, whole: bool = False) -> list[_Hit]:
+        """Percorsi di un token; `force` (token scritti) risolve su disco a budget esaurito se puo' essere il flag
+        o, con `whole` (cartella scritta per intero), una cartella che lo contiene."""
         text = _candidate(tok, self.home_fwd)
         if not text:
             return []
+        # Un rm con migliaia di bersagli forzati supererebbe il timeout dell'hook: oltre il tetto
+        # si risolve su disco solo un token scritto che potrebbe nominare il flag
+        force = force and _may_be_flag(text, whole)
         forms: set[str] = set()
         bare = not any(c in text for c in "/\\.~:")
         # Parole nude, o budget di realpath esaurito: niente giunzioni da scoprire, basta il filtro testuale
-        if (bare or self.budget <= 0) and not self._may_hit(text, cwd):
+        if (bare or (self.budget <= 0 and not force)) and not self._may_hit(text, cwd):
             return []
         for p in self._resolve(text, cwd):
             if bare:
@@ -299,7 +367,7 @@ class _Scanner:
                 if self.locate(p) and os.path.lexists(p):
                     forms.add(p)
             else:
-                forms |= self.real_forms(p)
+                forms |= self.real_forms(p, force)
         return [h for f in forms for h in self.locate(f)]
 
     def mention_hits(self, cmd: str, cwd: str) -> list[_Hit]:
@@ -356,11 +424,11 @@ def _alternative(active: str, hit: _Hit) -> str:
 
 
 def _owner_only(where: str) -> str:
-    return (f"{where} is owner-only (settings*.json of both profiles and the deepseek git-policy flag "
-            "are written by the owner); propose the change to the user instead")
+    return (f"{where} is owner-only (settings*.json of both profiles are written by the owner); "
+            "propose the change to the user instead")
 
 
-def _verdict(active: str, hit: _Hit, write: bool) -> str | None:
+def _verdict(active: str, hit: _Hit, write: bool, role: str, *, whole: bool = False) -> str | None:
     where = _display(hit)
     if hit.private:
         return None if hit.profile == active else (
@@ -369,8 +437,14 @@ def _verdict(active: str, hit: _Hit, write: bool) -> str | None:
             f"only from the {hit.profile} profile")
     code = _code_profile()
     if hit.profile == active:
-        owner_only = hit.rel in _SETTINGS or (active != code and hit.rel == _GIT_POLICY)
-        return _owner_only(where) if write and owner_only else None
+        if write and hit.rel in _SETTINGS:
+            return _owner_only(where)
+        # /git e' una decisione del proprietario: un worker non cambia il flag del proprio profilo,
+        # ne' scrivendolo ne' cancellando, spostando o riempiendo per intero una cartella che lo contiene
+        rel = _fold(hit.rel)
+        if role == "worker" and ((write and rel == sc_profile.GIT_POLICY_REL) or (whole and rel in _FLAG_DIRS)):
+            return _FLAG_DENY
+        return None
     if active == code:
         return _foreign_data_verdict(active, hit, write)
     return _code_home_verdict(active, hit, write)
@@ -404,8 +478,8 @@ def _code_home_verdict(active: str, hit: _Hit, write: bool) -> str | None:
             f"({', '.join(sc_profile.SHARED_CODE_ENTRIES)}); use {_alternative(active, hit)} instead")
 
 
-def _first_verdict(active: str, hits: list[_Hit], write: bool) -> str | None:
-    return next((r for r in (_verdict(active, h, write) for h in hits) if r), None)
+def _first_verdict(active: str, hits: list[_Hit], write: bool, role: str, *, whole: bool = False) -> str | None:
+    return next((r for r in (_verdict(active, h, write, role, whole=whole) for h in hits) if r), None)
 
 
 # --------------------------------------------------------------------------
@@ -508,8 +582,33 @@ def _write_positions(toks: list[str]) -> set[int]:
     return named | (set(positional) if verb in _WRITE_VERBS else set())
 
 
+def _robocopy_args(toks: list[str]) -> tuple[int | None, list[str]]:
+    """Indice della destinazione e filtri sui file di `robocopy src dst [file...] [/opzioni]`."""
+    positional = _positional(toks, set())
+    if len(positional) < 2:
+        return None, []
+    filters: list[str] = []
+    for i in positional[2:]:
+        if toks[i].startswith("/"):
+            break
+        filters.append(toks[i])
+    return positional[1], filters
+
+
+def _robocopy_whole(toks: list[str]) -> list[int]:
+    """Destinazione di robocopy riempita con nomi ignoti: senza filtri o con un filtro jolly che copre il flag."""
+    dest, filters = _robocopy_args(toks)
+    unknown = not filters or any(any(c in _GLOB for c in f) and _may_name_flag(f) for f in filters)
+    return [dest] if dest is not None and unknown else []
+
+
 def _dest_joins(toks: list[str]) -> list[str]:
-    """Copia o spostamento in una cartella: il file scritto e' `<destinazione>/<nome della sorgente>`."""
+    """Copia o spostamento in una cartella: il file scritto e' `<destinazione>/<nome della sorgente>`
+    (per robocopy `<destinazione>/<filtro>` per ogni filtro senza caratteri jolly)."""
+    if toks and _stem(toks[0]) == "robocopy":
+        dest, filters = _robocopy_args(toks)
+        return [] if dest is None else [toks[dest].rstrip("/\\") + "/" + f for f in filters
+                                        if not any(c in _GLOB for c in f)]
     if not toks or _stem(toks[0]) not in _JOIN_VERBS:
         return []
     named = _named_targets(_stem(toks[0]), toks)
@@ -526,29 +625,73 @@ def _dest_joins(toks: list[str]) -> list[str]:
     return joins
 
 
-def _segment_tokens(seg: str) -> list[tuple[str, bool]]:
-    """(token, scritto?) per un segmento: redirezioni e bersagli dei verbi di scrittura."""
+def _extract_dirs(verb: str, toks: list[str], named: set[int], positional: list[int]) -> list[int]:
+    """Cartelle in cui un archivio si estrae: `tar -x -C X`, `Expand-Archive -DestinationPath X`, `unzip -d X`."""
+    if verb == "tar" and (any(_TAR_EXTRACT.fullmatch(t) for t in toks[1:])
+                          or re.fullmatch(r"[A-Za-z]*x[A-Za-z]*", toks[1] if len(toks) > 1 else "")):
+        return sorted(named)
+    if verb == "expand-archive":
+        return sorted(named) or positional[1:2]
+    if verb == "unzip":
+        return [i + 1 for i in range(1, len(toks) - 1) if toks[i] == "-d"]
+    return []
+
+
+def _whole_positions(toks: list[str]) -> set[int]:
+    """Indici delle cartelle scritte per intero: cancellate, spostate o rinominate, o riempite con
+    nomi che il testo non mostra (sorgente jolly o `.`, archivio estratto, robocopy senza filtri)."""
+    if not toks:
+        return set()
+    verb = _stem(toks[0])
+    named = _named_targets(verb, toks)
+    positional = _positional(toks, named)
+    if verb in _DELETE_VERBS or verb in _RENAME_VERBS:
+        found = positional
+    elif verb in _JOIN_VERBS:
+        dests = sorted(named) or positional[-1:]
+        sources = [i for i in positional if i not in dests]
+        found = sources if verb in _MOVE_VERBS else []
+        if any(_unknown_name(toks[s]) for s in sources):
+            found = found + dests
+    elif verb == "robocopy":
+        found = _robocopy_whole(toks)
+    else:
+        found = _extract_dirs(verb, toks, named, positional)
+    return {i for i in found if _may_name_flag(toks[i])}
+
+
+def _whole_values(toks: list[str]) -> list[str]:
+    """Cartelle di estrazione incollate all'opzione, che non sono token a se': `7z x a.7z -oX`."""
+    if not toks or _stem(toks[0]) not in _SEVEN_ZIP:
+        return []
+    return [t[2:] for t in toks[1:] if t[:2].lower() == "-o" and len(t) > 2]
+
+
+def _segment_tokens(seg: str) -> list[tuple[str, bool, bool]]:
+    """(token, scritto?, cartella scritta per intero?) per un segmento: redirezioni e bersagli dei verbi."""
     m = _LEAD.match(seg)
     head, body = (seg[:m.end()], seg[m.end():]) if m else ("", seg)
-    out = [(t, False) for t in _util.tokens(head)]
+    out = [(t, False, False) for t in _util.tokens(head)]
     toks = _util.tokens(body)
     targets = _write_positions(toks)
+    whole = _whole_positions(toks)
     i = 0
     while i < len(toks):
         tok = toks[i]
         r = _REDIRECT.match(tok) if ">" in tok else None
         if r:
             if r.group("pre"):
-                out.append((r.group("pre"), i in targets))
+                out.append((r.group("pre"), i in targets, False))
             if r.group("rest"):
-                out.append((r.group("rest"), True))
+                out.append((r.group("rest"), True, False))
             elif i + 1 < len(toks):
                 i += 1
-                out.append((toks[i], True))
+                out.append((toks[i], True, False))
         else:
-            out.append((tok.lstrip("<"), i in targets))
+            out.append((tok.lstrip("<"), i in targets, i in whole))
         i += 1
-    return out + [(j, True) for j in _dest_joins(toks)]
+    return (out + [(j, True, False) for j in _dest_joins(toks)]
+            + [(v, False, True) for v in _whole_values(toks)])
 
 
 def _git_reason(cmd: str, cwd: str, active: str, scan: _Scanner) -> str | None:
@@ -586,7 +729,7 @@ def _runs_store_key(seg: str) -> bool:
     return stems[0] in _STORE_KEY or (launcher and any(s in _STORE_KEY for s in stems[1:]))
 
 
-def _segment_reason(seg: str, here: str, active: str, scan: _Scanner) -> str | None:
+def _segment_reason(seg: str, here: str, active: str, scan: _Scanner, role: str) -> str | None:
     if _runs_store_key(seg):
         return _KEY_DENY
     programs = _programs(seg)
@@ -596,8 +739,9 @@ def _segment_reason(seg: str, here: str, active: str, scan: _Scanner) -> str | N
     if active == scan.code_owner and programs & _DS_LAUNCHER:
         return (f"{active} may not launch claude-ds: a child deepseek session would mix the two "
                 "profiles; the owner starts claude-ds in its own terminal")
-    for tok, write in _segment_tokens(seg):
-        reason = _first_verdict(active, scan.token_hits(tok, here), write)
+    for tok, write, whole in _segment_tokens(seg):
+        hits = scan.token_hits(tok, here, force=write or whole, whole=whole)
+        reason = _first_verdict(active, hits, write, role, whole=whole)
         if reason:
             return reason
     return None
@@ -614,16 +758,16 @@ def _shell_reason(ctx: core.Ctx, active: str, scan: _Scanner) -> str | None:
         return None
     reason = _command_reason(cmd, ctx.cwd, active, scan)
     for seg, here in ([] if reason else _util.walk(cmd, ctx.cwd)):
-        reason = _segment_reason(seg, here, active, scan)
+        reason = _segment_reason(seg, here, active, scan, ctx.role)
         if reason:
             break
-    return reason or _first_verdict(active, scan.mention_hits(cmd, ctx.cwd), False)
+    return reason or _first_verdict(active, scan.mention_hits(cmd, ctx.cwd), False, ctx.role)
 
 
 def _file_reason(ctx: core.Ctx, active: str, scan: _Scanner) -> str | None:
     write = ctx.tool in core.WRITE_TOOLS
     for raw in _file_targets(ctx):
-        reason = _first_verdict(active, scan.path_hits(raw, ctx.cwd), write)
+        reason = _first_verdict(active, scan.path_hits(raw, ctx.cwd), write, ctx.role)
         if reason:
             return reason
     return None

@@ -9,8 +9,8 @@ allowed-tools: Read, Write
 
 # Git Policy Toggle
 
-Enable or disable ALL agent git commit and push for every agent, by writing the
-policy state file that the git-policy guard reads.
+Enable or disable ALL agent git commit and push for every agent of the ACTIVE
+profile, by writing the policy state file that the git-policy guard reads.
 
 **Argument**: $ARGUMENTS (`true` = commit and push allowed, `false` = both blocked)
 
@@ -32,14 +32,36 @@ perform this exact action in the CURRENT session, print the proposed change (the
 word it would write and to which file) and STOP; do not execute. Proceed only when
 a human has explicitly requested this action this session.
 
+## Which flag file
+
+Each profile has its own flag, `<data home>/config/git-policy`:
+
+| `SC_PROFILE` seen by the session | Profile | Flag file |
+|---|---|---|
+| empty or unset | superclaude | `~/.claude/config/git-policy` |
+| `deepseek` | DeepSeek | `~/.claude-deepseek/config/git-policy` |
+
+Find the value with a read-only probe: `echo "$SC_PROFILE"` (Bash) or
+`$env:SC_PROFILE` (PowerShell). A DeepSeek session gets `deepseek` from its
+launcher and settings. Any other value: report it and stop. Never assign
+`SC_PROFILE` (the profile firewall denies it). Write only the active profile's
+flag; the profile firewall denies writing the other profile's flag.
+
 ## What the policy does
 
 The SOT is the guard, not this skill. The git-policy guard
 (`hooks/sc_hooks/handlers/git_policy.py`) runs on every Bash and PowerShell tool
-call and reads `~/.claude/config/git-policy`. The read is fail-open: the block
-applies only when the file exists, is readable, and says `disabled` (`false`,
-`off`, `0`, `no` are accepted spellings, case-insensitive). An absent file or any
-other content counts as `enabled`.
+call and reads the active profile's flag. Accepted words, case-insensitive:
+`enabled`, `true`, `on`, `1`, `yes` and `disabled`, `false`, `off`, `0`, `no`.
+
+- superclaude, fail-open: the block applies only when the file exists, is
+  readable, and says a disabling word. An absent file or any other content counts
+  as `enabled`. `SUPERCLAUDE_GIT_POLICY_FILE` overrides the path (tests).
+- DeepSeek, fail-closed: git is unblocked only when the file exists, is readable,
+  and says an enabling word. An absent or unreadable file or any other content
+  counts as `disabled`; `SUPERCLAUDE_GIT_POLICY_FILE` is ignored. DeepSeek init
+  writes `false`, so DeepSeek git stays off until the owner runs `/git true` in a
+  DeepSeek session.
 
 While `disabled`, the guard BLOCKS, for every role (plain, meta, worker):
 
@@ -61,7 +83,7 @@ These forms PASS while disabled:
 - other `gh` subcommands (`pr view`, `pr list`, `pr create`, `release list`);
 - a verb that only appears inside a quoted string (`echo 'git commit'`).
 
-This skill writes only `~/.claude/config/git-policy`; it does not read or write
+This skill writes only the active profile's flag file; it does not read or write
 `settings.json`. `settings.json` is owner-run-only (see rules/12-agent-hierarchy.md).
 
 How the guard reads a command: it splits the string on `;`, `&&`, `||`, `|`, `&`
@@ -73,7 +95,7 @@ full path to it, steps over git global options (`-C <dir>`, `-c <k=v>`,
 wrapper (`bash -c`, `sh -c`, `pwsh -Command`, `powershell`, `cmd`, `eval`, `iex`).
 
 Flag-file write protection: independently of the flag state, a worker's shell
-command that targets the policy file is denied. This covers a redirection
+command that targets the active profile's policy file is denied. This covers a redirection
 (`>`, `>>`, `>|`) and the common writer commands in both shells (`tee`, `cp`,
 `mv`, `rm`, `sed`, `dd of=`, `Set-Content`, `Add-Content`, `Out-File`,
 `Copy-Item`, `Move-Item`, `Remove-Item`, `New-Item` and their aliases), with the
@@ -105,8 +127,8 @@ write-ACL guard (those tools name the path as structured data).
 
 When blocked, an agent must ask the owner to run `/git true`; the owner manages
 git manually (rules/00 Git Discipline; the owner reviews changes before they enter
-the commit log). An absent policy file is treated as `enabled`, so the block is
-strictly opt-in and current workflows are never broken.
+the commit log). Under superclaude an absent policy file is treated as `enabled`,
+so the block is strictly opt-in; under DeepSeek it is treated as `disabled`.
 
 This skill is the sanctioned writer of the policy file. Nothing else should write
 it.
@@ -115,17 +137,19 @@ it.
 
 ### `/git true` (enable commit and push)
 
-Write `~/.claude/config/git-policy` with the Write tool (parents are created
-automatically). The file content is the single word `enabled` followed by a
+Determine the flag file (see Which flag file), then Write it with the Write tool
+(parents are created automatically). The file content is the single word `enabled` followed by a
 newline. Then Read the file back and report "git policy is now: enabled".
 
 ### `/git false` (disable commit and push)
 
-Write `~/.claude/config/git-policy` with the Write tool. The file content is the
+Determine the flag file (see Which flag file), then Write it with the Write tool.
+The file content is the
 single word `disabled` followed by a newline. Then Read the file back and report
 "git policy is now: disabled".
 
 ### Confirm
 
-Report: "Agent git commit and push are now **enabled/disabled**." When disabling,
+Report: "Agent git commit and push are now **enabled/disabled** for the
+<superclaude|DeepSeek> profile." When disabling,
 remind that agents will ask the owner to commit and push from now on.

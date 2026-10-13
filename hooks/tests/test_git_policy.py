@@ -125,6 +125,32 @@ def test_worker_flag_write_blocked_in_any_policy_state(mk, home, flag):
                 assert denied(res) and "flag" in res.block, (tool, cmd)
 
 
+def _stream_writes(home):
+    w, c = win(home / ".claude" / "config" / "git-policy"), win(home / ".claude" / "config")
+    m = msys(home / ".claude" / "config" / "git-policy")
+    return [
+        ("PowerShell", f"Set-Content -LiteralPath '{w}::$DATA' -Value enabled"),
+        ("PowerShell", f"cmd /c 'echo enabled> {w}::$DATA'"),
+        ("PowerShell", f"Set-Content -LiteralPath '{c}::$INDEX_ALLOCATION\\git-policy' -Value enabled"),
+        ("PowerShell", f"Set-Content -LiteralPath '{c}:$I30:$INDEX_ALLOCATION\\git-policy' -Value enabled"),
+        ("Bash", f"echo enabled > '{m}::$DATA'"),
+        ("Bash", f'echo enabled > "{m}::\\$DATA"'),
+        ("PowerShell", f'Set-Content -LiteralPath "{w}::`$DATA" -Value enabled'),
+    ]
+
+
+def test_worker_flag_write_through_stream_designator_blocked(mk, home):
+    for tool, cmd in _stream_writes(home):
+        res = git_policy.handle(mk(tool, role="worker", command=cmd))
+        assert denied(res) and "flag" in res.block, (tool, cmd)
+
+
+@pytest.mark.parametrize("role", ["meta", "plain"])
+def test_flag_write_through_stream_designator_allowed_for_meta_and_plain(mk, home, role):
+    for tool, cmd in _stream_writes(home):
+        assert git_policy.handle(mk(tool, role=role, command=cmd)) is None, (tool, cmd)
+
+
 @pytest.mark.parametrize("role", ["meta", "plain"])
 def test_flag_write_allowed_for_meta_and_plain(mk, home, role):
     bash, ps = _flag_writes(home)

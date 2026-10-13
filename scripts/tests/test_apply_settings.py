@@ -219,6 +219,35 @@ def test_hooks_block_byte_equal_to_v2_substitution(home: Path, capsys: pytest.Ca
     assert "_comment" not in hooks and "{{" not in json.dumps(hooks)
 
 
+@pytest.mark.parametrize("profile", ["superclaude", "deepseek"])
+def test_monitor_screened_by_hook_not_denied(home: Path, profile: str, capsys: pytest.CaptureFixture[str]) -> None:
+    # Nessuna regola nativa ("Monitor", "Monitor(...)", "*") tocca Monitor e il matcher PreToolUse
+    # lo include, quindi il firewall ne filtra i comandi; l'env che lo renderebbe indisponibile
+    # in DeepSeek e' verificato da test_deepseek_env_keeps_monitor_and_powershell
+    assert run("--profile", profile, "--dry-run", "--full") == 0
+    printed = json.loads(capsys.readouterr().out)
+    matchers = [g["matcher"].split("|") for g in printed["hooks"]["PreToolUse"]]
+    assert any("Monitor" in m for m in matchers), matchers
+    for key in ("allow", "deny", "ask"):
+        rules = printed["permissions"].get(key, [])
+        blanket = [r for r in rules if r in ("Monitor", "*") or r.startswith("Monitor(")]
+        assert blanket == [], (key, blanket)
+
+
+def test_deepseek_env_keeps_monitor_and_powershell(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # tools-reference.md § Monitor tool: Monitor non e' disponibile con DISABLE_TELEMETRY o
+    # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC impostati; DO_NOT_TRACK e DISABLE_GROWTHBOOK
+    # spengono lo stesso fetch dei feature flag (env-vars.md)
+    assert run("--profile", "deepseek", "--dry-run", "--full") == 0
+    env = json.loads(capsys.readouterr().out)["env"]
+    for var in ("DISABLE_TELEMETRY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DO_NOT_TRACK", "DISABLE_GROWTHBOOK"):
+        assert var not in env, var
+    assert env["CLAUDE_CODE_USE_POWERSHELL_TOOL"] == "1"
+    for var in ("DISABLE_AUTOUPDATER", "DISABLE_ERROR_REPORTING", "DISABLE_FEEDBACK_COMMAND",
+                "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"):
+        assert env[var] == "1", var
+
+
 def test_drop_stop_omits_stop(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert run("--profile", "superclaude", "--dry-run", "--full", "--drop-stop") == 0
     hooks = json.loads(capsys.readouterr().out)["hooks"]

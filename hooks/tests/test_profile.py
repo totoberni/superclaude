@@ -261,6 +261,86 @@ def test_worker_cannot_write_deepseek_flag_via_shell(home, deepseek_home, mk):
     assert _blocked(res)
 
 
+def _flag_write(fh: Path, profile: str | None, data_dir: str, role: str, tool: str) -> subprocess.CompletedProcess:
+    """PreToolUse completo (tutti gli handler) di una scrittura sul flag git di `data_dir`."""
+    flag = fh / data_dir / "config" / "git-policy"
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text("disabled", encoding="utf-8")
+    ti = ({"file_path": str(flag), "content": "enabled"} if tool == "Write"
+          else {"file_path": str(flag), "old_string": "disabled", "new_string": "enabled"})
+    payload = {"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": str(fh), "tool_name": tool,
+               "tool_input": ti}
+    extra: dict[str, str] = {}
+    if role == "meta":
+        extra["CLAUDE_AGENT_NAME"] = "meta"
+    elif role == "worker":
+        payload["agent_type"] = "w-implementer"
+    return _dispatch(fh, profile, payload, **extra)
+
+
+@pytest.mark.parametrize("role", ["meta", "plain"])
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_deepseek_own_flag_writable_by_meta_and_plain_end_to_end(tmp_path, role, tool):
+    # /git sotto deepseek: meta e sessione plain scrivono il proprio flag come in superclaude
+    proc = _flag_write(tmp_path / "fh", "deepseek", ".claude-deepseek", role, tool)
+    assert proc.returncode == 0, proc.stderr
+    assert "GUARD-BLOCK" not in proc.stderr
+
+
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_deepseek_worker_cannot_write_own_flag_end_to_end(tmp_path, tool):
+    proc = _flag_write(tmp_path / "fh", "deepseek", ".claude-deepseek", "worker", tool)
+    assert proc.returncode == 2
+    assert f"[{write_acl.NAME}]" in proc.stderr and "git policy flag" in proc.stderr
+    # Due livelli: anche il firewall nega il flag a un worker (copre le grafie che write-acl non piega)
+    assert "[profile-firewall] workers may not change the git policy flag" in proc.stderr
+
+
+def _worker_payload(fh: Path, tool: str, ti: dict) -> dict:
+    return {"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": str(fh), "tool_name": tool,
+            "tool_input": ti, "agent_type": "w-implementer"}
+
+
+def _ds_flag(fh: Path) -> Path:
+    flag = fh / ".claude-deepseek" / "config" / "git-policy"
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text("disabled", encoding="utf-8")
+    return flag
+
+
+def test_deepseek_worker_device_path_flag_write_end_to_end(tmp_path):
+    # La grafia \\?\C:\... sfugge al canon di write-acl: la ferma il firewall
+    fh = tmp_path / "fh"
+    flag = _ds_flag(fh)
+    payload = _worker_payload(fh, "Write", {"file_path": "\\\\?\\" + str(flag), "content": "enabled"})
+    proc = _dispatch(fh, "deepseek", payload)
+    assert proc.returncode == 2
+    assert "GUARD-BLOCK" in proc.stderr
+    assert "[profile-firewall] workers may not change the git policy flag" in proc.stderr
+
+
+def test_deepseek_worker_copy_into_config_dir_end_to_end(tmp_path):
+    # Copia in cartella: il file scritto e' <config>/<nome della sorgente>, cioe' il flag
+    fh = tmp_path / "fh"
+    flag = _ds_flag(fh)
+    src = fh / "src" / "git-policy"
+    src.parent.mkdir(parents=True)
+    src.write_text("enabled", encoding="utf-8")
+    payload = _worker_payload(fh, "PowerShell", {"command": f"Copy-Item {src} -Destination {flag.parent}"})
+    proc = _dispatch(fh, "deepseek", payload)
+    assert proc.returncode == 2
+    assert "GUARD-BLOCK" in proc.stderr
+    assert "[profile-firewall] workers may not change the git policy flag" in proc.stderr
+
+
+@pytest.mark.parametrize("profile,data_dir", [("deepseek", ".claude"), (None, ".claude-deepseek")])
+@pytest.mark.parametrize("role", ["meta", "plain"])
+def test_cross_profile_flag_write_denied_end_to_end(tmp_path, profile, data_dir, role):
+    proc = _flag_write(tmp_path / "fh", profile, data_dir, role, "Write")
+    assert proc.returncode == 2
+    assert "[profile-firewall]" in proc.stderr and "may not" in proc.stderr
+
+
 @pytest.mark.parametrize("leaf", ["plan.md", "context.md"])
 def test_write_acl_plans_under_deepseek_data_home(home, deepseek_home, mk, leaf):
     target = deepseek_home / "plans" / "x" / leaf

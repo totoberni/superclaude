@@ -1,10 +1,12 @@
 """Guardia git-policy: applica il flag `/git true|false` (ex guards/26-git-policy.sh).
 
 Il flag vive nella data home del profilo attivo, in sc_profile.GIT_POLICY_REL (sovrascrivibile con
-SUPERCLAUDE_GIT_POLICY_FILE per i test). Come nella versione bash la lettura è
-fail-open: il blocco scatta SOLO se il file esiste, si legge e dice `disabled`
-(si accettano anche `false`, `off`, `0`, `no`); file assente o contenuto ignoto
-valgono `enabled`.
+SUPERCLAUDE_GIT_POLICY_FILE per i test, solo nel profilo di default). Profilo
+superclaude (default): lettura fail-open, come nella versione bash; il blocco scatta
+SOLO se il file esiste, si legge e dice `disabled` (si accettano anche `false`, `off`,
+`0`, `no`); file assente o contenuto ignoto valgono `enabled`. Profilo DeepSeek (non
+default): lettura fail-closed; file assente, illeggibile o ignoto valgono `disabled` e
+solo un flag esplicitamente abilitante (`enabled`, `true`, `on`, `1`, `yes`) sblocca git.
 
 Euristica dichiarata, non un confine di sicurezza: non modella sostituzioni di
 comando, variabili, interpreti che pilotano git, alias preesistenti.
@@ -43,6 +45,10 @@ _WRITERS = re.compile(
     re.I | re.X,
 )
 _ARG_PREFIX = re.compile(r"^(?:of=|-[A-Za-z]+[:=])")     # dd of=<f>, -Path:<f>, -FilePath=<f>
+# Designatori di stream che Win32 apre come il file o la cartella stessa (stessa regola di
+# profile_firewall._STREAM): `f::$DATA`, `cartella::$INDEX_ALLOCATION\f`, `cartella:$I30:$INDEX_ALLOCATION\f`
+_STREAM = re.compile(r"(?:::[\\`]?\$data|::[\\`]?\$index_allocation|:[\\`]?\$i30:[\\`]?\$index_allocation)"
+                     r"(?=[\\/]|[. ]*$)", re.I)
 
 
 def _non_default_profile() -> bool:
@@ -54,7 +60,8 @@ def _non_default_profile() -> bool:
 
 
 def policy_file() -> Path:
-    # Fuori dal profilo di default l'override via ambiente e' ignorato (git sempre spento).
+    # Fuori dal profilo di default l'override via ambiente e' ignorato: conta solo il flag
+    # del profilo stesso (git resta attivabile con `/git true`).
     override = os.environ.get("SUPERCLAUDE_GIT_POLICY_FILE", "").strip()
     if override and not _non_default_profile():
         return Path(override)
@@ -99,7 +106,7 @@ def _writes_flag(cmd: str, cwd: str) -> bool:
         return False
 
     def is_flag(tok: str, here: str) -> bool:
-        tok = _ARG_PREFIX.sub("", _util.unquote(tok))
+        tok = _STREAM.sub("", _ARG_PREFIX.sub("", _util.unquote(tok)))
         return bool(tok) and not tok.startswith("-") and _util.canon(tok, here or None) == flag
 
     for seg, here in _util.walk(cmd, cwd):

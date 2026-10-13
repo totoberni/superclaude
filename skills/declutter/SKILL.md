@@ -18,7 +18,7 @@ Heavy lifting goes to a worker: meta dispatches a `w-implementer` (opus, per the
 ## Step 0: Preconditions
 
 1. The owner explicitly authorised deletion THIS session. If not, stop and ask.
-2. Read `~/.claude/config/git-policy`. If it says `disabled`, stop and ask the owner to run `/git true`. Never toggle it yourself unprompted.
+2. Read the active profile's git policy flag (`<data home>/config/git-policy`; which file, and how a missing flag reads per profile: `skills/git/SKILL.md`). If git is disabled, stop and ask the owner to run `/git true`. Never toggle it yourself unprompted.
 3. Identify the **deliverables** (never deleted). Record an md5 snapshot of all of them now; compare after every step.
 4. Identify the **minimal input set** that reproduces the deliverables. Prefer an existing packaging script or manifest as SOT (e.g. a `package_code.py` file list) over inventing a list.
 
