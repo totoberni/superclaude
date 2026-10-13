@@ -170,5 +170,7 @@ tmp/
 agents/_ephemeral/
 settings.json.bak-*
 settings.json.pre-probe.bak
+# Sidecar dell'applicatore (scripts/settings/apply_settings.py): regole possedute su questa macchina
+settings.json.applier-owned.json*
 __pycache__/
 .pytest_cache/
