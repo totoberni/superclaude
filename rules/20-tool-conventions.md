@@ -74,6 +74,13 @@ Bidirectional isolation rule — meta-tier agent memory must stay invisible from
 - Stale `.pyc` from worktree runs causes 30+ spurious test isolation failures that look like real bugs.
 - Before running tests in a worktree, if unsure of cleanliness: list the `__pycache__` directories under the worktree (Glob `**/__pycache__`) and delete those named paths. No recursive wildcard deletes.
 
+## Worker Scope vs Write-ACL Trees
+
+- The write-ACL guard makes `~/.claude/hooks/`, `rules/` and `agents/` read-only for `w-*` workers (meta is exempt); settings files are owner-only for everyone.
+- Before dispatching, check the worker's file scope against those trees. If it touches one, put the staging route IN THE SPEC: the worker copies the tree to `~/.claude/tmp/<wave>-stage/`, edits and tests there (repo venv python), and returns a patch or file list; meta verifies and places it live with a backup.
+- Every such spec states: a blocked path stays blocked by every route; no python, PowerShell or other interpreter or script workaround. The guards read tool paths and shell command text, not what an interpreter writes, so a script write slips past them and is still a violation.
+- Source: superclaude G-1 (2026-09-22, 2026-10-02, 2026-10-13: a worker edited hooks/ through a python script, then reverted and disclosed). Occ=3, promoted.
+
 ## Empirical Verification Before Prescribing
 
 - Before writing a root-cause analysis or fix instruction, run a diagnostic command that confirms the hypothesis. Never prescribe from structural reasoning alone.
