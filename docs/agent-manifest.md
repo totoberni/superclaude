@@ -138,7 +138,8 @@ One Python dispatcher per hook event: `~/.claude/hooks/dispatch.py <Event>`. Han
 |----------------|----------|---------|
 | `write_acl.py` | PreToolUse (write tools) | Guard: the write-ACL guard (per-role write scopes) |
 | `content_scan.py` | PreToolUse (write tools, Agent) | Guard: the content-scan guard |
-| `git_policy.py` | PreToolUse (shell tools) | Guard: the git-policy guard (commit/push permission, `/git`) |
+| `git_policy.py` | PreToolUse (shell tools) | Guard: the git-policy guard (commit/push permission, `/git`; reads the flag via `lib/sc_gitflag.py`, fails closed on a lib defect; owner-only HUMAN GATE denying `mem sync` with the two owner-only flags for every role) |
+| `key_guard.py` | PreToolUse (shell, write, Read, Glob, Grep tools) | Guard: the key-guard (denies vault key file names in tool paths and shell text) |
 | `commit_gate.py` | PreToolUse (shell tools) | Guard: the commit-gate guard (conventional commit check) |
 | `git_verb.py` | PreToolUse (shell tools) | Guard: git-verb |
 | `heuristics.py` | PreToolUse (Grep) | Guard: heuristics (advisory) |
@@ -148,7 +149,7 @@ One Python dispatcher per hook event: `~/.claude/hooks/dispatch.py <Event>`. Han
 | `context_check.py` | PreToolUse | The context-check hook |
 | `thinking_nudge.py` | PreToolUse (Agent) | Advisory nudge on worker dispatch |
 | `spawn_log.py` | PreToolUse / PostToolUse (Agent), SubagentStop | The spawn-log hooks (`~/.claude/comms/_spawns.log`, `_spawns-rich.log`, `_outcomes.log`) |
-| `memory_inject.py` | SessionStart, SubagentStart | The SessionStart memory-injection hook |
+| `memory_inject.py` | SessionStart, SubagentStart | The SessionStart memory-injection hook (injects only rows with realm IS NULL unless the session has `SC_MEM_REALM=personal`) |
 | `snapshots.py` | PreCompact, Stop | The pre-compact snapshot hook, the stop snapshot hook |
 | `session_cleanup.py` | SessionEnd | Per-session state cleanup |
 | `latex_warn.py` | PostToolUse (write tools) | LaTeX warnings after `.tex` edits |

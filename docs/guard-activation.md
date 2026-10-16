@@ -21,8 +21,8 @@ Environment variables (set in the shell before launch, or in the `env` block of 
 - `SUPERCLAUDE_GUARDS=off` disables every handler.
 - `SUPERCLAUDE_GUARD_<NAME>=off|warn|block` sets one guard. `<NAME>` is the guard name upper-cased with non-alphanumerics as underscores, for example `SUPERCLAUDE_GUARD_WRITE_ACL=warn`, `SUPERCLAUDE_GUARD_GIT_POLICY=off`.
 
-Guards present: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard.
+Guards present: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard, key-guard.
 
 ## Rollout and diagnosis
 
-Introduce a new guard in `warn`, watch the notes, then promote it to `block`. A deny outside PreToolUse is always advisory. If a guard seems silent, read `~/.claude/logs/hooks.log`: handler exceptions are fail-open and only show up there.
+Introduce a new guard in `warn`, watch the notes, then promote it to `block`. A deny outside PreToolUse is always advisory. If a guard seems silent, read `~/.claude/logs/hooks.log`: handler exceptions are fail-open (except git-policy, which fails closed on a lib defect) and only show up there.

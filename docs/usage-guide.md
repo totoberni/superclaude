@@ -116,9 +116,9 @@ Types: `feedback`, `project`, `reference`, `user`. Query via `mem search|get|sim
 
 ## Hooks
 
-One Python dispatcher per hook event: `~/.claude/hooks/dispatch.py <Event>`. It loads the handlers under `~/.claude/hooks/sc_hooks/handlers/`, each registered with `@on(event, tools, name)`, and aggregates their results into a single JSON response, so there are no ordering races. A handler that raises is ignored (fail-open) and the error is logged to `~/.claude/logs/hooks.log`.
+One Python dispatcher per hook event: `~/.claude/hooks/dispatch.py <Event>`. It loads the handlers under `~/.claude/hooks/sc_hooks/handlers/`, each registered with `@on(event, tools, name)`, and aggregates their results into a single JSON response, so there are no ordering races. A handler that raises is ignored (fail-open, except git-policy, which fails closed) and the error is logged to `~/.claude/logs/hooks.log`.
 
-Guards: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard. Kill switches: `SUPERCLAUDE_GUARDS=off` (all), `SUPERCLAUDE_GUARD_<NAME>=off|warn|block` (one).
+Guards: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard, key-guard. Kill switches: `SUPERCLAUDE_GUARDS=off` (all), `SUPERCLAUDE_GUARD_<NAME>=off|warn|block` (one).
 
 Handler roster by event: `~/.claude/docs/agent-manifest.md` § Hooks. Design: `~/.claude/docs/guard-subsystem.md`. Context lifecycle: `~/.claude/rules/25-context-management.md`.
 
