@@ -316,23 +316,24 @@ _UNSET = object()
 _BUMP_FIELDS = ("tier", "agent", "type", "name", "description", "text")
 _ROW_REQUIRED_KEYS = frozenset({"path", "tier", "type", "name", "description", "text"})
 _ROW_KEYS = _ROW_REQUIRED_KEYS | {"agent", "created", "updated", "realm"}
-# Forma unica ammessa per i timestamp: cosi' le stringhe si ordinano come gli istanti
+# Forma unica ammessa per i timestamp: solo offset +00:00, cosi' le stringhe si
+# ordinano come gli istanti (con offset diversi l'ordine lessicale non lo garantisce)
 _ISO_OFFSET_RE = re.compile(
-    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}:\d{2}\Z", re.ASCII
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?\+00:00\Z", re.ASCII
 )
 
 
 def _validate_timestamp(value, label: str) -> str | None:
-    """Return `value` unchanged if it is ISO-8601 with a UTC offset, else raise ValueError.
+    """Return `value` unchanged if it is ISO-8601 with the +00:00 offset, else raise ValueError.
 
-    None passes through (caller means "use now"). Naive times, `Z`, offsets without a
-    colon and other separators are rejected so stored strings stay uniform.
+    None passes through (caller means "use now"). Naive times, `Z`, other offsets and
+    other separators are rejected so stored strings stay uniform and sortable.
     """
     if value is None:
         return None
     if not isinstance(value, str) or not _ISO_OFFSET_RE.match(value):
         raise ValueError(
-            f"{label} must be ISO-8601 with a UTC offset, e.g. 2026-10-15T17:30:00+00:00; "
+            f"{label} must be ISO-8601 with the +00:00 offset, e.g. 2026-10-15T17:30:00+00:00; "
             f"got {value!r}"
         )
     try:
@@ -440,7 +441,7 @@ def upsert(
 ) -> int:
     """Insert or update a memory keyed by `path`; commits. Returns the row id.
 
-    `created` / `updated`: ISO-8601 with a UTC offset, stored verbatim (ValueError
+    `created` / `updated`: ISO-8601 with the +00:00 offset, stored verbatim (ValueError
     otherwise); omitted means now. On an update `updated` advances only when tier, agent,
     type, name, description, text or realm change, and an upsert that changes nothing
     writes nothing. A new or content-changed row is (re-)embedded into memories_vec and
@@ -476,10 +477,11 @@ def upsert_many(rows, conn: sqlite3.Connection, embed: bool = True) -> list[int]
     such as a restore drill; a text change on an existing row would keep its old vector).
     """
     batch = _normalize_batch(rows)
-    if conn.isolation_level is None and not conn.in_transaction:
+    # Vale anche per autocommit=True (PEP 249), che lascia isolation_level == ''
+    if not conn.in_transaction:
         raise RuntimeError(
-            "upsert_many needs an open transaction on an autocommit connection: "
-            "run BEGIN IMMEDIATE first, otherwise every row commits alone"
+            "upsert_many needs an open transaction: run BEGIN IMMEDIATE first, "
+            "otherwise rows can commit one by one"
         )
     has_realm = _has_realm(conn)
     vectors = _precompute_vectors(conn, batch) if embed else {}
@@ -1221,15 +1223,20 @@ def _fts_name_desc(conn: sqlite3.Connection, arg: str, limit: int) -> list[int]:
     return [r["rowid"] for r in rows]
 
 
-def _did_you_mean(idx, arg: str, fts_ids: list[int], limit: int) -> list[dict]:
-    """Build up to `limit` (name, slug, tier) suggestions for an unresolved name.
+def _did_you_mean(
+    idx, arg: str, fts_ids: list[int], limit: int, tied=()
+) -> list[dict]:
+    """Build (name, slug, tier) suggestions for an unresolved name.
 
-    FTS candidates (already BM25-ranked) come first, then substring matches on the
-    name or slug, enough for a human to spot the note they meant.
+    Le righe a pareggio (`tied`) vengono sempre per prime e tutte, anche oltre `limit`:
+    servono per rilanciare il comando con --id. Poi i candidati FTS (gia' ordinati
+    BM25) e le corrispondenze per sottostringa su name o slug, fino a
+    max(`limit`, numero di righe a pareggio) suggerimenti in totale.
     """
     by_id = {r["id"]: r for r in idx}
-    ordered: list = []
-    seen: set[int] = set()
+    cap = max(limit, len(tied))
+    ordered: list = sorted(tied, key=lambda r: r["id"])
+    seen: set[int] = {r["id"] for r in ordered}
     for rid in fts_ids:
         r = by_id.get(rid)
         if r is not None and rid not in seen:
@@ -1243,15 +1250,15 @@ def _did_you_mean(idx, arg: str, fts_ids: list[int], limit: int) -> list[dict]:
             if low in (r["name"] or "").lower() or low in _slug_of(r["path"]).lower():
                 ordered.append(r)
                 seen.add(r["id"])
-            if len(ordered) >= limit:
+            if len(ordered) >= cap:
                 break
     return [
         {"id": r["id"], "name": r["name"], "slug": _slug_of(r["path"]), "tier": r["tier"]}
-        for r in ordered[:limit]
+        for r in ordered[:cap]
     ]
 
 
-_DB_MAY_BE_MISSING_CMDS = frozenset({"init", "sql"})
+_DB_MAY_BE_MISSING_CMDS = frozenset({"init"})
 
 
 def _is_archived_row(row) -> bool:
@@ -1263,57 +1270,57 @@ def _resolve_name(
 ) -> tuple[int | None, list[dict]]:
     """Resolve a --name argument to ONE memory rowid via a strict ladder.
 
-    Ladder (first UNIQUE match wins; never guesses):
+    Ladder (the first step with a match decides; never guesses):
       1. exact `name`
       2. path-stem slug            (Path(path).stem == arg)  [human-title-vs-file fix]
       3. steps 1-2 case-insensitively
-      4. unique prefix on name OR slug (resolve only if exactly one row)
+      4. prefix on name OR slug
       5. FTS over name/description  (resolve only if exactly one candidate)
 
-    Returns (rowid, []) on a unique resolve, else (None, suggestions) where
-    suggestions is up to `limit` (id, name, slug, tier) "did you mean" dicts.
+    Un passo con UNA riga risolve; con 0 righe si passa al successivo; con 2 o piu'
+    il lookup TERMINA li' (nessuna ricaduta sui passi seguenti, che potrebbero
+    puntare a una sola delle righe a pareggio).
 
-    `prefer_live=True` (solo lettura: get/similar): su un pareggio dei passi 1-4
-    con esattamente UNA riga non archiviata, vince quella viva. I comandi
+    Returns (rowid, []) on a unique resolve, else (None, suggestions) where
+    suggestions is the "did you mean" list of (id, name, slug, tier) dicts: on a tie
+    every tied row comes first, then other suggestions up to `limit`.
+
+    `prefer_live=True` (solo lettura: get/similar): su un pareggio resolve solo se
+    ESATTAMENTE UNA delle righe di quel passo e' non archiviata. I comandi
     distruttivi lasciano False e restano su exit 3 a ogni pareggio.
     """
     arg = arg or ""
+    if not arg.strip():
+        return None, []
     low = arg.lower()
     idx = conn.execute(
         "SELECT id, name, description, tier, path FROM memories"
     ).fetchall()
 
-    def only(matches) -> int | None:
-        if prefer_live and len(matches) > 1:
-            matches = [r for r in matches if not _is_archived_row(r)]
-        return matches[0]["id"] if len(matches) == 1 else None
+    def step_matches():
+        yield [r for r in idx if r["name"] == arg]
+        # path-stem slug (the canonical fix: filename slug vs stored human title)
+        yield [r for r in idx if _slug_of(r["path"]) == arg]
+        yield [r for r in idx if (r["name"] or "").lower() == low]
+        yield [r for r in idx if _slug_of(r["path"]).lower() == low]
+        if low:
+            yield [
+                r
+                for r in idx
+                if (r["name"] or "").lower().startswith(low)
+                or _slug_of(r["path"]).lower().startswith(low)
+            ]
 
-    # 1. exact name
-    rid = only([r for r in idx if r["name"] == arg])
-    if rid is not None:
-        return rid, []
-    # 2. path-stem slug (the canonical fix: filename slug vs stored human title)
-    rid = only([r for r in idx if _slug_of(r["path"]) == arg])
-    if rid is not None:
-        return rid, []
-    # 3. case-insensitive name, then slug
-    rid = only([r for r in idx if (r["name"] or "").lower() == low])
-    if rid is not None:
-        return rid, []
-    rid = only([r for r in idx if _slug_of(r["path"]).lower() == low])
-    if rid is not None:
-        return rid, []
-    # 4. unique prefix on name OR slug
-    rid = only(
-        [
-            r
-            for r in idx
-            if (r["name"] or "").lower().startswith(low)
-            or _slug_of(r["path"]).lower().startswith(low)
-        ]
-    ) if low else None
-    if rid is not None:
-        return rid, []
+    for matches in step_matches():
+        if len(matches) == 1:
+            return matches[0]["id"], []
+        if len(matches) > 1:
+            live = [r for r in matches if not _is_archived_row(r)]
+            if prefer_live and len(live) == 1:
+                return live[0]["id"], []
+            return None, _did_you_mean(
+                idx, arg, _fts_name_desc(conn, arg, limit), limit, tied=matches
+            )
     # 5. FTS over name/description; resolve iff a single candidate
     fts_ids = _fts_name_desc(conn, arg, limit)
     if len(fts_ids) == 1:
@@ -1810,8 +1817,9 @@ if __name__ == "__main__":
 
     def _resolve_name_or_die(conn, arg, prefer_live=False):
         """Resolve --name via the resolution ladder; return the full row on a UNIQUE
-        match. On an ambiguous/unknown name, print up to 5 'did you mean' (id, name,
-        slug, tier) suggestions to stderr and exit non-zero. Never guesses.
+        match. On an ambiguous/unknown name, print the 'did you mean' (id, name,
+        slug, tier) suggestions to stderr (every tied row, plus other candidates up
+        to the default limit) and exit 3. Never guesses.
         """
         row_id, suggestions = _resolve_name(conn, arg, prefer_live=prefer_live)
         if row_id is not None:
@@ -2073,7 +2081,10 @@ if __name__ == "__main__":
 
     ns = parser.parse_args()
 
-    db = Path(ns.db).expanduser() if ns.db else DB_PATH
+    # Un --db vuoto (variabile di shell non impostata) non deve ricadere sul DB di default
+    if ns.db is not None and not ns.db.strip():
+        _die("empty --db: pass a DB path or omit the option", 3)
+    db = Path(ns.db).expanduser() if ns.db is not None else DB_PATH
     try:
         assert_own_profile_path(db)
     except CrossProfileDBError as e:
@@ -2093,9 +2104,9 @@ if __name__ == "__main__":
             _die(f"--text-file refused: {e}", 3)
 
     # Un --db esplicito inesistente non va mai creato in silenzio (typo = DB vuoto).
-    # Unico punto con l'elenco dei comandi esenti: init crea; `sql` ha un controllo
-    # proprio (exit 1); in futuro anche `sync restore`.
-    if ns.db and ns.cmd not in _DB_MAY_BE_MISSING_CMDS and not db.exists():
+    # Unico punto con l'elenco dei comandi esenti: init crea; in futuro anche
+    # `sync restore`.
+    if ns.db is not None and ns.cmd not in _DB_MAY_BE_MISSING_CMDS and not db.exists():
         _die(f"DB not found: {db}", 3)
 
     if ns.cmd == "init":

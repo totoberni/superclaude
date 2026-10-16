@@ -340,9 +340,10 @@ def test_sql_engine_level_denials(rwdb, stmt):
 
 
 def test_sql_missing_db_is_not_created(tmp_path):
+    # Cambio di spec voluto (F4): un --db esplicito mancante esce con 3 come per gli altri comandi
     missing = tmp_path / "nope.db"
     rc, _, err = _cli(missing, "sql", "SELECT 1")
-    assert rc == 1 and "DB not found" in err
+    assert rc == 3 and "DB not found" in err
     assert not missing.exists()
 
 
@@ -703,6 +704,135 @@ def test_destructive_name_tie_exits_3_and_changes_nothing(tmp_path, cmd):
     assert mdb.run_sql("SELECT id, tier, path FROM memories ORDER BY id", p)[1] == before
 
 
+_DESTRUCTIVE_CMDS = [("prune",), ("archive",), ("retier", "--tier", "class")]
+
+
+def _name_db(tmp_path, specs, archived=()):
+    """DB con le righe `specs` = (path, name) in ordine di id; `archived` = indici da archiviare."""
+    p = tmp_path / "names.db"
+    mdb.init_db(p)
+    ids = [mdb.upsert(path=path, tier="instance", agent=None, type="feedback", name=name,
+                      description="d", text=f"body of {path}", db_path=p)
+           for path, name in specs]
+    for index in archived:
+        mdb.archive(ids[index], db_path=p)
+    return p, ids
+
+
+def _rows_state(db):
+    return mdb.run_sql("SELECT id, tier, path, text FROM memories ORDER BY id", db)[1]
+
+
+def _assert_tie_refused(p, ids, rc, err, before):
+    assert rc == 3, err
+    for rid in ids:
+        assert f"id={rid} " in err  # ogni riga a pareggio compare con il suo id
+    assert _rows_state(p) == before
+
+
+@pytest.mark.parametrize("blank", ["", "  "])
+def test_blank_name_never_resolves_and_leaves_rows_untouched(tmp_path, blank):
+    # N1: un --name vuoto o di soli spazi non deve risolvere nemmeno una riga con name vuoto
+    p, ids = _name_db(tmp_path, [("instance/a/blank.md", ""), ("instance/a/other.md", "other")])
+    before = _rows_state(p)
+    for cmd in (("prune",), ("get",)):
+        rc, _, err = _cli(p, cmd[0], "--name", blank)
+        assert rc == 3, err
+    assert _rows_state(p) == before
+
+
+@pytest.mark.parametrize("cmd", _DESTRUCTIVE_CMDS)
+def test_destructive_tie_on_same_name_different_stems_exits_3(tmp_path, cmd):
+    # F1/S1: due righe vive con lo stesso name e stem diversi (suffisso --wsl del merge)
+    p, ids = _name_db(tmp_path, [("instance/a/foo-notes.md", "foo-notes"),
+                                 ("instance/a/foo-notes--wsl.md", "foo-notes")])
+    before = _rows_state(p)
+    rc, _, err = _cli(p, cmd[0], "--name", "foo-notes", *cmd[1:])
+    _assert_tie_refused(p, ids, rc, err, before)
+
+
+@pytest.mark.parametrize("cmd", _DESTRUCTIVE_CMDS)
+def test_destructive_tie_live_plus_archived_different_stems_exits_3(tmp_path, cmd):
+    # F1/S2: una viva e una archiviata con lo stesso name e stem diversi (copia di conflitto)
+    p, ids = _name_db(tmp_path, [("instance/a/ctx.md", "ctx"), ("instance/a/ctx-old.md", "ctx")],
+                      archived=[1])
+    before = _rows_state(p)
+    rc, _, err = _cli(p, cmd[0], "--name", "ctx", *cmd[1:])
+    _assert_tie_refused(p, ids, rc, err, before)
+
+
+@pytest.mark.parametrize("cmd", _DESTRUCTIVE_CMDS)
+def test_destructive_tie_on_slug_exits_3(tmp_path, cmd):
+    # passo 2: stesso stem, nomi diversi, nessuna riga col name esatto
+    p, ids = _name_db(tmp_path, [("instance/a/shared-stem.md", "first title"),
+                                 ("instance/b/shared-stem.md", "second title")])
+    before = _rows_state(p)
+    rc, _, err = _cli(p, cmd[0], "--name", "shared-stem", *cmd[1:])
+    _assert_tie_refused(p, ids, rc, err, before)
+
+
+@pytest.mark.parametrize("cmd", _DESTRUCTIVE_CMDS)
+def test_destructive_prefix_tie_exits_3_and_does_not_fall_to_fts(tmp_path, cmd):
+    p, ids = _name_db(tmp_path, [("instance/a/pfx-one.md", "pfx-one"),
+                                 ("instance/a/pfx-two.md", "pfx-two")])
+    before = _rows_state(p)
+    rc, _, err = _cli(p, cmd[0], "--name", "pfx", *cmd[1:])
+    _assert_tie_refused(p, ids, rc, err, before)
+
+
+@pytest.mark.parametrize("cmd", [("get",), ("similar",)])
+def test_read_two_live_rows_different_stems_exits_3(tmp_path, cmd):
+    p, ids = _name_db(tmp_path, [("instance/a/foo-notes.md", "foo-notes"),
+                                 ("instance/a/foo-notes--wsl.md", "foo-notes")])
+    rc, out, err = _cli(p, cmd[0], "--name", "foo-notes")
+    assert rc == 3, err
+    assert out == ""
+    for rid in ids:
+        assert f"id={rid} " in err
+
+
+@pytest.mark.parametrize("cmd", [("get",), ("similar",)])
+def test_read_all_archived_exact_tie_does_not_redirect_to_live_prefix(tmp_path, cmd):
+    # F6: due archiviate col name esatto + una viva che lo ha come prefisso
+    p, ids = _name_db(tmp_path, [("instance/p/deploy-notes.md", "deploy-notes"),
+                                 ("instance/q/deploy-notes.md", "deploy-notes"),
+                                 ("instance/p/deploy-notes-v2.md", "deploy-notes-v2")],
+                      archived=[0, 1])
+    rc, out, err = _cli(p, cmd[0], "--name", "deploy-notes")
+    assert rc == 3, err
+    assert "UNRELATED" not in out and "body of instance/p/deploy-notes-v2.md" not in out
+    assert f"id={ids[0]} " in err and f"id={ids[1]} " in err
+
+
+def test_get_live_plus_archived_different_stems_resolves_the_live_row(tmp_path):
+    p, ids = _name_db(tmp_path, [("instance/a/ctx-old.md", "ctx"), ("instance/a/ctx.md", "ctx")],
+                      archived=[0])
+    rc, out, err = _cli(p, "get", "--name", "ctx")
+    assert rc == 0, err
+    assert out.strip() == "body of instance/a/ctx.md"
+
+
+def test_tie_group_larger_than_suggestion_limit_lists_every_id(tmp_path):
+    # F7: 8 righe a pareggio, limite di default 5: tutti gli id vanno stampati
+    specs = [(f"instance/a/big-{i}.md", "big") for i in range(8)]
+    p, ids = _name_db(tmp_path, specs)
+    before = _rows_state(p)
+    rc, _, err = _cli(p, "prune", "--name", "big")
+    _assert_tie_refused(p, ids, rc, err, before)
+
+
+def test_resolve_name_tied_rows_come_before_other_suggestions(tmp_path):
+    specs = [(f"instance/a/zz-{i}.md", "zz") for i in range(7)] + [("instance/a/zz-other.md", "zz-other")]
+    p, ids = _name_db(tmp_path, specs)
+    conn = mdb._connect(p)
+    try:
+        rid, suggestions = mdb._resolve_name(conn, "zz")
+    finally:
+        conn.close()
+    assert rid is None
+    assert [s["id"] for s in suggestions[:7]] == ids[:7]
+
+
 @pytest.mark.parametrize("cmd", [("get", "--id", "1"), ("search", "x"), ("stats",),
                                  ("list",), ("compact",)])
 def test_missing_db_exits_3_and_creates_nothing(tmp_path, cmd):
@@ -711,6 +841,21 @@ def test_missing_db_exits_3_and_creates_nothing(tmp_path, cmd):
     assert rc == 3, err
     assert not missing.exists()
     assert not missing.parent.exists()
+
+
+@pytest.mark.parametrize("empty", ["", "   "])
+@pytest.mark.parametrize("cmd", [("prune", "--name", "victim"), ("stats",), ("init",)])
+def test_empty_db_argument_exits_3_and_never_uses_default_db(tmp_path, cmd, empty):
+    # F5: --db "" (variabile di shell non impostata) non deve ricadere sul DB di default.
+    # HOME finta: anche se il guard mancasse, il DB reale non verrebbe toccato.
+    home = tmp_path / "fakehome"
+    (home / ".claude" / "agent-memory").mkdir(parents=True)
+    env = {"USERPROFILE": str(home), "HOME": str(home)}
+    default_db = home / ".claude" / "agent-memory" / ".memory.db"
+    rc, out, err = _run(_MEMDB, "--db", empty, *cmd, env=env)
+    assert rc == 3, (out, err)
+    assert "empty --db" in err
+    assert not default_db.exists()
 
 
 def test_init_on_missing_db_still_creates(tmp_path):
@@ -790,10 +935,19 @@ def _spy_embed(monkeypatch):
 
 def test_upsert_stores_iso_offset_timestamps_verbatim(tmp_path):
     p = _new_db(tmp_path)
-    created, updated = "2026-10-15T17:30:00+00:00", "2026-10-16T08:00:00.123456+02:00"
+    created, updated = "2026-10-15T17:30:00+00:00", "2026-10-16T08:00:00.5+00:00"
     _put(p, "ts", created=created, updated=updated)
     row = _fetch(p, "instance/_/ts.md")
     assert (row["created"], row["updated"]) == (created, updated)
+
+
+@pytest.mark.parametrize("offset", ["+02:00", "-05:00", "+00:30"])
+def test_upsert_rejects_non_utc_offset(tmp_path, offset):
+    # F3: con un offset diverso le stringhe non si ordinano come gli istanti
+    p = _new_db(tmp_path)
+    with pytest.raises(ValueError):
+        _put(p, "off", updated=f"2026-10-16T08:00:00{offset}")
+    assert _count(p) == 0
 
 
 @pytest.mark.parametrize("field", ["created", "updated"])
@@ -875,12 +1029,14 @@ def test_noop_upsert_many_issues_no_write(tmp_path):
     row = _mrow("same", created=_T_OLD, updated=_T_OLD)
     conn = mdb._connect(p)
     try:
+        conn.execute("BEGIN IMMEDIATE")
         mdb.upsert_many([row], conn)
         conn.commit()
         changes = conn.total_changes
+        conn.execute("BEGIN IMMEDIATE")
         assert mdb.upsert_many([dict(row)], conn) == [_fetch(p, row["path"])["id"]]
         assert conn.total_changes == changes
-        assert not conn.in_transaction
+        conn.execute("ROLLBACK")  # il guard F2 impone un BEGIN esplicito del chiamante
     finally:
         conn.close()
 
@@ -888,7 +1044,7 @@ def test_noop_upsert_many_issues_no_write(tmp_path):
 def test_explicit_timestamps_on_update_are_stored_as_given(tmp_path):
     p = _new_db(tmp_path)
     _put(p, "x", created=_T_OLD, updated=_T_OLD)
-    stamp = "2001-02-03T04:05:06+01:00"
+    stamp = "2001-02-03T04:05:06+00:00"
     _put(p, "x", text="changed", updated=stamp)
     assert _fetch(p, "instance/_/x.md")["updated"] == stamp
     # nessun campo cambia, ma il timestamp esplicito e' diverso: va scritto cosi' com'e'
@@ -1415,6 +1571,34 @@ def test_upsert_many_refuses_autocommit_connection_without_transaction(tmp_path)
     try:
         with pytest.raises(RuntimeError, match="transaction"):
             mdb.upsert_many([_mrow("x")], conn)
+    finally:
+        conn.close()
+    assert _count(p) == 0
+
+
+def test_upsert_many_refuses_pep249_autocommit_connection_without_transaction(tmp_path):
+    # F2: autocommit=True lascia isolation_level == '' ma ogni istruzione committa da sola
+    p = _new_db(tmp_path)
+    conn = sqlite3.connect(str(p), autocommit=True)
+    conn.row_factory = sqlite3.Row
+    conn.enable_load_extension(True)
+    mdb.sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    try:
+        assert not conn.in_transaction
+        with pytest.raises(RuntimeError, match="transaction"):
+            mdb.upsert_many([_mrow("x")], conn, embed=False)
+    finally:
+        conn.close()
+    assert _count(p) == 0
+
+
+def test_upsert_many_refuses_default_connection_without_begin(tmp_path):
+    p = _new_db(tmp_path)
+    conn = mdb._connect(p)
+    try:
+        with pytest.raises(RuntimeError, match="transaction"):
+            mdb.upsert_many([_mrow("x")], conn, embed=False)
     finally:
         conn.close()
     assert _count(p) == 0
