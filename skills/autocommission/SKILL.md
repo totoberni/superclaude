@@ -19,7 +19,7 @@ Spawn an EPHEMERAL `w-*` worker for a one-off task that no existing permanent `w
 
 | Situation | Use |
 |---|---|
-| Task fits any of the 11 permanent `w-*` (matrix in `13-worker-first-mandate.md`) | The existing `w-*` (NOT this skill) |
+| Task fits any of the 12 permanent `w-*` (matrix in `13-worker-first-mandate.md`) | The existing `w-*` (NOT this skill) |
 | Task is one-off AND no existing `w-*` fits | `/autocommission` |
 
 `/autocommission` is the **escape hatch** for genuinely novel tasks. Default delegation should hit a permanent `w-*` ~95% of the time.
@@ -42,9 +42,9 @@ Read `$ARGUMENTS`. Extract:
 - Implied work category (mechanical, reasoning, multi-file, novel)
 - Likely file scope (single, ≤3, >3, unknown)
 
-### Step 2 — Pick Model + Effort + Thinking + Tools
+### Step 2; Pick Model + Effort + Turn Cap + Tool Filter
 
-Consult Per-Worker Defaults in `~/.claude/rules/13-worker-first-mandate.md`. Use the Decision Helper below as a fast lookup.
+Consult Per-Worker Defaults in `~/.claude/rules/13-worker-first-mandate.md`: take model, default effort and `maxTurns` from the closest permanent worker's row; shift effort by at most one level per § Effort Assignment. Use the Decision Helper below as a fast lookup.
 
 ### Step 3 — Generate Ephemeral Agent Name
 
@@ -63,14 +63,17 @@ Frontmatter:
 ```yaml
 ---
 name: <name>
-model: <picked>
-tools: <minimum needed>
-maxTurns: 30
+model: <closest permanent worker's model>
+effort: <that worker's default, shifted at most one level>
+disallowedTools: <universal deny list from ~/.claude/config/worker-tool-policy.json, plus tools that contradict the job>
+maxTurns: <closest permanent worker's cap>
 memory: project
 ---
 ```
 
-Body: embed the task description as instructions. To give the worker thinking depth, set `effort:` in its frontmatter, not a prompt keyword (see `13-worker-first-mandate.md` § Critical Implementation Note).
+No `tools:` line: the worker inherits every tool and `disallowedTools` is the negative filter (read the universal deny list from `~/.claude/config/worker-tool-policy.json`; do not copy it here). Add job-contradicting tools (for example `Edit` for a read-only job).
+
+Body: embed the task description as instructions. Depth is set by `effort:` in the frontmatter, not a prompt keyword (see `13-worker-first-mandate.md` § Critical Implementation Note).
 
 When authoring spawn prompts, keep `.workflow` / `/.deep-research` / `.ultracode` dot-escaped (see `rules/13-worker-first-mandate.md` § Trigger Escaping (Author-Time)).
 
@@ -126,9 +129,9 @@ Count prior occurrences from the DB entry. If count reaches **3**, flag promotio
 
 ## Decision Helper
 
-Fast lookup (coarse bands; the full per-worker matrix is the SOT in `~/.claude/rules/13-worker-first-mandate.md`): recon/lookup → **haiku · low**; standard code/doc/test/refactor → **sonnet · medium**; multi-file or architectural reasoning, planning, or `--scathingly-deep` review → **opus · high** (+ `think`/`think harder`); irreversible/frontier decisions → **opus · max** + `ultrathink`. Match the task to the closest rule-13 row for the exact defaults + escalation triggers.
+Fast lookup (coarse bands; the full per-worker matrix is the SOT in `~/.claude/rules/13-worker-first-mandate.md`): recon/lookup → **haiku · low** (w-explorer, cap 40); test runs → **haiku · medium** (w-tester, cap 30); standard code/doc/refactor/review → **sonnet** at the closest row's default effort and cap; planning, merging or adversarial review → **opus · high** (w-planner, w-merger, w-hostile-reviewer). Match the task to the closest rule-13 row for the exact model, effort, range, cap and model-switch trigger.
 
-If unsure, pick the next-higher tier — overspend on a one-off costs less than a wrong answer that contaminates project state.
+If unsure, take the closest row and shift effort up by one level (within its range); the model stays the row's model.
 
 ## Output Format
 
@@ -136,7 +139,7 @@ If unsure, pick the next-higher tier — overspend on a one-off costs less than 
 ## Autocommission Report
 
 **Spawned**: <name>
-**Model + effort**: <X> / <Y> / thinking=<Z>
+**Model + effort**: <X> / <Y> / maxTurns=<Z> (closest worker: <w-name>)
 **Task**: <one-line summary>
 **Status**: SUCCESS | FAILURE
 **Cleanup**: <name>.md deleted
@@ -166,5 +169,5 @@ If unsure, pick the next-higher tier — overspend on a one-off costs less than 
 - Matrix SOT: `~/.claude/rules/13-worker-first-mandate.md` (Per-Worker Defaults, Autocommission Protocol Summary)
 - Quality gates SOT: `~/.claude/rules/40-swarm-quality-gates.md` (R-1 schema, R-2 baseline-stash, R-3 verification, R-4 fleet expansion)
 - Decisions: `~/.claude/plans/swarm-first-v2/decisions.md` (DEC-001 ephemeral-vs-permanent split, DEC-005 Q1/Q2/Q3 cleanup/authority/cap)
-- Permanent fleet: `~/.claude/agents/w-*.md` (current 11 agents — check FIRST before autocommissioning)
+- Permanent fleet: `~/.claude/agents/w-*.md` (current 12 agents; check FIRST before autocommissioning)
 - Pattern log: memory DB `shared-global` tier — entries named `autocommission-pattern-<slug>` (search: `mem search "autocommission pattern" --mode fts -k 20`)

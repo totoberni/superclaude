@@ -27,50 +27,64 @@ This is the canonical reference. All other files cross-reference here.
 
 ### Critical Implementation Note
 
-Thinking configuration **IS inherited** from the session (v2.1.198+); there is no per-subagent thinking toggle. The depth control is the **effort chain** (highest precedence first): `CLAUDE_CODE_EFFORT_LEVEL` env var > agent frontmatter `effort:` (one of `low`/`medium`/`high`/`xhigh`/`max`) > inherited session effort.
+Thinking configuration **IS inherited** from the session (v2.1.198+); there is no per-subagent thinking toggle. The depth control is the **effort chain** (highest precedence first): `CLAUDE_CODE_EFFORT_LEVEL` env var > the Agent tool's per-call `effort` parameter (v2.1.292+, persists on resume, not applied to forks) > agent frontmatter `effort:` (one of `low`/`medium`/`high`/`xhigh`/`max`) > inherited session effort.
 
 Prompt-embedded `think` / `think hard` / `think harder` / `megathink` are **dead tokens on adaptive-thinking models** (Opus 4.6/4.7, Sonnet 4.6, Fable); they change nothing. Only `ultrathink` survives, and only as soft in-context guidance, not an effort change.
 
-To get depth in a reviewer or worker, set `effort:` in its agent frontmatter (example: `w-hostile-reviewer` ships `effort: max`) or override model/effort at dispatch. Do NOT rely on a prompt keyword.
+To get depth in a reviewer or worker, use the frontmatter default or shift it at dispatch per § Effort Assignment. Do NOT rely on a prompt keyword.
 
 This supersedes the prior "embed the keyword in the spawn prompt" guidance, which assumed thinking was not inherited; that instruction is retired.
 
 ### Per-Worker Defaults
 
-| Worker | Model | Default `/effort` | Default Thinking | Escalate when |
-|---|---|---|---|---|
-| `w-explorer` | haiku | low | none | Never |
-| `w-doc` (single-section polish) | sonnet | medium | none | Cross-section ⇒ opus + `think` |
-| `w-doc` (cross-section coherence) | opus | high | `think harder` | Irreversible structural ⇒ `ultrathink` |
-| `w-implementer` (≤3 files) | sonnet | medium | none | Novel ML method ⇒ opus + `think` |
-| `w-implementer` (>5 files / web app) | opus | high | `think hard` | Cross-cutting ⇒ `ultrathink` |
-| `w-implementer` (HPC SLURM/script) | sonnet | medium | none | New topology ⇒ opus + `think` |
-| `w-refactorer` | sonnet | medium | none | Semantic merge ⇒ opus |
-| `w-debugger` (single file) | sonnet | medium | `think` | 3 failed attempts ⇒ opus + `think harder` |
-| `w-debugger` (multi-file race) | opus | high | `think harder` | n/a |
-| `w-merger` (trivial conflicts) | sonnet | medium | none | Semantic conflict ⇒ opus + `think hard` |
-| `w-reviewer` (light style/lint) | sonnet | medium | none | Architecture review ⇒ opus + `think hard` |
-| `w-reviewer` (`--scathingly-deep`) | opus | high | `think harder` | Irreversible ⇒ `ultrathink` |
-| `w-hostile-reviewer` (one-shot adversarial, returns `VERDICT:`) | opus | max | n/a | n/a |
-| `w-design-reviewer` | sonnet | medium | none | Cross-page consistency ⇒ opus |
-| `w-tester` | sonnet | medium | none | Failure root-cause ⇒ delegate to w-debugger |
-| `w-planner` (single phase) | opus | high | `think hard` | 3+ phase plan ⇒ `think harder` |
-| `w-planner` (architectural) | opus | max | `ultrathink` | n/a |
-| `w-committer` | haiku | low | none | History rewrite ⇒ sonnet |
+Models are FIXED per worker (owner decision 2026-10-16): they are chosen for control and to avoid wasteful assignment, not per task. Meta never upgrades a model because a task is long; the only model switches are the ones in the "Model switch" column. The frontmatter of each `~/.claude/agents/w-*.md` mirrors this table.
 
-Aggregate distribution if fully adopted: ~5% haiku / ~70% sonnet / ~25% opus.
+| Worker | Model | Default effort | Meta's range | Model switch (meta decides) | `maxTurns` |
+|---|---|---|---|---|---|
+| `w-implementer` | sonnet | high | medium..xhigh | opus when the spec leaves design latitude (matrix below) | 65 |
+| `w-doc` | sonnet | medium | low..high | opus (high, range medium..xhigh) for cross-section coherence or Italian client deliverables | 60 |
+| `w-reviewer` | sonnet | high | medium..xhigh | opus (high) for architecture reviews | 50 |
+| `w-hostile-reviewer` | opus | high | high / xhigh / max by risk (below) | none | 90 |
+| `w-planner` | opus | high | medium..xhigh | none | 65 |
+| `w-debugger` | sonnet | high | medium..xhigh | opus (high) after 2 failed attempts or for a multi-file race | 65 |
+| `w-refactorer` | sonnet | high | medium..xhigh | none | 65 |
+| `w-merger` | opus | high | medium..xhigh | none | 65 |
+| `w-design-reviewer` | sonnet | medium | low..high | none | 65 |
+| `w-tester` | haiku | medium | low..high | none (root causes go to w-debugger) | 30 |
+| `w-explorer` | haiku | low | low..medium | none | 40 |
+| `w-committer` | haiku | low | low..medium | sonnet for history-rewrite mode | 25 |
 
-**"Default Thinking" column superseded**: on adaptive-thinking models (Opus 4.6/4.7, Sonnet 4.6, Fable) the keyword in that column is a no-op; the live depth control is `effort:` in agent frontmatter (see § Critical Implementation Note). The column is retained only as historical reference and for the legacy orthogonal-thinking models in § Effort × Thinking Orthogonality.
+**Never `model: fable`** (owner decision 2026-09-23): Opus 5.5 outperforms it on our use cases. Do not dispatch Fable for any worker, helper, or reviewer until the owner lifts this.
 
-### Worker model split (tool-call budget)
+### Effort Assignment (per dispatch)
 
-Model choice keys on expected tool-call count, not just worker class:
-- **<20 calls**: keep the sonnet-class defaults in the table above (`model: sonnet` = Sonnet 5).
-- **>20 calls**: override `model: opus` (Opus 5.5) regardless of worker class. Sonnet truncates **destructively** past ~24 calls (half-applied edits land on disk); opus truncation is **report-only** (the work completes underneath, only the closing message is cut).
-- **Hard architectural cap ~40 calls / ~250k tokens for all models**: split the task rather than exceed it.
-- **Never `model: fable`** (owner decision 2026-09-23): Opus 5.5 outperforms it on our use cases. Do not dispatch Fable for any worker, helper, or reviewer until the owner lifts this.
+Meta tunes depth with EFFORT, not with model choice. Per dispatch, meta may shift the worker's default effort by one level (the "Meta's range" column) through the Agent tool's `effort` parameter: one level down for an easy, reversible, fully specified task; one level up for a hard one or one where a silent error is costly. This rule is the explicit instruction that authorizes meta to set that parameter. State the chosen effort and the one-line reason in the dispatch log.
 
-Evidence: concurrent-meta experiment 2026-07-07; model versions and the Fable ban set by the owner 2026-09-23.
+**w-implementer matrix.** Model = how much judgment the spec leaves to the worker. Effort = how hard the reasoning is and how costly a silent error would be.
+
+| | medium | high (default) | xhigh |
+|---|---|---|---|
+| **sonnet** (spec pinned down) | mechanical, ≤3 files, reversible: rename a key, add a flag, re-run an existing chart script | normal feature from a clear spec, tests present | clear spec but tricky logic (heavy parsing, numerics, edge cases), or client-facing output where a quiet error is expensive |
+| **opus** (worker must make design calls) | prototype or exploratory script, low stakes | >5 files, a new subsystem, or an ambiguous spec needing judgment | the above plus a wide blast radius: pipelines feeding deliverables, hooks or guards, migrations |
+
+**w-hostile-reviewer risk rule** (the only worker allowed a +2 shift):
+- **high**: routine gate; a miss is caught by the next review or by tests.
+- **xhigh**: a miss is expensive to fix later (plan gate before a multi-worker wave, a methodology later work builds on).
+- **max**: a miss is irreversible or reaches a third party (final acceptance of a client deliverable, a security guard, a published method).
+
+### Turn Caps
+
+`maxTurns` values are set so that a dispatch hits its cap with probability ≤5% at 95% confidence (upper confidence bound on the 95th percentile of turns per job, resumed segments summed, 30 days of transcripts to 2026-10-16; small-sample workers use their family pool). When a cap is hit, Claude Code returns the output marked partial and the run can be resumed with SendMessage; that resume costs wall time, which is what the caps minimize. Do not split a task only to stay under a call count; split it when its parts are independent or its context would not fit. Checkpoint-first (dispatch contract § 6) stays mandatory at any cap. Re-derive the caps when a worker's cap-hit rate in `_spawns.log` evidence exceeds 5%.
+
+Evidence: 458 worker runs, 2026-09-16..2026-10-16 (meta audit, plan `plans/worker-fleet-tuning/`). Per-turn wall time: sonnet ~2x faster than opus on write tasks (0.17 vs 0.36 min/turn implementer); the old "sonnet truncates destructively past ~24 calls" evidence (2026-07-07) predates Sonnet 5.5 and is retired pending new evidence.
+
+### Worker Skills
+
+Two channels only (owner decision 2026-10-16). Workers almost never invoke a skill unprompted (1 Skill call in 458 runs), so "available via the Skill tool" does not count as a channel.
+- **Preload** (`skills:` in the agent frontmatter; full content injected at spawn, max 32): skills the worker's job uses on most runs, e.g. `windows-gotchas` for every worker that runs shell commands, plus the worker's own methodology skill.
+- **Brief-named**: meta names the situational skills that match the task in the dispatch brief ("load `hpc` with the Skill tool before starting"); the per-worker situational list is in each agent body (§ Situational skills) and in `docs/agent-manifest.md`.
+- **Never into a worker**: skills that dispatch a worker themselves (`design-review`, `plan`, `review`, `sanity-check`, `threat-model`) and meta/owner skills (`autocommission`, `swarm-*`, `pleh`, `promote`, `better-super`, `git`, `lt-mem`, `mem-health`, `memory-prune`, `super-health`, `sync-upstream`, `wf-*`).
+- A skill used by a worker on most of its dispatches for a month moves to preload; a preloaded skill unused for a month moves to brief-named.
 
 ### Effort Level Reference
 
@@ -82,7 +96,7 @@ Evidence: concurrent-meta experiment 2026-07-07; model versions and the Fable ba
 | `xhigh` | Long-horizon agentic loop (Opus 4.7 specific) | Repeated tool calling, deep search, exploratory coding |
 | `max` | Frontier problems only | Architecture decisions, security reviews, irreversible migrations |
 
-Note: official Anthropic docs explicitly recommend `low` for subagents. Default `w-*` to `medium` only when reasoning is genuinely required.
+Note: official Anthropic docs recommend `low` for simple subagent work; our defaults are higher where the job needs reasoning (owner decision 2026-10-16, table above), and § Effort Assignment moves them down for easy tasks.
 
 ### Effort × Thinking Orthogonality (Model-Dependent)
 

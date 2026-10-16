@@ -14,24 +14,78 @@ A plain session with no `--agent` behaves as an ordinary Claude Code session wit
 
 ### Worker Fleet (12 permanent w-*)
 
-Default models follow the SOT matrix in `~/.claude/rules/13-worker-first-mandate.md` § Per-Worker Defaults.
+Model, default effort, per-dispatch effort range and `maxTurns` mirror `~/.claude/rules/13-worker-first-mandate.md` § Per-Worker Defaults (SOT); the model switch column lists the only cases where meta changes a worker's model. Tools and skills follow `~/.claude/plans/worker-fleet-tuning/spec.md` §2-§3.
 
-| File | Default Model | Purpose | Invocation |
-|------|---------------|---------|------------|
-| `w-explorer.md` | haiku | Read-only file recon, grep, "where is X defined" — reports `file:line` | via Agent tool |
-| `w-committer.md` | haiku | Atomic git ops only (stage + conventional commit + commit) | via Agent tool |
-| `w-implementer.md` | sonnet | Writes new code from a clear spec | via Agent tool |
-| `w-doc.md` | sonnet | Authors prose: LaTeX sections, Markdown docs, READMEs, plans | via Agent tool |
-| `w-tester.md` | sonnet | Runs test suites; classifies failures; proposes routing (read-only on code) | via Agent tool |
-| `w-debugger.md` | sonnet | Diagnoses + fixes runtime errors; checks gotchas first | via Agent tool |
-| `w-merger.md` | sonnet | Resolves git merge conflicts | via Agent tool |
-| `w-refactorer.md` | sonnet | Targeted refactoring (extract / rename / inline / simplify) | via Agent tool |
-| `w-reviewer.md` | sonnet | Read-only code review (3 modes); `--scathingly-deep` -> opus | via Agent tool |
-| `w-design-reviewer.md` | sonnet | Multi-phase frontend design review (interaction/responsive/polish/a11y) | via Agent tool |
-| `w-planner.md` | opus | Plan creation/updates (superclaude `plans/` or in-project `.orchestrator/`) | via Agent tool |
-| `w-hostile-reviewer.md` | opus | One-shot adversarial methodology/technical review (effort:max); hostile-review gauntlet; returns a `VERDICT:` line first; read-only; does not loop | via Agent tool |
+| File | Model | Default effort (range) | Model switch (meta decides) | `maxTurns` | Purpose | Invocation |
+|------|-------|------------------------|-----------------------------|-----------|---------|------------|
+| `w-explorer.md` | haiku | low (low..medium) | none | 40 | Read-only file recon, grep, "where is X defined"; reports `file:line` | via Agent tool |
+| `w-committer.md` | haiku | low (low..medium) | sonnet for history-rewrite mode | 25 | Atomic git ops only (stage + conventional commit + commit) | via Agent tool |
+| `w-implementer.md` | sonnet | high (medium..xhigh) | opus when the spec leaves design latitude | 65 | Writes new code from a clear spec | via Agent tool |
+| `w-doc.md` | sonnet | medium (low..high) | opus (high, medium..xhigh) for cross-section coherence or Italian client deliverables | 60 | Authors prose: LaTeX sections, Markdown docs, READMEs, plans | via Agent tool |
+| `w-tester.md` | haiku | medium (low..high) | none (root causes go to w-debugger) | 30 | Runs test suites; classifies failures; proposes routing (read-only on code) | via Agent tool |
+| `w-debugger.md` | sonnet | high (medium..xhigh) | opus (high) after 2 failed attempts or for a multi-file race | 65 | Diagnoses + fixes runtime errors; checks gotchas first | via Agent tool |
+| `w-merger.md` | opus | high (medium..xhigh) | none | 65 | Resolves git merge conflicts | via Agent tool |
+| `w-refactorer.md` | sonnet | high (medium..xhigh) | none | 65 | Targeted refactoring (extract / rename / inline / simplify) | via Agent tool |
+| `w-reviewer.md` | sonnet | high (medium..xhigh) | opus (high) for architecture reviews | 50 | Read-only code review (3 modes) | via Agent tool |
+| `w-design-reviewer.md` | sonnet | medium (low..high) | none | 65 | Multi-phase frontend design review (interaction/responsive/polish/a11y) | via Agent tool |
+| `w-planner.md` | opus | high (medium..xhigh) | none | 65 | Plan creation/updates (superclaude `plans/` or in-project `.orchestrator/`) | via Agent tool |
+| `w-hostile-reviewer.md` | opus | high (high / xhigh / max by the rule-13 risk rule) | none | 90 | One-shot adversarial methodology/technical review; hostile-review gauntlet; returns a `VERDICT:` line first; read-only; does not loop | via Agent tool |
 
-Aggregate distribution if fully adopted: ~5% haiku / ~70% sonnet / ~25% opus.
+Fleet composition: 3 haiku, 6 sonnet, 3 opus. Never `model: fable` (owner decision 2026-09-23).
+
+#### Tools: negative filter
+
+No worker has a `tools:` allowlist: each inherits every tool (MCP included) minus `disallowedTools`. Universal deny (every worker): built-ins `Agent`, `Workflow`, `TaskStop`, `AskUserQuestion`, `ExitPlanMode`, plus the outside-service MCP servers listed in `~/.claude/config/worker-tool-policy.json`. Extra denials per worker (BROWSER = `mcp__claude-in-chrome`, `mcp__playwright`):
+
+| Worker | Extra denials |
+|--------|---------------|
+| w-implementer, w-debugger | none |
+| w-refactorer, w-merger | BROWSER |
+| w-doc, w-planner | NotebookEdit, BROWSER |
+| w-hostile-reviewer | Edit, NotebookEdit |
+| w-reviewer | Edit, NotebookEdit, BROWSER |
+| w-design-reviewer | Edit, NotebookEdit |
+| w-tester | Edit, NotebookEdit, WebSearch |
+| w-explorer, w-committer | Write, Edit, NotebookEdit, WebSearch, BROWSER |
+
+Read-only writers (Write kept for checkpoints, path-restricted by the write-ACL guard): w-reviewer, w-design-reviewer, w-hostile-reviewer, w-tester.
+
+#### Preloaded skills (`skills:`)
+
+| Worker | Preload |
+|--------|---------|
+| w-implementer | notebook, windows-gotchas, verify |
+| w-debugger | debugging, windows-gotchas, test-cleanup-protocol, mistake |
+| w-refactorer | code-quality, windows-gotchas, test-cleanup-protocol |
+| w-merger, w-doc | windows-gotchas |
+| w-reviewer | code-quality, infra-security, windows-gotchas |
+| w-hostile-reviewer | hostile-review, windows-gotchas |
+| w-design-reviewer | design:accessibility-review, design:design-critique, claude-in-chrome |
+| w-tester | test-cleanup-protocol, verify, windows-gotchas |
+| w-planner | orchestrator-patterns |
+| w-explorer | none |
+| w-committer | commit |
+
+Any other skill is named in the dispatch brief.
+
+#### Brief-named skills (situational)
+
+| Worker | Situational skills (brief-named) |
+|--------|----------------------------------|
+| w-implementer | tdd, test-scaffold, hpc, etl-check, gas-patterns, figure-validate, dataviz, experiment-harness, deliverable-it, anthropic-skills:docx, anthropic-skills:xlsx, anthropic-skills:pdf, anthropic-skills:pptx |
+| w-debugger | gas-patterns, hpc, etl-check, notebook, nb-monitor |
+| w-refactorer | tdd |
+| w-merger | none |
+| w-doc | deliverable-it, report, research, anthropic-skills:docx, anthropic-skills:pdf, anthropic-skills:pptx, design:ux-copy |
+| w-reviewer | model-review, verify |
+| w-hostile-reviewer | model-review, experiment-harness, figure-validate |
+| w-design-reviewer | figure-validate, dataviz, design:ux-copy, design:design-system |
+| w-tester | notebook, nb-monitor |
+| w-planner | brainstorm, engineering:architecture, engineering:system-design |
+| w-explorer | none |
+| w-committer | none |
+
+Policy: `~/.claude/rules/13-worker-first-mandate.md` § Worker Skills.
 
 ## Ephemeral Agents (`agents/_ephemeral/`)
 
@@ -70,11 +124,11 @@ Canonical catalogue with one-line purposes: `~/.claude/skills/README.md`.
 |-------|-----------|
 | code-quality | w-reviewer, w-refactorer |
 | debugging | w-debugger |
-| gas-patterns | w-debugger |
+| gas-patterns | none preloaded (named in the dispatch brief) |
 | infra-security | w-reviewer |
-| test-cleanup-protocol | w-debugger, w-tester |
-| verify | w-tester |
-| windows-gotchas | w-debugger |
+| test-cleanup-protocol | w-debugger, w-refactorer, w-tester |
+| verify | w-implementer, w-tester |
+| windows-gotchas | w-implementer, w-debugger, w-refactorer, w-merger, w-doc, w-reviewer, w-hostile-reviewer, w-tester |
 
 ## Hooks
 

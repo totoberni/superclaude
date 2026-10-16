@@ -7,7 +7,7 @@ user-invocable: false
 
 # Windows 11 Environment Gotchas
 
-This skill is preloaded by the `w-debugger` agent. It lists what is TRUE ON THIS MACHINE: native Windows 11, no WSL, no admin rights. Check these before blaming the code.
+This skill is preloaded by every worker that runs shell commands (`w-implementer`, `w-debugger`, `w-refactorer`, `w-merger`, `w-doc`, `w-reviewer`, `w-hostile-reviewer`, `w-tester`) and is usable by meta. It lists what is TRUE ON THIS MACHINE: native Windows 11, no WSL, no admin rights. Check these before blaming the code.
 
 ## Two shell tools
 

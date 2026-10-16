@@ -48,7 +48,7 @@ Codifies the battle-tested swarm patterns (W-1, W-4, W-7, W-11) into a single di
 1. Parse heterogeneous task list and dispatch each helper with the appropriate `subagent_type` matching the work:
    - Code recon → `Explore` or `w-explorer`
    - Code review → `w-reviewer`
-   - Implementation → `w-implementer` (with model override per matrix)
+   - Implementation → `w-implementer` (model switch and effort per rules/13 matrix; state effort + reason)
    - Doc polish → `w-doc`
    - Web research / generic synthesis → `general-purpose`
    - Mechanical lookup → `w-explorer` (haiku) or `general-purpose` (cheaper for one-off)
@@ -140,7 +140,7 @@ The worker reported DONE on `report.tex`. Scope check: 4 files, all reversible (
 - **NEVER** skip R-1 schema spec when ≥2 workers in the batch share output.
 - **NEVER** invoke this skill from a `w-*` worker — only meta (or a plain session) has spawn authority.
 - **NEVER** bundle uncertain calls (file lookups that may fail, ref lookups, commands that might error) with safe calls in the same parallel batch — Anthropic cancels ALL siblings if any single call errors. Run discovery calls first, then dispatch from confirmed inputs.
-- **NEVER** rely on a prompt keyword for thinking depth. Thinking IS inherited from the session; the depth control is the `effort` chain. Set `effort:` in the worker's agent frontmatter, or override model/effort at dispatch. SOT: `~/.claude/rules/13-worker-first-mandate.md` § Critical Implementation Note.
+- **NEVER** rely on a prompt keyword for thinking depth. Thinking IS inherited from the session; the depth control is the `effort` chain. Use the worker's frontmatter `effort:`, or shift it at dispatch via the Agent tool `effort` parameter (rules/13 § Effort Assignment); the model is fixed per worker. SOT: `~/.claude/rules/13-worker-first-mandate.md` § Critical Implementation Note.
 
 ## Cross-References
 

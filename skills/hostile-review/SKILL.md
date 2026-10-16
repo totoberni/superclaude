@@ -20,12 +20,14 @@ than plausibility.
 
 **Args**: `hostile-review [--scope methodology|technical|both] [--target <path>] [--reviewer-count 1|2] [--web-search-budget <N>] [--markscheme <path>] [--spec <path>] [--mode A|B]`
 
-**Execution mandate**: run at **maximum reasoning depth**. When dispatched
-as the `w-hostile-reviewer` agent this is guaranteed structurally by its
-`effort: max` frontmatter (doctrine delta 1: prompt thinking keywords are
-retired on adaptive-thinking models; depth is set via `effort:`, never a
-keyword). If invoked in a context where maximum effort cannot be assured,
-escalate rather than proceed shallow.
+**Execution mandate**: review at full depth at whatever effort level is
+set. When dispatched as the `w-hostile-reviewer` agent the default is
+`effort: high`; meta raises it to `xhigh` or `max` by the risk rule in
+`rules/13-worker-first-mandate.md` § Effort Assignment (doctrine delta 1:
+prompt thinking keywords are retired on adaptive-thinking models; depth is
+set via `effort:`, never a keyword). If the effort level is clearly below
+what the dispatch's stated risk requires, escalate rather than proceed
+shallow.
 
 `--scope` selects the review lens. `methodology` audits scientific
 design (hypotheses, variable isolation, falsifiability, triangulation,
@@ -408,7 +410,7 @@ authors the token; a caller that relays it quotes the line verbatim.
 
 ### Workflow
 
-1. Verify maximum effort is in effect (the `w-hostile-reviewer` agent ships `effort: max`); if depth cannot be assured, abort and report the reason to the caller.
+1. Confirm the effort level matches the risk stated in the dispatch (the `w-hostile-reviewer` agent defaults to `effort: high`; meta raises it per rules/13 § Effort Assignment); review at full depth regardless; if the level is clearly below the stated risk, abort and report the reason to the caller.
 2. Run the project discovery protocol; state project root,
    artefacts, mode, markscheme, spec, prior reviews at the top of
    your working notes.
