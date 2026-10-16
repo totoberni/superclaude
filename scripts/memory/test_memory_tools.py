@@ -6,8 +6,12 @@ non viene mai aperto. Gli embedding sono reali (modello in cache, HF_HUB_OFFLINE
 I timestamp `updated` sono fissati a mano e MEM_NOW blocca "adesso", cosi' i
 punteggi sono deterministici.
 """
+import contextlib
+import hashlib
 import json
 import os
+import sqlite3
+import stat
 import subprocess
 import sys
 
@@ -15,8 +19,12 @@ import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
+# plan_index calcola i suoi percorsi da Path.home() all'import: va importato prima di
+# qualunque test che ridefinisce USERPROFILE
+sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "plan"))
 import mem_health  # noqa: E402
 import memory_db as mdb  # noqa: E402
+import plan_index  # noqa: E402
 import scan_mem_matrix as scan  # noqa: E402
 
 _MEMDB = os.path.join(_HERE, "memory_db.py")
@@ -91,7 +99,7 @@ def _run(script, *args, env=None):
     full_env = dict(os.environ, HF_HUB_OFFLINE="1", PYTHONUTF8="1")
     for key in ("MEM_OVERSIZE_BYTES", "MEM_STALE_DAYS", "MEM_DUP_SIM_MIN",
                 "MEM_CORPUS_BYTES_MAX", "MEM_INCOMPLETE_CAP", "MEM_NOW",
-                "MEMORY_DB_PATH", "CLAUDE_DIR"):
+                "MEMORY_DB_PATH", "CLAUDE_DIR", "SC_MEM_REALM"):
         full_env.pop(key, None)
     full_env.update(env or {})
     proc = subprocess.run([sys.executable, script, *args], capture_output=True,
@@ -710,3 +718,765 @@ def test_init_on_missing_db_still_creates(tmp_path):
     rc, _, err = _cli(fresh, "init")
     assert rc == 0, err
     assert fresh.is_file()
+
+
+# --- timestamp, regola di bump, realm, API batch ------------------------------
+
+_T_OLD = "2000-01-01T00:00:00+00:00"
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_realm(monkeypatch):
+    """Un SC_MEM_REALM ereditato dalla sessione non deve cambiare l'esito dei test."""
+    monkeypatch.delenv("SC_MEM_REALM", raising=False)
+
+
+def _new_db(tmp_path, name="t12.db"):
+    p = tmp_path / name
+    mdb.init_db(p)
+    return p
+
+
+def _put(db, name, path=None, **kw):
+    """upsert di una riga con valori di default; `kw` passa direttamente a mdb.upsert."""
+    args = dict(tier="instance", agent=None, type="feedback", description="desc",
+                text=f"body of {name}")
+    args.update(kw)
+    return mdb.upsert(path=path or f"instance/_/{name}.md", name=name, db_path=db, **args)
+
+
+def _fetch(db, path):
+    cols, rows = mdb.run_sql(f"SELECT * FROM memories WHERE path = '{path}'", db)
+    return dict(zip(cols, rows[0])) if rows else None
+
+
+def _vec_bytes(db, row_id):
+    conn = mdb._connect(db)
+    try:
+        row = conn.execute("SELECT embedding FROM memories_vec WHERE rowid = ?",
+                           (row_id,)).fetchone()
+        return None if row is None else bytes(row[0])
+    finally:
+        conn.close()
+
+
+def _sha(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+
+
+def _columns(db):
+    conn = sqlite3.connect(str(db))
+    try:
+        return [r[1] for r in conn.execute("PRAGMA table_info(memories)")]
+    finally:
+        conn.close()
+
+
+def _spy_embed(monkeypatch):
+    """Registra ogni chiamata al modello (lista di testi) lasciando passare l'embedding reale."""
+    calls = []
+    real = mdb._embed_batch
+
+    def spy(texts):
+        calls.append(list(texts))
+        return real(texts)
+
+    monkeypatch.setattr(mdb, "_embed_batch", spy)
+    return calls
+
+
+# timestamp ------------------------------------------------------------------
+
+
+def test_upsert_stores_iso_offset_timestamps_verbatim(tmp_path):
+    p = _new_db(tmp_path)
+    created, updated = "2026-10-15T17:30:00+00:00", "2026-10-16T08:00:00.123456+02:00"
+    _put(p, "ts", created=created, updated=updated)
+    row = _fetch(p, "instance/_/ts.md")
+    assert (row["created"], row["updated"]) == (created, updated)
+
+
+@pytest.mark.parametrize("field", ["created", "updated"])
+@pytest.mark.parametrize("bad", [
+    "2026-10-15T17:30:00",          # naive
+    "2026-10-15",                   # solo data
+    "yesterday",                    # non ISO
+    "",                             # vuoto
+    "2026-13-45T00:00:00+00:00",    # calendario impossibile
+    "2026-10-15T17:30:00Z",         # Z: l'ordinamento a stringa non e' piu' coerente con +00:00
+    "2026-10-15 17:30:00+00:00",    # separatore diverso da T
+    " 2026-10-15T17:30:00+00:00",   # spazio iniziale
+    "2026-10-15T17:30:00+0000",     # offset senza due punti
+    20261015,                       # non stringa
+])
+def test_upsert_rejects_naive_or_malformed_timestamp(tmp_path, field, bad):
+    p = _new_db(tmp_path)
+    with pytest.raises(ValueError):
+        _put(p, "bad", **{field: bad})
+    assert _count(p) == 0
+
+
+def test_rejected_timestamp_on_update_leaves_row_untouched(tmp_path):
+    p = _new_db(tmp_path)
+    _put(p, "keep", created=_T_OLD, updated=_T_OLD)
+    before = _sha(p)
+    with pytest.raises(ValueError):
+        _put(p, "keep", text="changed", updated="2026-10-15T17:30:00")
+    assert _sha(p) == before
+
+
+def test_upsert_without_timestamps_uses_now(tmp_path):
+    p = _new_db(tmp_path)
+    _put(p, "now")
+    row = _fetch(p, "instance/_/now.md")
+    assert row["created"] == row["updated"]
+    assert row["created"].endswith("+00:00") and row["created"] > "2026-01-01"
+
+
+# regola di bump ------------------------------------------------------------------
+
+_BUMP_CASES = [
+    ("tier", {"tier": "class"}),
+    ("agent", {"agent": "w-x"}),
+    ("type", {"type": "project"}),
+    ("name", {"name": "renamed"}),
+    ("description", {"description": "another description"}),
+    ("text", {"text": "another body"}),
+    ("realm", {"realm": "personal"}),
+]
+
+
+@pytest.mark.parametrize("field,change", _BUMP_CASES, ids=[c[0] for c in _BUMP_CASES])
+def test_update_bumps_updated_when_a_field_changes(tmp_path, field, change):
+    p = _new_db(tmp_path)
+    base = dict(path="instance/_/bump.md", tier="instance", agent=None, type="feedback",
+                name="bump", description="desc", text="body", db_path=p)
+    mdb.upsert(**base, created=_T_OLD, updated=_T_OLD)
+    mdb.upsert(**{**base, **change})
+    row = _fetch(p, "instance/_/bump.md")
+    assert row["updated"] > _T_OLD
+    assert row["created"] == _T_OLD
+
+
+def test_noop_upsert_writes_nothing_and_does_not_embed(tmp_path, monkeypatch):
+    p = _new_db(tmp_path)
+    _put(p, "same", created=_T_OLD, updated=_T_OLD, realm="personal")
+    before = _sha(p)
+    calls = _spy_embed(monkeypatch)
+    _put(p, "same", realm="personal")
+    _put(p, "same")  # realm omesso: la riga esistente lo conserva, quindi nessuna modifica
+    assert _sha(p) == before  # nessuna scrittura: il file e' identico byte per byte
+    assert _fetch(p, "instance/_/same.md")["updated"] == _T_OLD
+    assert calls == []
+
+
+def test_noop_upsert_many_issues_no_write(tmp_path):
+    p = _new_db(tmp_path)
+    row = _mrow("same", created=_T_OLD, updated=_T_OLD)
+    conn = mdb._connect(p)
+    try:
+        mdb.upsert_many([row], conn)
+        conn.commit()
+        changes = conn.total_changes
+        assert mdb.upsert_many([dict(row)], conn) == [_fetch(p, row["path"])["id"]]
+        assert conn.total_changes == changes
+        assert not conn.in_transaction
+    finally:
+        conn.close()
+
+
+def test_explicit_timestamps_on_update_are_stored_as_given(tmp_path):
+    p = _new_db(tmp_path)
+    _put(p, "x", created=_T_OLD, updated=_T_OLD)
+    stamp = "2001-02-03T04:05:06+01:00"
+    _put(p, "x", text="changed", updated=stamp)
+    assert _fetch(p, "instance/_/x.md")["updated"] == stamp
+    # nessun campo cambia, ma il timestamp esplicito e' diverso: va scritto cosi' com'e'
+    later = "2002-02-03T04:05:06+00:00"
+    _put(p, "x", text="changed", updated=later, created="1999-01-01T00:00:00+00:00")
+    row = _fetch(p, "instance/_/x.md")
+    assert (row["updated"], row["created"]) == (later, "1999-01-01T00:00:00+00:00")
+
+
+def test_metadata_only_change_keeps_the_vector(tmp_path, monkeypatch):
+    p = _new_db(tmp_path)
+    rid = _put(p, "meta", created=_T_OLD, updated=_T_OLD)
+    vec = _vec_bytes(p, rid)
+    calls = _spy_embed(monkeypatch)
+    _put(p, "meta", tier="class", agent="w-x", type="project", realm="personal")
+    assert calls == []
+    assert _vec_bytes(p, rid) == vec
+    assert _fetch(p, "instance/_/meta.md")["updated"] > _T_OLD
+
+
+def test_text_change_reembeds(tmp_path, monkeypatch):
+    p = _new_db(tmp_path)
+    rid = _put(p, "txt")
+    vec = _vec_bytes(p, rid)
+    calls = _spy_embed(monkeypatch)
+    _put(p, "txt", text="completely different words about turbines")
+    assert calls == [["completely different words about turbines"]]
+    assert _vec_bytes(p, rid) != vec
+
+
+# realm ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("env,expected", [
+    ("personal", "personal"), (" Personal ", "personal"),
+    (None, None), ("", None), ("work", None),
+])
+def test_new_row_realm_defaults_from_env(tmp_path, monkeypatch, env, expected):
+    if env is not None:
+        monkeypatch.setenv("SC_MEM_REALM", env)
+    p = _new_db(tmp_path)
+    _put(p, "r")
+    assert _fetch(p, "instance/_/r.md")["realm"] == expected
+
+
+def test_existing_row_keeps_realm_when_omitted(tmp_path, monkeypatch):
+    p = _new_db(tmp_path)
+    monkeypatch.setenv("SC_MEM_REALM", "personal")
+    _put(p, "keepp")
+    _put(p, "keepu", realm="untagged")
+    monkeypatch.delenv("SC_MEM_REALM")
+    _put(p, "keepp", text="changed p")
+    monkeypatch.setenv("SC_MEM_REALM", "personal")
+    _put(p, "keepu", text="changed u")
+    assert _fetch(p, "instance/_/keepp.md")["realm"] == "personal"
+    assert _fetch(p, "instance/_/keepu.md")["realm"] is None
+
+
+@pytest.mark.parametrize("clear", ["untagged", None, " Untagged "])
+def test_explicit_untagged_or_none_clears_realm(tmp_path, monkeypatch, clear):
+    monkeypatch.setenv("SC_MEM_REALM", "personal")
+    p = _new_db(tmp_path)
+    _put(p, "clr", created=_T_OLD, updated=_T_OLD)
+    assert _fetch(p, "instance/_/clr.md")["realm"] == "personal"
+    _put(p, "clr", realm=clear)
+    row = _fetch(p, "instance/_/clr.md")
+    assert row["realm"] is None and row["updated"] > _T_OLD
+    _put(p, "new_untagged", realm=clear)  # il valore esplicito batte l'env anche su riga nuova
+    assert _fetch(p, "instance/_/new_untagged.md")["realm"] is None
+
+
+@pytest.mark.parametrize("bad", ["work", "all", "", 5])
+def test_upsert_rejects_unknown_realm(tmp_path, bad):
+    p = _new_db(tmp_path)
+    with pytest.raises(ValueError, match="realm"):
+        _put(p, "badrealm", realm=bad)
+    assert _count(p) == 0
+
+
+def test_cli_upsert_realm_flag(tmp_path):
+    p = _new_db(tmp_path)
+    body = tmp_path / "body.txt"
+    body.write_text("realm cli body", encoding="utf-8")
+    args = ["upsert", "--tier", "instance", "--type", "feedback", "--name", "cli-r",
+            "--description", "d", "--text-file", str(body)]
+    path = "instance/_/cli-r.md"
+    rc, _, err = _cli(p, *args, "--realm", "personal")
+    assert rc == 0, err
+    assert _fetch(p, path)["realm"] == "personal"
+    rc, _, err = _cli(p, *args)  # omesso: la riga esistente conserva il realm
+    assert rc == 0, err
+    assert _fetch(p, path)["realm"] == "personal"
+    rc, _, err = _cli(p, *args, "--realm", "untagged")
+    assert rc == 0, err
+    assert _fetch(p, path)["realm"] is None
+    rc, _, err = _cli(p, *args, "--realm", "work")
+    assert rc == 2 and "--realm" in err
+
+
+def test_cli_upsert_new_row_follows_env_realm(tmp_path):
+    p = _new_db(tmp_path)
+    body = tmp_path / "body.txt"
+    body.write_text("env realm body", encoding="utf-8")
+    rc, _, err = _cli(p, "upsert", "--tier", "instance", "--type", "feedback", "--name", "envr",
+                      "--description", "d", "--text-file", str(body),
+                      env={"SC_MEM_REALM": "personal"})
+    assert rc == 0, err
+    assert _fetch(p, "instance/_/envr.md")["realm"] == "personal"
+
+
+@pytest.fixture()
+def realm_db(tmp_path):
+    p = _new_db(tmp_path, "realm.db")
+    _put(p, "pers", text="zebra quokka private note", realm="personal")
+    _put(p, "open", text="zebra quokka public note")
+    return p
+
+
+def _names(hits):
+    return sorted(h["name"] for h in hits)
+
+
+def test_search_realm_filter(realm_db):
+    def run(**kw):
+        return _names(mdb.search("zebra quokka", k=10, mode="fts", db_path=realm_db, **kw))
+
+    assert run() == ["open", "pers"]
+    assert run(realm="all") == ["open", "pers"]
+    assert run(realm="personal") == ["pers"]
+    assert run(realm="untagged") == ["open"]
+    many = mdb.search_many(["zebra", "quokka"], k=10, mode="fts", db_path=realm_db,
+                           realm="personal")
+    assert _names(many) == ["pers"]
+    with pytest.raises(ValueError, match="realm"):
+        mdb.search("zebra", db_path=realm_db, realm="work")
+
+
+def test_cli_search_and_list_realm_filter(realm_db):
+    def search(*extra):
+        rc, out, err = _cli(realm_db, "search", "zebra quokka", "--mode", "fts", "--json", *extra)
+        assert rc == 0, err
+        return _names(json.loads(out))
+
+    assert search() == ["open", "pers"]
+    assert search("--realm", "personal") == ["pers"]
+    assert search("--realm", "untagged") == ["open"]
+
+    def listed(*extra):
+        rc, out, err = _cli(realm_db, "list", *extra)
+        assert rc == 0, err
+        return sorted(line.split()[0] for line in out.splitlines() if line.strip())
+
+    assert listed() == ["open", "pers"]
+    assert listed("--realm", "all") == ["open", "pers"]
+    assert listed("--realm", "personal") == ["pers"]
+    assert listed("--realm", "untagged") == ["open"]
+    rc, _, err = _cli(realm_db, "list", "--realm", "work")
+    assert rc == 2
+
+
+def test_get_and_similar_ignore_realm(realm_db):
+    rc, out, err = _cli(realm_db, "get", "--name", "pers")
+    assert rc == 0, err
+    assert out.strip() == "zebra quokka private note"
+    rc, out, err = _cli(realm_db, "similar", "--name", "pers")
+    assert rc == 0, err
+    assert "open" in out
+
+
+# DB senza colonna realm, aperto in sola lettura ----------------------------------
+
+_LEGACY_MEMORIES = """
+CREATE TABLE memories (
+  id INTEGER PRIMARY KEY, path TEXT UNIQUE, tier TEXT, agent TEXT, type TEXT, name TEXT,
+  description TEXT, text TEXT NOT NULL, html TEXT, created TEXT, updated TEXT, hash TEXT
+);
+"""
+_LEGACY_ROWS = [
+    ("legacy-one", "instance", "alpha legacy note about widgets"),
+    ("legacy-two", "shared-global", "beta legacy note about sprockets"),
+]
+
+
+def _legacy_db(path):
+    """DB con lo schema precedente a realm, popolato senza passare da upsert."""
+    conn = sqlite3.connect(str(path))
+    conn.enable_load_extension(True)
+    mdb.sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    conn.executescript(_LEGACY_MEMORIES)
+    conn.executescript(mdb._SCHEMA)  # IF NOT EXISTS: crea fts, vec e links, non tocca memories
+    conn.executescript(mdb._TRIGGERS)
+    for name, tier, text in _LEGACY_ROWS:
+        cur = conn.execute(
+            "INSERT INTO memories (path, tier, agent, type, name, description, text, created,"
+            " updated, hash) VALUES (?, ?, NULL, 'feedback', ?, 'legacy', ?, ?, ?, ?)",
+            (f"{tier}/_/{name}.md", tier, name, text, _T_OLD, _T_OLD,
+             mdb._content_hash(text, name, "legacy")))
+        conn.execute("INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)",
+                     (cur.lastrowid, mdb.sqlite_vec.serialize_float32(mdb._embed(text))))
+    conn.commit()
+    conn.close()
+    return path
+
+
+@contextlib.contextmanager
+def _read_only_file(path):
+    os.chmod(path, stat.S_IREAD)
+    try:
+        yield
+    finally:
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_columnless_readonly_db_still_serves_search_list_get_export(tmp_path):
+    p = _legacy_db(tmp_path / "old.db")
+    both = ["legacy-one", "legacy-two"]
+    with _read_only_file(p):
+        for realm, expected in [("all", both), ("untagged", both), ("personal", [])]:
+            hits = mdb.search("legacy", k=10, mode="fts", db_path=p, realm=realm)
+            assert _names(hits) == expected
+        rc, out, err = _cli(p, "search", "legacy", "--mode", "fts", "--json",
+                            "--realm", "personal")
+        assert rc == 0, err
+        assert json.loads(out) == []
+        rc, out, err = _cli(p, "list", "--realm", "personal")
+        assert rc == 0, err
+        assert "(no memories match)" in out
+        rc, out, err = _cli(p, "list", "--realm", "untagged")
+        assert rc == 0, err
+        assert all(name in out for name in both)
+        rc, out, err = _cli(p, "get", "--name", "legacy-one")
+        assert rc == 0, err
+        assert out.strip() == "alpha legacy note about widgets"
+        rc, out, err = _cli(p, "export")
+        assert rc == 0, err
+        exported = json.loads(out)
+        assert [e["realm"] for e in exported] == [None, None]
+        assert [e["created"] for e in exported] == [_T_OLD, _T_OLD]
+    assert "realm" not in _columns(p)
+
+
+# migrazione --------------------------------------------------------------------------
+
+
+def test_fresh_schema_has_realm_column(tmp_path):
+    assert _columns(_new_db(tmp_path))[-1] == "realm"
+
+
+def test_migration_adds_column_once_and_is_idempotent(tmp_path):
+    p = _legacy_db(tmp_path / "old.db")
+    assert "realm" not in _columns(p)
+    for _ in range(2):
+        mdb._connect(p).close()
+        assert _columns(p).count("realm") == 1
+    mdb.init_db(p)
+    assert _columns(p).count("realm") == 1
+    assert _names(mdb.search("legacy", k=10, mode="fts", db_path=p)) == [
+        "legacy-one", "legacy-two"]
+    for path in ("instance/_/legacy-one.md", "shared-global/_/legacy-two.md"):
+        assert _fetch(p, path)["realm"] is None  # righe esistenti: non taggate
+
+
+def test_migration_tolerates_duplicate_column_race(tmp_path, monkeypatch):
+    p = _legacy_db(tmp_path / "old.db")
+    conn = mdb._connect(p)  # migra davvero
+    try:
+        # un altro processo ha aggiunto la colonna dopo il nostro controllo: il controllo e' vecchio
+        monkeypatch.setattr(mdb, "_table_columns", lambda c, t: {"id", "path"})
+        mdb._migrate_schema(conn)
+    finally:
+        conn.close()
+    assert _columns(p).count("realm") == 1
+
+
+def test_migration_skipped_while_another_writer_holds_the_lock(tmp_path, monkeypatch):
+    p = _legacy_db(tmp_path / "locked.db")
+    monkeypatch.setattr(mdb, "BUSY_TIMEOUT_MS", 50)
+    holder = sqlite3.connect(str(p), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        mdb._connect(p).close()  # non solleva: la migrazione riprova alla connessione dopo
+        assert "realm" not in _columns(p)
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    mdb._connect(p).close()
+    assert "realm" in _columns(p)
+
+
+def test_migration_skipped_on_readonly_database_file(tmp_path):
+    p = _legacy_db(tmp_path / "ro.db")
+    with _read_only_file(p):
+        mdb._connect(p).close()
+        assert "realm" not in _columns(p)
+
+
+def test_readonly_connection_never_migrates(tmp_path):
+    p = _legacy_db(tmp_path / "old.db")
+    conn = mdb._connect(p, readonly=True)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 2
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("UPDATE memories SET tier = 'x'")
+    finally:
+        conn.close()
+    assert "realm" not in _columns(p)
+
+
+def test_migration_does_not_swallow_unexpected_errors(tmp_path):
+    class FailingAlter:
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, *args):
+            if sql.lstrip().upper().startswith("ALTER"):
+                raise sqlite3.OperationalError("disk I/O error")
+            return self._real.execute(sql, *args)
+
+    p = _legacy_db(tmp_path / "old.db")
+    conn = sqlite3.connect(str(p))
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
+            mdb._migrate_schema(FailingAlter(conn))
+    finally:
+        conn.close()
+
+
+def test_personal_write_refused_when_realm_column_is_missing(tmp_path, monkeypatch):
+    p = _legacy_db(tmp_path / "old.db")
+    monkeypatch.setattr(mdb, "_migrate_schema", lambda conn: None)  # migrazione saltata
+    with pytest.raises(RuntimeError, match="realm"):
+        _put(p, "px", realm="personal")
+    monkeypatch.setenv("SC_MEM_REALM", "personal")
+    with pytest.raises(RuntimeError, match="realm"):
+        _put(p, "py")
+    monkeypatch.delenv("SC_MEM_REALM")
+    assert _put(p, "pz")  # una riga senza realm si scrive anche senza colonna
+    names = [r[0] for r in mdb.run_sql("SELECT name FROM memories ORDER BY name", p)[1]]
+    assert names == ["legacy-one", "legacy-two", "pz"]
+
+
+# upsert_many ----------------------------------------------------------------------
+
+
+def _mrow(name, text=None, **extra):
+    return {"path": f"instance/_/{name}.md", "tier": "instance", "agent": None,
+            "type": "feedback", "name": name, "description": f"desc {name}",
+            "text": text or f"body of {name}", **extra}
+
+
+def _batch_conn(db):
+    """Connessione con transazione governata dal chiamante, come nel caso d'uso del merge."""
+    conn = mdb._connect(db)
+    conn.isolation_level = None
+    conn.execute("BEGIN IMMEDIATE")
+    return conn
+
+
+def _snapshot(db):
+    """Stato logico completo: righe, vettori, link, e l'indice FTS verificato con integrity-check."""
+    conn = mdb._connect(db)
+    try:
+        conn.execute("INSERT INTO memories_fts(memories_fts, rank) VALUES('integrity-check', 1)")
+        return {
+            "memories": [tuple(r) for r in conn.execute("SELECT * FROM memories ORDER BY id")],
+            "vec": [(r[0], bytes(r[1])) for r in conn.execute(
+                "SELECT rowid, embedding FROM memories_vec ORDER BY rowid")],
+            "links": [tuple(r) for r in conn.execute(
+                "SELECT src_id, dst_name FROM links ORDER BY src_id, dst_name")],
+        }
+    finally:
+        conn.close()
+
+
+def test_upsert_many_writes_rows_with_vectors_after_caller_commit(tmp_path):
+    p = _new_db(tmp_path)
+    rows = [_mrow("m1", created=_T_OLD, updated=_T_OLD, realm="personal"),
+            _mrow("m2", text="see [[m1]] for details")]
+    conn = _batch_conn(p)
+    try:
+        ids = mdb.upsert_many(rows, conn)
+        assert len(ids) == 2 and ids[0] != ids[1]
+        assert _count(p) == 0  # non ha committato: un altro lettore non vede nulla
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    assert _count(p) == 2
+    first = _fetch(p, rows[0]["path"])
+    assert (first["created"], first["updated"], first["realm"]) == (_T_OLD, _T_OLD, "personal")
+    assert all(_vec_bytes(p, rid) for rid in ids)
+    snap = _snapshot(p)
+    assert (ids[1], "m1") in snap["links"]
+
+
+def test_upsert_many_embeds_in_batches_before_any_write(tmp_path, monkeypatch):
+    p = _new_db(tmp_path)
+    conn = _batch_conn(p)
+    seen = []
+    real = mdb._embed_batch
+
+    def spy(texts):
+        seen.append((len(texts), conn.total_changes))
+        return real(texts)
+
+    monkeypatch.setattr(mdb, "_embed_batch", spy)
+    monkeypatch.setattr(mdb, "EMBED_BATCH_SIZE", 2)
+    try:
+        start = conn.total_changes
+        mdb.upsert_many([_mrow(f"b{i}") for i in range(5)], conn)
+        assert conn.total_changes > start
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    assert [n for n, _ in seen] == [2, 2, 1]
+    assert {changes for _, changes in seen} == {start}  # nessuna scrittura prima dei vettori
+
+
+def test_upsert_many_embed_false_writes_no_vectors(tmp_path, monkeypatch):
+    p = _new_db(tmp_path)
+    calls = _spy_embed(monkeypatch)
+    conn = _batch_conn(p)
+    try:
+        ids = mdb.upsert_many([_mrow("nv1"), _mrow("nv2")], conn, embed=False)
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    assert calls == []
+    assert _count(p) == 2
+    assert [_vec_bytes(p, rid) for rid in ids] == [None, None]
+    assert _snapshot(p)["vec"] == []
+
+
+def test_upsert_many_rollback_after_midbatch_failure_leaves_db_unchanged(tmp_path, monkeypatch):
+    p = _new_db(tmp_path)
+    _put(p, "ra", text="old body of ra [[target]]", created=_T_OLD, updated=_T_OLD)
+    _put(p, "rb", text="untouched row")
+    before = _snapshot(p)
+    n_before = _count(p)
+
+    real_links = mdb._refresh_links
+    seen = {"n": 0}
+
+    def flaky(conn, row_id, text):
+        seen["n"] += 1
+        if seen["n"] == 3:
+            raise RuntimeError("boom")
+        return real_links(conn, row_id, text)
+
+    monkeypatch.setattr(mdb, "_refresh_links", flaky)
+    batch = [_mrow("ra", text="new body of ra [[other]]"), _mrow("rc"), _mrow("rd"), _mrow("re")]
+    conn = _batch_conn(p)
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            mdb.upsert_many(batch, conn)
+        # a meta' batch le scritture sono davvero avvenute dentro la transazione del chiamante
+        assert conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0] > n_before
+        conn.execute("ROLLBACK")
+    finally:
+        conn.close()
+    assert _snapshot(p) == before
+    assert _count(p) == n_before
+
+
+def test_upsert_many_rollback_requested_after_success_also_restores_everything(tmp_path):
+    p = _new_db(tmp_path)
+    _put(p, "ra", text="old body of ra", created=_T_OLD, updated=_T_OLD)
+    before = _snapshot(p)
+    conn = _batch_conn(p)
+    try:
+        mdb.upsert_many([_mrow("ra", text="new body"), _mrow("rn")], conn)
+        conn.execute("ROLLBACK")
+    finally:
+        conn.close()
+    assert _snapshot(p) == before
+
+
+def test_upsert_many_applies_the_upsert_rules(tmp_path, monkeypatch):
+    p = _new_db(tmp_path)
+    monkeypatch.setenv("SC_MEM_REALM", "personal")
+    conn = _batch_conn(p)
+    try:
+        mdb.upsert_many([_mrow("e1", created=_T_OLD, updated=_T_OLD), _mrow("e2", realm="untagged")],
+                        conn)
+        conn.execute("COMMIT")
+        monkeypatch.delenv("SC_MEM_REALM")
+        conn.execute("BEGIN IMMEDIATE")
+        mdb.upsert_many([_mrow("e1", description="changed"), _mrow("e2")], conn)
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    e1, e2 = _fetch(p, "instance/_/e1.md"), _fetch(p, "instance/_/e2.md")
+    assert (e1["realm"], e2["realm"]) == ("personal", None)  # default da env solo su riga nuova
+    assert e1["updated"] > _T_OLD and e1["description"] == "changed"
+    assert e2["updated"] == e2["created"]  # e2 identico: nessun bump
+
+
+@pytest.mark.parametrize("bad_row,match", [
+    (_mrow("bad", tier="nonsense"), "tier"),
+    (_mrow("bad", updated="2026-10-15T17:30:00"), "updated"),
+    (_mrow("bad", realm="work"), "realm"),
+    ({**_mrow("bad"), "nme": "typo"}, "nme"),
+    ({k: v for k, v in _mrow("bad").items() if k != "text"}, "text"),
+])
+def test_upsert_many_validates_every_row_before_any_write(tmp_path, monkeypatch, bad_row, match):
+    p = _new_db(tmp_path)
+    calls = _spy_embed(monkeypatch)
+    conn = _batch_conn(p)
+    try:
+        start = conn.total_changes
+        with pytest.raises(ValueError, match=match):
+            mdb.upsert_many([_mrow("good"), bad_row], conn)
+        assert conn.total_changes == start
+        conn.execute("ROLLBACK")
+    finally:
+        conn.close()
+    assert calls == []
+
+
+def test_upsert_many_refuses_autocommit_connection_without_transaction(tmp_path):
+    p = _new_db(tmp_path)
+    conn = mdb._connect(p)
+    conn.isolation_level = None  # ogni istruzione committerebbe da sola: batch non atomico
+    try:
+        with pytest.raises(RuntimeError, match="transaction"):
+            mdb.upsert_many([_mrow("x")], conn)
+    finally:
+        conn.close()
+    assert _count(p) == 0
+
+
+def test_upsert_still_commits_each_row(tmp_path):
+    p = _new_db(tmp_path)
+    _put(p, "c1")
+    assert _count(p) == 1  # visibile a un altro lettore senza commit esterni
+
+
+# export --------------------------------------------------------------------------------
+
+
+def test_export_includes_realm_and_created(tmp_path):
+    p = _new_db(tmp_path)
+    created = "2026-10-15T17:30:00+00:00"
+    _put(p, "ex1", created=created, updated=created, realm="personal")
+    _put(p, "ex2", created=_T_OLD, updated=_T_OLD)
+    for extra in ([], ["--with-body"]):
+        rc, out, err = _cli(p, "export", *extra)
+        assert rc == 0, err
+        by_name = {e["name"]: e for e in json.loads(out)}
+        assert (by_name["ex1"]["realm"], by_name["ex1"]["created"]) == ("personal", created)
+        assert (by_name["ex2"]["realm"], by_name["ex2"]["created"]) == (None, _T_OLD)
+        assert ("text" in by_name["ex1"]) == bool(extra)
+
+
+# plan_index: il realm di default arriva dall'ambiente -----------------------------------
+
+
+def _link_dir(link, target):
+    # Le giunzioni NTFS non richiedono privilegi admin, a differenza dei symlink
+    if os.name == "nt":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       check=True, capture_output=True)
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+@pytest.mark.parametrize("env_value,expected", [("personal", "personal"), (None, None)])
+def test_plan_index_card_realm_follows_sc_mem_realm(tmp_path, monkeypatch, env_value, expected):
+    home = tmp_path / "fakehome"
+    (home / ".claude" / "agent-memory").mkdir(parents=True)
+    (home / ".claude" / ".cache").mkdir()
+    link = home / ".claude" / ".cache" / "fastembed"
+    # il modello di embedding vive nel codice condiviso: la HOME finta lo raggiunge con una giunzione
+    _link_dir(link, mdb.EMBED_CACHE_DIR)
+    try:
+        for var in ("USERPROFILE", "HOME"):
+            monkeypatch.setenv(var, str(home))
+        monkeypatch.delenv("SC_PROFILE", raising=False)
+        if env_value is not None:
+            monkeypatch.setenv("SC_MEM_REALM", env_value)
+        db = home / ".claude" / "agent-memory" / ".memory.db"
+        mdb.init_db(db)
+        card_id = plan_index.upsert("t12-realm", "campaign: t12-realm\nstatus: DRAFT",
+                                    "plan index probe")
+        assert card_id.isdigit()
+        rows = mdb.run_sql("SELECT name, realm FROM memories", db)[1]
+        assert rows == [("plan-index-t12-realm", expected)]
+    finally:
+        # si toglie solo il collegamento: la pulizia della cartella temporanea non deve mai
+        # arrivare alla cache reale del modello
+        os.rmdir(link) if os.name == "nt" else os.unlink(link)

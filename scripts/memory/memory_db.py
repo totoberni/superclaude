@@ -9,13 +9,15 @@ every memory, so back up with `mem export --with-body` (a JSON dump that
 Invoke via the `mem` shim (or `~/.claude/.venv/Scripts/python.exe` on Windows);
 fastembed + sqlite-vec live in that venv.
 
-Public API: init_db, upsert, search, get_html, migrate.
+Public API: init_db, upsert, upsert_many, search, get_html, migrate.
 """
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import html as _html
+import os
 import re
 import sqlite3
 import sys
@@ -73,6 +75,13 @@ ARCHIVE_TIER = "archive"  # Re-tiered, out-of-active-recall memories (still quer
 # Tier canonici e forme brevi accettate in ingresso (vedi normalize_tier).
 CANONICAL_TIERS = ("instance", "class", "shared-projects", "shared-global", ARCHIVE_TIER)
 TIER_ALIASES = {"shared": "shared-projects", "global": "shared-global"}
+# Realm: l'unico valore memorizzato e' 'personal'; NULL = riga senza tag. SC_MEM_REALM=personal
+# fa nascere personal le righe nuove (vale per ogni scrittore, plan_index compreso).
+REALM_PERSONAL = "personal"
+REALM_ENV_VAR = "SC_MEM_REALM"
+REALM_FILTERS = ("all", REALM_PERSONAL, "untagged")  # valori di --realm per search e list
+EMBED_BATCH_SIZE = 32  # testi per chiamata al modello in upsert_many
+BUSY_TIMEOUT_MS = 5000  # attesa massima di un writer concorrente prima di rinunciare
 
 # Migration walk rules (spec §Migration rules).
 _EXCLUDE_PARTS = {"_system", "_archive", "archive", "_compact-snapshots", "_stop-snapshots"}
@@ -116,10 +125,14 @@ def _get_embedder():
     return _embedder
 
 
+def _embed_batch(texts: list[str]) -> list[list[float]]:
+    """Embed several documents with ONE model call; one 384-dim float list per text."""
+    return [[float(x) for x in vec] for vec in _get_embedder().embed(list(texts))]
+
+
 def _embed(text: str) -> list[float]:
     """Embed one document → 384-dim float list."""
-    vec = next(iter(_get_embedder().embed([text])))
-    return [float(x) for x in vec]
+    return _embed_batch([text])[0]
 
 
 def _embed_query(text: str) -> list[float]:
@@ -135,22 +148,74 @@ def _embed_query(text: str) -> list[float]:
 # --- Connection --------------------------------------------------------------
 
 
-def _connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
-    """Open a connection with the sqlite-vec extension loaded."""
+def _connect(db_path: Path | str = DB_PATH, readonly: bool = False) -> sqlite3.Connection:
+    """Open a connection with the sqlite-vec extension loaded.
+
+    A writable connection also brings the schema up to date (see `_migrate_schema`).
+    `readonly=True` opens the file read-only and never migrates.
+    """
     # Muro tra profili prima di creare cartelle o file
-    assert_own_profile_path(Path(db_path).expanduser())
-    # Su un'installazione nuova ~/.claude/agent-memory/ non esiste ancora:
-    # sqlite3 non crea le cartelle e fallirebbe con "unable to open database file".
-    Path(db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    # Wait up to 5s for a competing writer instead of failing immediately with
+    path = Path(db_path).expanduser()
+    assert_own_profile_path(path)
+    if readonly:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    else:
+        # Su un'installazione nuova ~/.claude/agent-memory/ non esiste ancora:
+        # sqlite3 non crea le cartelle e fallirebbe con "unable to open database file".
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+    # Wait for a competing writer instead of failing immediately with
     # "database is locked" (Phase EM concurrency hardening).
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     conn.row_factory = sqlite3.Row
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
+    if not readonly:
+        _migrate_schema(conn)  # dopo vec: ALTER rilegge tutto lo schema, tabelle vec0 incluse
     return conn
+
+
+# --- Migrazione schema -------------------------------------------------------
+
+# Codici SQLite primari per cui la migrazione si rimanda alla connessione successiva
+_SQLITE_BUSY, _SQLITE_LOCKED, _SQLITE_READONLY = 5, 6, 8
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Column names of `table` (empty set if the table does not exist)."""
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _has_realm(conn: sqlite3.Connection) -> bool:
+    return "realm" in _table_columns(conn, "memories")
+
+
+def _is_busy_or_readonly(exc: sqlite3.OperationalError) -> bool:
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code is not None:
+        return (code & 0xFF) in (_SQLITE_BUSY, _SQLITE_LOCKED, _SQLITE_READONLY)
+    message = str(exc).lower()
+    return any(word in message for word in ("locked", "busy", "readonly"))
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Add `memories.realm` to a DB created before the column existed. Idempotent.
+
+    Never fatal for the three benign cases: a concurrent process added the column
+    between our check and the ALTER (duplicate column), a writer holds the lock, or the
+    file is read-only. In the last two the column stays absent and the next writable
+    connect retries; every realm read and filter checks the column first.
+    Any other error propagates.
+    """
+    try:
+        columns = _table_columns(conn, "memories")
+        if columns and "realm" not in columns:
+            conn.execute("ALTER TABLE memories ADD COLUMN realm TEXT")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" in str(exc).lower() or _is_busy_or_readonly(exc):
+            return
+        raise
 
 
 # --- Schema ------------------------------------------------------------------
@@ -168,7 +233,8 @@ CREATE TABLE IF NOT EXISTS memories (
   html TEXT,
   created TEXT,
   updated TEXT,
-  hash TEXT
+  hash TEXT,
+  realm TEXT
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -243,6 +309,122 @@ def _extract_links(text: str) -> list[str]:
 # --- Upsert ------------------------------------------------------------------
 
 
+# Sentinella di `realm` non passato: la riga esistente conserva il suo, una nuova prende
+# quello dell'ambiente. Un None esplicito significa invece "togli il tag".
+_UNSET = object()
+# Campi il cui cambiamento fa avanzare `updated` (a loro si somma realm, se la colonna c'e')
+_BUMP_FIELDS = ("tier", "agent", "type", "name", "description", "text")
+_ROW_REQUIRED_KEYS = frozenset({"path", "tier", "type", "name", "description", "text"})
+_ROW_KEYS = _ROW_REQUIRED_KEYS | {"agent", "created", "updated", "realm"}
+# Forma unica ammessa per i timestamp: cosi' le stringhe si ordinano come gli istanti
+_ISO_OFFSET_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}:\d{2}\Z", re.ASCII
+)
+
+
+def _validate_timestamp(value, label: str) -> str | None:
+    """Return `value` unchanged if it is ISO-8601 with a UTC offset, else raise ValueError.
+
+    None passes through (caller means "use now"). Naive times, `Z`, offsets without a
+    colon and other separators are rejected so stored strings stay uniform.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _ISO_OFFSET_RE.match(value):
+        raise ValueError(
+            f"{label} must be ISO-8601 with a UTC offset, e.g. 2026-10-15T17:30:00+00:00; "
+            f"got {value!r}"
+        )
+    try:
+        datetime.datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} is not a valid date/time: {value!r}") from exc
+    return value
+
+
+def _normalize_realm(value) -> str | None:
+    """Map an explicit realm to its stored form: 'personal' or None ('untagged'/None)."""
+    if value is None:
+        return None
+    key = value.strip().lower() if isinstance(value, str) else None
+    if key == REALM_PERSONAL:
+        return REALM_PERSONAL
+    if key == "untagged":
+        return None
+    raise ValueError(f"unknown realm {value!r}; valid values: {REALM_PERSONAL}, untagged")
+
+
+def _default_realm() -> str | None:
+    """Realm of a NEW row when the caller gives none, from the environment."""
+    env = os.environ.get(REALM_ENV_VAR, "").strip().lower()
+    return REALM_PERSONAL if env == REALM_PERSONAL else None
+
+
+def _resolve_realm(requested, current, is_new: bool, has_realm: bool) -> str | None:
+    """Realm to store: explicit value, else the env default (new row) or the current one.
+
+    Refuses to write a personal row where the column is missing: dropping the tag
+    silently would leak the row into work sessions.
+    """
+    if requested is not _UNSET:
+        realm = requested
+    elif is_new:
+        realm = _default_realm()
+    else:
+        realm = current
+    if realm == REALM_PERSONAL and not has_realm:
+        raise RuntimeError(
+            "memories.realm column is missing (schema migration was skipped): "
+            "refusing to write a personal row without its tag"
+        )
+    return realm
+
+
+def _normalize_row(
+    *,
+    path,
+    tier,
+    type,
+    name,
+    description,
+    text,
+    agent=None,
+    created=None,
+    updated=None,
+    realm=_UNSET,
+) -> dict:
+    """Validate and normalise one row; raises ValueError before anything is written."""
+    return {
+        "path": str(path),
+        "tier": normalize_tier(tier),
+        "agent": agent,
+        "type": type,
+        "name": name,
+        "description": description,
+        "text": text,
+        "hash": _content_hash(text, name, description),
+        "created": _validate_timestamp(created, "created"),
+        "updated": _validate_timestamp(updated, "updated"),
+        "realm": realm if realm is _UNSET else _normalize_realm(realm),
+    }
+
+
+def _normalize_batch(rows) -> list[dict]:
+    """Normalise every row of a batch up front: a bad row fails before any write."""
+    batch: list[dict] = []
+    for index, raw in enumerate(rows):
+        unknown, missing = set(raw) - _ROW_KEYS, _ROW_REQUIRED_KEYS - set(raw)
+        if unknown or missing:
+            raise ValueError(
+                f"row {index}: unknown keys {sorted(unknown)}, missing keys {sorted(missing)}"
+            )
+        try:
+            batch.append(_normalize_row(**raw))
+        except ValueError as exc:
+            raise ValueError(f"row {index}: {exc}") from exc
+    return batch
+
+
 def upsert(
     path: str,
     tier: str,
@@ -252,64 +434,151 @@ def upsert(
     description: str,
     text: str,
     db_path: Path | str = DB_PATH,
+    created: str | None = None,
+    updated: str | None = None,
+    realm=_UNSET,
 ) -> int:
-    """Insert or update a memory keyed by `path`.
+    """Insert or update a memory keyed by `path`; commits. Returns the row id.
 
-    Computes a content hash; if the row is new or its content changed, the text
-    is (re-)embedded into memories_vec and links are refreshed. html is left
-    NULL (rendered lazily by get_html). Returns the row id.
+    `created` / `updated`: ISO-8601 with a UTC offset, stored verbatim (ValueError
+    otherwise); omitted means now. On an update `updated` advances only when tier, agent,
+    type, name, description, text or realm change, and an upsert that changes nothing
+    writes nothing. A new or content-changed row is (re-)embedded into memories_vec and
+    its links refreshed; html is left NULL (rendered lazily by get_html).
+
+    `realm`: 'personal' tags the row, 'untagged' or None clears it. Omitted: a new row is
+    personal iff SC_MEM_REALM=personal, an existing row keeps its realm.
     """
-    path = str(path)
-    tier = normalize_tier(tier)
-    new_hash = _content_hash(text, name, description)
+    row = _normalize_row(
+        path=path, tier=tier, agent=agent, type=type, name=name,
+        description=description, text=text, created=created, updated=updated, realm=realm,
+    )
     conn = _connect(db_path)
     try:
-        cur = conn.execute(
-            "SELECT id, hash FROM memories WHERE path = ?", (path,)
-        )
-        existing = cur.fetchone()
-        now = _now()
-
-        if existing is None:
-            cur = conn.execute(
-                """INSERT INTO memories
-                   (path, tier, agent, type, name, description, text, html, created, updated, hash)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)""",
-                (path, tier, agent, type, name, description, text, now, now, new_hash),
-            )
-            row_id = cur.lastrowid
-            _refresh_embedding(conn, row_id, text)
-            _refresh_links(conn, row_id, text)
-        else:
-            row_id = existing["id"]
-            if existing["hash"] != new_hash:
-                # Content changed: update metadata + body, drop stale html, re-embed.
-                conn.execute(
-                    """UPDATE memories
-                       SET tier=?, agent=?, type=?, name=?, description=?, text=?,
-                           html=NULL, updated=?, hash=?
-                       WHERE id=?""",
-                    (tier, agent, type, name, description, text, now, new_hash, row_id),
-                )
-                _refresh_embedding(conn, row_id, text)
-                _refresh_links(conn, row_id, text)
-            else:
-                # Unchanged content; refresh metadata only (cheap, no re-embed).
-                conn.execute(
-                    """UPDATE memories
-                       SET tier=?, agent=?, type=?, name=?, description=?, updated=?
-                       WHERE id=?""",
-                    (tier, agent, type, name, description, now, row_id),
-                )
+        row_id = _write_row(conn, row, _has_realm(conn))
         conn.commit()
         return row_id
     finally:
         conn.close()
 
 
-def _refresh_embedding(conn: sqlite3.Connection, row_id: int, text: str) -> None:
-    """(Re)embed `text` and store in memories_vec keyed by rowid == memories.id."""
-    embedding = _embed(text)
+def upsert_many(rows, conn: sqlite3.Connection, embed: bool = True) -> list[int]:
+    """Upsert a batch of rows on `conn` WITHOUT committing; returns the row ids in order.
+
+    Each row is a dict with the keyword names of `upsert` (required: path, tier, type,
+    name, description, text; optional: agent, created, updated, realm). The caller owns
+    the transaction (`BEGIN IMMEDIATE ... COMMIT`, or rollback to undo the whole batch).
+    All rows are validated first, then every needed embedding is computed in batches of
+    EMBED_BATCH_SIZE, and only then are rows written. Validation, bump rule and realm
+    rules are those of `upsert`.
+
+    `embed=False` writes no vectors and never touches memories_vec (meant for fresh DBs
+    such as a restore drill; a text change on an existing row would keep its old vector).
+    """
+    batch = _normalize_batch(rows)
+    if conn.isolation_level is None and not conn.in_transaction:
+        raise RuntimeError(
+            "upsert_many needs an open transaction on an autocommit connection: "
+            "run BEGIN IMMEDIATE first, otherwise every row commits alone"
+        )
+    has_realm = _has_realm(conn)
+    vectors = _precompute_vectors(conn, batch) if embed else {}
+    return [
+        _write_row(conn, row, has_realm, vectors.get(index), embed)
+        for index, row in enumerate(batch)
+    ]
+
+
+def _precompute_vectors(conn: sqlite3.Connection, batch: list[dict]) -> dict[int, list[float]]:
+    """Embed, in batches, the text of every row that is new or whose content hash changes."""
+    pending = []
+    for index, row in enumerate(batch):
+        old = conn.execute("SELECT hash FROM memories WHERE path = ?", (row["path"],)).fetchone()
+        if old is None or old["hash"] != row["hash"]:
+            pending.append(index)
+    vectors: dict[int, list[float]] = {}
+    for start in range(0, len(pending), EMBED_BATCH_SIZE):
+        chunk = pending[start:start + EMBED_BATCH_SIZE]
+        embedded = _embed_batch([batch[index]["text"] for index in chunk])
+        vectors.update(zip(chunk, embedded))
+    return vectors
+
+
+def _write_row(
+    conn: sqlite3.Connection,
+    row: dict,
+    has_realm: bool,
+    vector: list[float] | None = None,
+    embed: bool = True,
+) -> int:
+    """Insert or update one normalised row WITHOUT committing; returns its id.
+
+    `vector` is the precomputed embedding (None: computed here when needed).
+    """
+    select = ", ".join(("id", "hash", "created", "updated", *_BUMP_FIELDS))
+    select += ", realm" if has_realm else ", NULL AS realm"
+    existing = conn.execute(
+        f"SELECT {select} FROM memories WHERE path = ?", (row["path"],)
+    ).fetchone()
+    if existing is None:
+        row_id, content_changed = _insert_row(conn, row, has_realm), True
+    else:
+        row_id, content_changed = _update_row(conn, existing, row, has_realm)
+    if content_changed:
+        if embed:
+            _refresh_embedding(conn, row_id, row["text"], vector)
+        _refresh_links(conn, row_id, row["text"])
+    return row_id
+
+
+def _insert_row(conn: sqlite3.Connection, row: dict, has_realm: bool) -> int:
+    now = _now()
+    values = {column: row[column] for column in ("path", *_BUMP_FIELDS, "hash")}
+    values.update(html=None, created=row["created"] or now, updated=row["updated"] or now)
+    realm = _resolve_realm(row["realm"], None, True, has_realm)
+    if has_realm:
+        values["realm"] = realm
+    cur = conn.execute(
+        f"INSERT INTO memories ({', '.join(values)}) VALUES ({', '.join('?' * len(values))})",
+        list(values.values()),
+    )
+    return cur.lastrowid
+
+
+def _update_row(
+    conn: sqlite3.Connection, existing: sqlite3.Row, row: dict, has_realm: bool
+) -> tuple[int, bool]:
+    """Write only what differs; returns (row id, whether name/description/text changed)."""
+    candidate = {field: row[field] for field in _BUMP_FIELDS}
+    realm = _resolve_realm(row["realm"], existing["realm"], False, has_realm)
+    if has_realm:
+        candidate["realm"] = realm
+    bump = any(existing[column] != value for column, value in candidate.items())
+    candidate["hash"] = row["hash"]
+    if row["created"] is not None:
+        candidate["created"] = row["created"]
+    if row["updated"] is not None:
+        candidate["updated"] = row["updated"]
+    elif bump:
+        candidate["updated"] = _now()
+    changed = {column: value for column, value in candidate.items() if existing[column] != value}
+    content_changed = "hash" in changed
+    if content_changed:
+        changed["html"] = None  # il testo e' cambiato: l'html in cache non vale piu'
+    if changed:
+        assignments = ", ".join(f"{column} = ?" for column in changed)
+        conn.execute(
+            f"UPDATE memories SET {assignments} WHERE id = ?",
+            [*changed.values(), existing["id"]],
+        )
+    return existing["id"], content_changed
+
+
+def _refresh_embedding(
+    conn: sqlite3.Connection, row_id: int, text: str, vector: list[float] | None = None
+) -> None:
+    """(Re)embed `text`, or store the precomputed `vector`, in memories_vec (rowid == memories.id)."""
+    embedding = _embed(text) if vector is None else vector
     conn.execute("DELETE FROM memories_vec WHERE rowid = ?", (row_id,))
     conn.execute(
         "INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)",
@@ -342,6 +611,7 @@ def search(
     db_path: Path | str = DB_PATH,
     include_archived: bool = False,
     tier: str | None = None,
+    realm: str = "all",
 ) -> list[dict]:
     """Search memories. mode ∈ {'fts', 'vec', 'hybrid'}.
 
@@ -357,13 +627,17 @@ def search(
     `include_archived=True` (CLI: `--all`) OR an explicit `tier='archive'` filter
     (CLI: `--tier archive`) is given. The exclusion is a post-filter on the ranked
     rowids — each arm over-fetches so dropping archived hits does not starve `k`.
+
+    `realm` ('all' | 'personal' | 'untagged', CLI: `--realm`) keeps only the rows of that
+    realm; a DB without the realm column has no personal rows.
     """
+    _check_realm_filter(realm)
     if tier is not None:
         tier = normalize_tier(tier)
     # tier='archive' implies the caller wants archived rows; never exclude then.
     exclude_archive = not include_archived and tier != ARCHIVE_TIER
     # Over-fetch when filtering so the post-filter still yields up to `k`.
-    fetch_k = max(k * 4, k) if (exclude_archive or tier is not None) else k
+    fetch_k = max(k * 4, k) if (exclude_archive or tier is not None or realm != "all") else k
     conn = _connect(db_path)
     try:
         if mode == "fts":
@@ -377,7 +651,7 @@ def search(
             scored = _hybrid_scored(conn, query, fetch_k)
         else:
             raise ValueError(f"unknown mode: {mode!r} (expected fts|vec|hybrid)")
-        scored = _apply_tier_filter(conn, scored, exclude_archive, tier)[:k]
+        scored = _apply_tier_filter(conn, scored, exclude_archive, tier, realm)[:k]
         return _materialize(conn, scored)
     finally:
         conn.close()
@@ -390,6 +664,7 @@ def search_many(
     db_path: Path | str = DB_PATH,
     include_archived: bool = False,
     tier: str | None = None,
+    realm: str = "all",
 ) -> list[dict]:
     """Union hybrid-search over MULTIPLE query strings, de-duped by note identity.
 
@@ -409,13 +684,13 @@ def search_many(
     if len(qs) == 1:
         return search(
             qs[0], k=k, mode=mode, db_path=db_path,
-            include_archived=include_archived, tier=tier,
+            include_archived=include_archived, tier=tier, realm=realm,
         )
     best: dict[int, dict] = {}
     for q in qs:
         for r in search(
             q, k=k, mode=mode, db_path=db_path,
-            include_archived=include_archived, tier=tier,
+            include_archived=include_archived, tier=tier, realm=realm,
         ):
             rid = r["id"]
             if rid not in best or r["score"] > best[rid]["score"]:
@@ -423,18 +698,41 @@ def search_many(
     return sorted(best.values(), key=lambda d: d["score"], reverse=True)[:k]
 
 
+def _check_realm_filter(realm: str) -> None:
+    if realm not in REALM_FILTERS:
+        raise ValueError(
+            f"unknown realm filter {realm!r}; valid values: {', '.join(REALM_FILTERS)}"
+        )
+
+
+def _realm_predicate(conn: sqlite3.Connection, realm: str) -> str:
+    """SQL condition on memories.realm for a filter in REALM_FILTERS (constants only).
+
+    Gated on the column: a DB that was not migrated has no personal row, so
+    'personal' matches nothing there and 'untagged' matches everything.
+    """
+    if realm == "all":
+        return "1"
+    if not _has_realm(conn):
+        return "0" if realm == REALM_PERSONAL else "1"
+    if realm == REALM_PERSONAL:
+        return f"realm = '{REALM_PERSONAL}'"
+    return f"COALESCE(realm, '') != '{REALM_PERSONAL}'"
+
+
 def _apply_tier_filter(
     conn: sqlite3.Connection,
     scored: list[tuple[int, float]],
     exclude_archive: bool,
     tier: str | None,
+    realm: str = "all",
 ) -> list[tuple[int, float]]:
-    """Drop ranked (rowid, score) pairs failing the archive-exclusion/tier filter.
+    """Drop ranked (rowid, score) pairs failing the archive-exclusion/tier/realm filter.
 
     Preserves rank order. A single lookup of the candidate rowids' tiers avoids
-    re-querying per row. No-op when neither constraint is active.
+    re-querying per row. No-op when no constraint is active.
     """
-    if not exclude_archive and tier is None:
+    if not exclude_archive and tier is None and realm == "all":
         return scored
     ids = [rid for rid, _ in scored]
     if not ids:
@@ -443,12 +741,16 @@ def _apply_tier_filter(
     tier_by_id = {
         r["id"]: r["tier"]
         for r in conn.execute(
-            f"SELECT id, tier FROM memories WHERE id IN ({placeholders})", ids
+            f"SELECT id, tier FROM memories WHERE id IN ({placeholders}) "
+            f"AND {_realm_predicate(conn, realm)}",
+            ids,
         ).fetchall()
     }
     out: list[tuple[int, float]] = []
     for rid, score in scored:
-        row_tier = tier_by_id.get(rid)
+        if rid not in tier_by_id:
+            continue
+        row_tier = tier_by_id[rid]
         if exclude_archive and row_tier == ARCHIVE_TIER:
             continue
         if tier is not None and row_tier != tier:
@@ -1572,6 +1874,12 @@ if __name__ == "__main__":
         help="Include archive-tier rows (excluded from default recall).",
     )
     p_search.add_argument(
+        "--realm",
+        choices=REALM_FILTERS,
+        default="all",
+        help="Restrict results to this realm (default all).",
+    )
+    p_search.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
@@ -1602,6 +1910,13 @@ if __name__ == "__main__":
         "--path",
         default=None,
         help="Logical key path (default: <tier>/<agent-or-_>/<name>.md).",
+    )
+    p_upsert.add_argument(
+        "--realm",
+        choices=(REALM_PERSONAL, "untagged"),
+        default=None,
+        help=f"Realm tag. Omitted: a new row is personal iff {REALM_ENV_VAR}=personal, "
+        "an existing row keeps its realm.",
     )
     txt_src = p_upsert.add_mutually_exclusive_group(required=True)
     txt_src.add_argument("--text-file", metavar="FILE", help="Read body text from FILE.")
@@ -1639,6 +1954,12 @@ if __name__ == "__main__":
         metavar="TYPE",
         dest="mem_type",
         help="Filter by type.",
+    )
+    p_list.add_argument(
+        "--realm",
+        choices=REALM_FILTERS,
+        default="all",
+        help="Filter by realm (default all).",
     )
 
     # prune
@@ -1762,6 +2083,15 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(0)
 
+    # Stesso muro di --db, prima di ogni accesso al disco e prima del controllo
+    # sul DB mancante: un corpo letto dalla data home di un altro profilo
+    # porterebbe i suoi dati in questo DB
+    if ns.cmd == "upsert" and not ns.text_stdin:
+        try:
+            assert_own_profile_path(Path(ns.text_file).expanduser())
+        except CrossProfileDBError as e:
+            _die(f"--text-file refused: {e}", 3)
+
     # Un --db esplicito inesistente non va mai creato in silenzio (typo = DB vuoto).
     # Unico punto con l'elenco dei comandi esenti: init crea; `sql` ha un controllo
     # proprio (exit 1); in futuro anche `sync restore`.
@@ -1782,6 +2112,7 @@ if __name__ == "__main__":
             db_path=db,
             include_archived=ns.include_archived,
             tier=_tier_or_die(ns.tier),
+            realm=ns.realm,
         )
         if ns.as_json:
             # Omit html column from machine output (large, rarely needed).
@@ -1808,12 +2139,6 @@ if __name__ == "__main__":
             body = sys.stdin.read()
         else:
             p = Path(ns.text_file).expanduser()
-            # Stesso muro di --db, prima di ogni accesso al disco: un corpo letto dalla
-            # data home di un altro profilo porterebbe i suoi dati in questo DB
-            try:
-                assert_own_profile_path(p)
-            except CrossProfileDBError as e:
-                _die(f"--text-file refused: {e}", 3)
             if not p.exists():
                 _die(f"--text-file not found: {p}")
             body = p.read_text(encoding="utf-8", errors="replace")
@@ -1831,6 +2156,7 @@ if __name__ == "__main__":
             description=ns.description,
             text=body,
             db_path=db,
+            realm=_UNSET if ns.realm is None else ns.realm,
         )
         print(f"upserted id={row_id}  path={logical_path}")
 
@@ -1864,6 +2190,7 @@ if __name__ == "__main__":
             if ns.mem_type:
                 query_parts.append("AND type = ?")
                 params.append(ns.mem_type)
+            query_parts.append(f"AND {_realm_predicate(conn, ns.realm)}")
             query_parts.append("ORDER BY tier, name")
             rows = conn.execute(" ".join(query_parts), params).fetchall()
         finally:
@@ -2023,13 +2350,14 @@ if __name__ == "__main__":
 
     elif ns.cmd == "export":
         # JSON manifest of all rows (backup / dump). Identity = `path`,
-        # equality = content `hash` (sha256 of name+description+text — machine
-        # independent), recency = `updated`. `id`/`created` are intentionally
-        # omitted (machine-local); `--with-body` adds `text` so a row can be
-        # reconstructed via `upsert`.
+        # equality = content `hash` (sha256 of name+description+text, machine
+        # independent), recency = `updated`. `id` is intentionally omitted
+        # (machine-local); `created` and `realm` are included (a DB not yet migrated
+        # reports realm null); `--with-body` adds `text`.
         conn = _connect(db)
         try:
-            cols = "path, name, tier, type, agent, description, hash, updated"
+            cols = "path, name, tier, type, agent, description, hash, created, updated, "
+            cols += "realm" if _has_realm(conn) else "NULL AS realm"
             if ns.with_body:
                 cols += ", text"
             rows = conn.execute(
