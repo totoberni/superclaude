@@ -623,3 +623,90 @@ def test_init_creates_missing_parent_directory(tmp_path):
                          capture_output=True, text=True, encoding="utf-8")
     assert res.returncode == 0, res.stderr
     assert db.is_file()
+
+
+# --- name ties live+archive, --db mancante -----------------------------------
+
+
+def _tie_db(tmp_path):
+    """DB con un gemello vivo e uno archiviato con lo stesso name (id vivo < id archiviato)."""
+    p = tmp_path / "tie.db"
+    mdb.init_db(p)
+    live = mdb.upsert(path="instance/_/tiedup.md", tier="instance", agent=None, type="feedback",
+                      name="tiedup", description="live twin", text="live twin body", db_path=p)
+    arch = mdb.upsert(path="instance/x/tiedup.md", tier="instance", agent=None, type="feedback",
+                      name="tiedup", description="archived twin", text="archived twin body", db_path=p)
+    mdb.archive(arch, db_path=p)
+    return p, live, arch
+
+
+def _count(db):
+    return mdb.run_sql("SELECT COUNT(*) FROM memories", db)[1][0][0]
+
+
+def test_get_name_tie_prefers_live_row(tmp_path):
+    p, live, _ = _tie_db(tmp_path)
+    rc, out, err = _cli(p, "get", "--name", "tiedup")
+    assert rc == 0, err
+    assert out.strip() == "live twin body"
+
+
+def test_similar_name_tie_prefers_live_row(tmp_path):
+    p, live, _ = _tie_db(tmp_path)
+    rc, out, err = _cli(p, "similar", "--name", "tiedup")
+    assert rc == 0, err
+    assert f"similar to [{live}]" in out
+
+
+def test_get_prefix_tie_prefers_live_row(tmp_path):
+    p = tmp_path / "pfx.db"
+    mdb.init_db(p)
+    mdb.upsert(path="instance/_/pfxtie_one.md", tier="instance", agent=None, type="feedback",
+               name="pfxtie_one", description="d", text="live prefix body", db_path=p)
+    arch = mdb.upsert(path="instance/_/pfxtie_two.md", tier="instance", agent=None,
+                      type="feedback", name="pfxtie_two", description="d",
+                      text="archived prefix body", db_path=p)
+    mdb.archive(arch, db_path=p)
+    rc, out, err = _cli(p, "get", "--name", "pfxtie")
+    assert rc == 0, err
+    assert out.strip() == "live prefix body"
+
+
+def test_get_name_two_live_rows_exits_3_with_suggestions(tmp_path):
+    p = tmp_path / "two.db"
+    mdb.init_db(p)
+    for sub in ("a", "b"):
+        mdb.upsert(path=f"instance/{sub}/twolive.md", tier="instance", agent=None,
+                   type="feedback", name="twolive", description="d", text=f"body {sub}",
+                   db_path=p)
+    rc, out, err = _cli(p, "get", "--name", "twolive")
+    assert rc == 3
+    assert "did you mean" in err
+
+
+@pytest.mark.parametrize("cmd", [("prune",), ("archive",), ("retier", "--tier", "class")])
+def test_destructive_name_tie_exits_3_and_changes_nothing(tmp_path, cmd):
+    p, live, arch = _tie_db(tmp_path)
+    before = mdb.run_sql("SELECT id, tier, path FROM memories ORDER BY id", p)[1]
+    rc, out, err = _cli(p, cmd[0], "--name", "tiedup", *cmd[1:])
+    assert rc == 3, err
+    assert str(live) in err and str(arch) in err  # id candidati per rilanciare con --id
+    assert _count(p) == 2
+    assert mdb.run_sql("SELECT id, tier, path FROM memories ORDER BY id", p)[1] == before
+
+
+@pytest.mark.parametrize("cmd", [("get", "--id", "1"), ("search", "x"), ("stats",),
+                                 ("list",), ("compact",)])
+def test_missing_db_exits_3_and_creates_nothing(tmp_path, cmd):
+    missing = tmp_path / "new_parent" / "nope.db"
+    rc, _, err = _cli(missing, *cmd)
+    assert rc == 3, err
+    assert not missing.exists()
+    assert not missing.parent.exists()
+
+
+def test_init_on_missing_db_still_creates(tmp_path):
+    fresh = tmp_path / "new_parent" / "fresh.db"
+    rc, _, err = _cli(fresh, "init")
+    assert rc == 0, err
+    assert fresh.is_file()

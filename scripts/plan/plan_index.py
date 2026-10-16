@@ -19,6 +19,10 @@ from pathlib import Path
 
 
 MEMORY_DB = Path.home() / ".claude" / "scripts" / "memory" / "memory_db.py"
+_VENV_DIR = Path.home() / ".claude" / ".venv"
+VENV_PYTHON = _VENV_DIR / (
+    "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+)
 
 
 def die(msg: str) -> None:

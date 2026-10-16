@@ -944,13 +944,20 @@ def _did_you_mean(idx, arg: str, fts_ids: list[int], limit: int) -> list[dict]:
             if len(ordered) >= limit:
                 break
     return [
-        {"name": r["name"], "slug": _slug_of(r["path"]), "tier": r["tier"]}
+        {"id": r["id"], "name": r["name"], "slug": _slug_of(r["path"]), "tier": r["tier"]}
         for r in ordered[:limit]
     ]
 
 
+_DB_MAY_BE_MISSING_CMDS = frozenset({"init", "sql"})
+
+
+def _is_archived_row(row) -> bool:
+    return row["tier"] == ARCHIVE_TIER or (row["path"] or "").startswith("archive/")
+
+
 def _resolve_name(
-    conn: sqlite3.Connection, arg: str, limit: int = 5
+    conn: sqlite3.Connection, arg: str, limit: int = 5, prefer_live: bool = False
 ) -> tuple[int | None, list[dict]]:
     """Resolve a --name argument to ONE memory rowid via a strict ladder.
 
@@ -962,7 +969,11 @@ def _resolve_name(
       5. FTS over name/description  (resolve only if exactly one candidate)
 
     Returns (rowid, []) on a unique resolve, else (None, suggestions) where
-    suggestions is up to `limit` (name, slug, tier) "did you mean" dicts.
+    suggestions is up to `limit` (id, name, slug, tier) "did you mean" dicts.
+
+    `prefer_live=True` (solo lettura: get/similar): su un pareggio dei passi 1-4
+    con esattamente UNA riga non archiviata, vince quella viva. I comandi
+    distruttivi lasciano False e restano su exit 3 a ogni pareggio.
     """
     arg = arg or ""
     low = arg.lower()
@@ -971,6 +982,8 @@ def _resolve_name(
     ).fetchall()
 
     def only(matches) -> int | None:
+        if prefer_live and len(matches) > 1:
+            matches = [r for r in matches if not _is_archived_row(r)]
         return matches[0]["id"] if len(matches) == 1 else None
 
     # 1. exact name
@@ -1493,12 +1506,12 @@ if __name__ == "__main__":
         except ValueError as e:
             _die(str(e), 2)
 
-    def _resolve_name_or_die(conn, arg):
+    def _resolve_name_or_die(conn, arg, prefer_live=False):
         """Resolve --name via the resolution ladder; return the full row on a UNIQUE
-        match. On an ambiguous/unknown name, print up to 5 'did you mean' (name, slug,
-        tier) suggestions to stderr and exit non-zero. Never guesses.
+        match. On an ambiguous/unknown name, print up to 5 'did you mean' (id, name,
+        slug, tier) suggestions to stderr and exit non-zero. Never guesses.
         """
-        row_id, suggestions = _resolve_name(conn, arg)
+        row_id, suggestions = _resolve_name(conn, arg, prefer_live=prefer_live)
         if row_id is not None:
             return _db_get_by_id(conn, row_id)
         print(f"error: no memory uniquely matches name/slug {arg!r}", file=sys.stderr)
@@ -1506,7 +1519,7 @@ if __name__ == "__main__":
             print("did you mean:", file=sys.stderr)
             for s in suggestions:
                 print(
-                    f"  {s['name']}   (slug: {s['slug']}, tier: {s['tier']})",
+                    f"  id={s['id']}  {s['name']}   (slug: {s['slug']}, tier: {s['tier']})",
                     file=sys.stderr,
                 )
         sys.exit(3)
@@ -1749,6 +1762,12 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(0)
 
+    # Un --db esplicito inesistente non va mai creato in silenzio (typo = DB vuoto).
+    # Unico punto con l'elenco dei comandi esenti: init crea; `sql` ha un controllo
+    # proprio (exit 1); in futuro anche `sync restore`.
+    if ns.db and ns.cmd not in _DB_MAY_BE_MISSING_CMDS and not db.exists():
+        _die(f"DB not found: {db}", 3)
+
     if ns.cmd == "init":
         init_db(db)
         print(f"init_db ok → {db}")
@@ -1821,7 +1840,7 @@ if __name__ == "__main__":
             if ns.id is not None:
                 row = _db_get_by_id(conn, ns.id)
             else:
-                row = _resolve_name_or_die(conn, ns.name)
+                row = _resolve_name_or_die(conn, ns.name, prefer_live=True)
         finally:
             conn.close()
 
@@ -1886,7 +1905,7 @@ if __name__ == "__main__":
             if ns.id is not None:
                 row = _db_get_by_id(conn, ns.id)
             else:
-                row = _resolve_name_or_die(conn, ns.name)
+                row = _resolve_name_or_die(conn, ns.name, prefer_live=True)
         finally:
             conn.close()
         if row is None:  # reachable only via --id
