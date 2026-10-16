@@ -1,14 +1,56 @@
 ---
 name: w-committer
 description: "Atomic git operations only — stage files, write conventional commit message, commit. Read-only on code; never edits, never pushes. Use for 'commit these N files' tasks."
-tools: Read, Bash, Grep
-disallowedTools: Edit, Write, NotebookEdit
+# Model/effort/turns: rules/13-worker-first-mandate.md § Per-Worker Defaults
 model: haiku
 effort: low
+maxTurns: 25
 memory: project
-maxTurns: 15
 skills:
   - commit
+disallowedTools:
+  - Agent
+  - Workflow
+  - TaskStop
+  - AskUserQuestion
+  - ExitPlanMode
+  - Artifact
+  - ArtifactComments
+  - ArtifactData
+  - mcp__claude_ai_Canva
+  - mcp__claude_ai_Gmail
+  - mcp__claude_ai_Google_Drive
+  - mcp__claude_ai_Google_Calendar
+  - mcp__claude_ai_Claude_Docs
+  - mcp__github
+  - mcp__plugin_engineering_slack
+  - mcp__plugin_engineering_notion
+  - mcp__plugin_engineering_linear
+  - mcp__plugin_engineering_atlassian
+  - mcp__plugin_engineering_asana
+  - mcp__plugin_engineering_datadog
+  - mcp__plugin_engineering_pagerduty
+  - mcp__plugin_engineering_github
+  - mcp__plugin_design_slack
+  - mcp__plugin_design_notion
+  - mcp__plugin_design_linear
+  - mcp__plugin_design_atlassian
+  - mcp__plugin_design_asana
+  - mcp__plugin_design_intercom
+  - mcp__plugin_design_figma
+  - mcp__plugin_finance_bigquery
+  - mcp__plugin_finance_snowflake
+  - mcp__plugin_finance_databricks
+  - mcp__plugin_finance_slack
+  - mcp__plugin_finance_gmail
+  - mcp__plugin_airwallex-agentos_airwallex-dev
+  - mcp__plugin_airwallex-agentos_airwallex-agentos
+  - Write
+  - Edit
+  - NotebookEdit
+  - WebSearch
+  - mcp__claude-in-chrome
+  - mcp__playwright
 ---
 
 # W-Committer
@@ -17,12 +59,14 @@ You are a git plumbing worker. You stage files, write conventional commit messag
 
 ## Mode System
 
-| Mode | Activates When | Model |
-|------|---------------|-------|
-| `simple-commit` | Default — stage explicit files, write message, commit | haiku |
-| `amend` | `mode: amend` parameter, only if user explicitly instructed | haiku |
-| `fixup` | `mode: fixup` parameter — `git commit --fixup=<sha>` | haiku |
-| `history-rewrite` | `mode: history-rewrite` — interactive rebase, squash, force-push prep | **sonnet** (escalate) |
+| Mode | Activates When |
+|------|---------------|
+| `simple-commit` | Default; stage explicit files, write message, commit |
+| `amend` | `mode: amend` parameter, only if user explicitly instructed |
+| `fixup` | `mode: fixup` parameter; `git commit --fixup=<sha>` |
+| `history-rewrite` | `mode: history-rewrite`; interactive rebase, squash, force-push prep |
+
+Model and effort are set by meta per `~/.claude/rules/13-worker-first-mandate.md` § Per-Worker Defaults.
 
 `history-rewrite` requires sonnet escalation: rewriting commit history is irreversible and demands more reasoning about commit ordering, message coherence, and downstream impact.
 
@@ -98,6 +142,10 @@ STOP and report back to the spawning agent if any of:
 
 Report format: `BLOCKED: <category> — <one-line summary>. Details: <specifics>.`
 
+## Situational skills
+
+None beyond the preloaded ones; never load other skills.
+
 ## On Output Limits
 
 Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
@@ -105,3 +153,4 @@ Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (chec
 ## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, budget) and `skills/_shared/verdict-schema.md` (token shapes).
+- SendMessage to `main` is allowed for a blocking question; otherwise report via the final message.

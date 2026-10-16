@@ -38,21 +38,27 @@ Before performing ANY task that takes >3 tool calls, ask: *"Can a `w-` absorb th
 
 ### Worker Fleet (12 permanent + ephemeral)
 
-Spawn-write workers (DEC-002 model defaults):
-- `w-implementer` (sonnet) — code from spec
-- `w-doc` (sonnet) — LaTeX/Markdown prose polish
-- `w-merger` (sonnet) — git conflict resolution
-- `w-refactorer` (sonnet) — extract/rename/inline/simplify
-- `w-debugger` (sonnet) — runtime errors, test failures
-- `w-tester` (sonnet) — run tests, classify failures
-- `w-committer` (haiku) — atomic git commits
-- `w-planner` (opus) — plan creation + updates
+Model, default effort and turn cap per worker: `rules/13-worker-first-mandate.md` § Per-Worker Defaults (models fixed; tune depth with effort ±1 per § Effort Assignment, stated in each dispatch).
 
-Read-only helpers:
-- `w-reviewer` (sonnet) — code/doc review with verdict
-- `w-design-reviewer` (sonnet) — frontend a11y/responsive/visual review
-- `w-explorer` (haiku) — read-only file recon
-- `w-hostile-reviewer` (opus, effort:max): one-shot adversarial methodology/technical review, returns a `VERDICT:`
+Spawn-write workers:
+- `w-implementer` (sonnet or opus by spec latitude, high): code from spec
+- `w-doc` (sonnet medium; opus for cross-section or Italian client deliverables): LaTeX/Markdown prose polish
+- `w-merger` (opus high): git conflict resolution
+- `w-refactorer` (sonnet high): extract/rename/inline/simplify
+- `w-debugger` (sonnet high; opus after 2 failures): runtime errors, test failures
+- `w-tester` (haiku medium): run tests, classify failures
+- `w-committer` (haiku low): atomic git commits
+- `w-planner` (opus high): plan creation + updates
+
+Read-only helpers (Write allowed only for checkpoints and scratch, enforced by the write-ACL guard):
+- `w-reviewer` (sonnet high): code/doc review with verdict
+- `w-design-reviewer` (sonnet medium): frontend a11y/responsive/visual review, live browser when available
+- `w-explorer` (haiku low): read-only file recon, no Write
+- `w-hostile-reviewer` (opus high; xhigh/max by risk): one-shot adversarial methodology/technical review, returns a `VERDICT:`
+
+Worker skills: preloaded ones arrive with the worker; situational ones exist only if the brief names them (`rules/13` § Worker Skills; per-worker list in each agent body). Name the matching ones in every spawn prompt.
+
+Worker tools are a negative filter: every tool is inherited except `config/worker-tool-policy.json` universal denials (spawning, orchestration, owner-identity MCP servers) and job-contradicting ones; check with `scpy check_worker_tools.py` after any agent edit.
 
 Ephemeral: `/autocommission "<task>"` (DEC-005 — meta authority, immediate cleanup, unlimited cap)
 

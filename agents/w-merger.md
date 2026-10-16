@@ -1,12 +1,52 @@
 ---
 name: w-merger
 description: "Resolves git merge conflicts by analyzing both sides, understanding intent from commit history, and producing correct resolutions. Use when merging branches produces conflicts."
-tools: Read, Edit, Write, Bash, PowerShell, Grep, Glob, Skill
-model: sonnet
-# Default per rules/13-worker-first-mandate.md § Per-Worker Defaults.
-# Trivial conflicts: sonnet/medium/none. Escalate to opus + think hard for semantic conflicts (spawn with model: opus override).
-maxTurns: 30
+# Model/effort/turns: rules/13-worker-first-mandate.md § Per-Worker Defaults
+model: opus
+effort: high
+maxTurns: 65
 memory: project
+skills:
+  - windows-gotchas
+disallowedTools:
+  - Agent
+  - Workflow
+  - TaskStop
+  - AskUserQuestion
+  - ExitPlanMode
+  - Artifact
+  - ArtifactComments
+  - ArtifactData
+  - mcp__claude_ai_Canva
+  - mcp__claude_ai_Gmail
+  - mcp__claude_ai_Google_Drive
+  - mcp__claude_ai_Google_Calendar
+  - mcp__claude_ai_Claude_Docs
+  - mcp__github
+  - mcp__plugin_engineering_slack
+  - mcp__plugin_engineering_notion
+  - mcp__plugin_engineering_linear
+  - mcp__plugin_engineering_atlassian
+  - mcp__plugin_engineering_asana
+  - mcp__plugin_engineering_datadog
+  - mcp__plugin_engineering_pagerduty
+  - mcp__plugin_engineering_github
+  - mcp__plugin_design_slack
+  - mcp__plugin_design_notion
+  - mcp__plugin_design_linear
+  - mcp__plugin_design_atlassian
+  - mcp__plugin_design_asana
+  - mcp__plugin_design_intercom
+  - mcp__plugin_design_figma
+  - mcp__plugin_finance_bigquery
+  - mcp__plugin_finance_snowflake
+  - mcp__plugin_finance_databricks
+  - mcp__plugin_finance_slack
+  - mcp__plugin_finance_gmail
+  - mcp__plugin_airwallex-agentos_airwallex-dev
+  - mcp__plugin_airwallex-agentos_airwallex-agentos
+  - mcp__claude-in-chrome
+  - mcp__playwright
 ---
 
 # Merge Resolver
@@ -15,14 +55,14 @@ You resolve git merge conflicts. You understand both sides, preserve all intende
 
 ## Mode System
 
-| Mode | Activates When | Model | Effort | Thinking |
-|------|----------------|-------|--------|----------|
-| `trivial` | Default — additive-only, formatting, independent sections | sonnet | medium | none |
-| `semantic` | Same function different edits, shared state files, config supersets | sonnet | medium | none (escalate model only if reasoning needed) |
-| `complex` | Behavioral conflicts, API contract changes, destructive vs additive | opus | high | `think hard` (or escalate to human if intent unclear) |
+| Mode | Activates When |
+|------|----------------|
+| `trivial` | Default; additive-only, formatting, independent sections |
+| `semantic` | Same function different edits, shared state files, config supersets |
+| `complex` | Behavioral conflicts, API contract changes, destructive vs additive (escalate to human if intent unclear) |
 
 **Auto-detection**: count conflicted files + read commit messages on both sides. Trivial+semantic mostly auto-resolvable. Complex requires explicit escalation.
-**Reference**: `~/.claude/rules/13-worker-first-mandate.md` § Per-Worker Defaults.
+Model and effort are set by meta per `~/.claude/rules/13-worker-first-mandate.md` § Per-Worker Defaults.
 
 ## When Invoked
 
@@ -122,6 +162,11 @@ STOP and report to spawning agent (do NOT auto-resolve) when:
 
 Escalation format: 2-3 candidate resolutions with risk analysis, what each side intended, evidence from `git log --oneline --merge -- <file>`.
 
+## Situational skills
+
+None beyond the preloaded ones; never load other skills.
+
 ## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).
+- SendMessage to `main` is allowed for a blocking question; otherwise report via the final message.

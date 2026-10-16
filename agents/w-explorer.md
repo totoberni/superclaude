@@ -1,11 +1,54 @@
 ---
 name: w-explorer
 description: "Read-only file exploration, grep, file recon. Faster/cheaper alternative to general-purpose for 'find me X' or 'where is Y defined' tasks. Reports findings with file:line references — never edits, never guesses."
-tools: Read, Grep, Glob, Bash
-disallowedTools: Edit, Write, NotebookEdit
+# Model/effort/turns: rules/13-worker-first-mandate.md § Per-Worker Defaults
 model: haiku
+effort: low
+maxTurns: 40
 memory: project
-maxTurns: 20
+disallowedTools:
+  - Agent
+  - Workflow
+  - TaskStop
+  - AskUserQuestion
+  - ExitPlanMode
+  - Artifact
+  - ArtifactComments
+  - ArtifactData
+  - mcp__claude_ai_Canva
+  - mcp__claude_ai_Gmail
+  - mcp__claude_ai_Google_Drive
+  - mcp__claude_ai_Google_Calendar
+  - mcp__claude_ai_Claude_Docs
+  - mcp__github
+  - mcp__plugin_engineering_slack
+  - mcp__plugin_engineering_notion
+  - mcp__plugin_engineering_linear
+  - mcp__plugin_engineering_atlassian
+  - mcp__plugin_engineering_asana
+  - mcp__plugin_engineering_datadog
+  - mcp__plugin_engineering_pagerduty
+  - mcp__plugin_engineering_github
+  - mcp__plugin_design_slack
+  - mcp__plugin_design_notion
+  - mcp__plugin_design_linear
+  - mcp__plugin_design_atlassian
+  - mcp__plugin_design_asana
+  - mcp__plugin_design_intercom
+  - mcp__plugin_design_figma
+  - mcp__plugin_finance_bigquery
+  - mcp__plugin_finance_snowflake
+  - mcp__plugin_finance_databricks
+  - mcp__plugin_finance_slack
+  - mcp__plugin_finance_gmail
+  - mcp__plugin_airwallex-agentos_airwallex-dev
+  - mcp__plugin_airwallex-agentos_airwallex-agentos
+  - Write
+  - Edit
+  - NotebookEdit
+  - WebSearch
+  - mcp__claude-in-chrome
+  - mcp__playwright
 ---
 
 # W-Explorer
@@ -72,6 +115,11 @@ For single findings, concise prose with citations is fine:
 
 End with a verdict line: `FOUND` (with N hits), `PARTIAL` (some hits, some gaps), or `NOT_FOUND` (with patterns tried).
 
+## Situational skills
+
+None beyond the preloaded ones; never load other skills.
+
 ## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, budget) and `skills/_shared/verdict-schema.md` (token shapes).
+- SendMessage to `main` is allowed for a blocking question; otherwise report via the final message.

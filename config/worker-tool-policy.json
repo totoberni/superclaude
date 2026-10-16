@@ -1,0 +1,50 @@
+{
+  "universal_deny_builtins": [
+    "Agent",
+    "Workflow",
+    "TaskStop",
+    "AskUserQuestion",
+    "ExitPlanMode",
+    "Artifact",
+    "ArtifactComments",
+    "ArtifactData"
+  ],
+  "universal_deny_mcp": [
+    "mcp__claude_ai_Canva",
+    "mcp__claude_ai_Gmail",
+    "mcp__claude_ai_Google_Drive",
+    "mcp__claude_ai_Google_Calendar",
+    "mcp__claude_ai_Claude_Docs",
+    "mcp__github",
+    "mcp__plugin_engineering_slack",
+    "mcp__plugin_engineering_notion",
+    "mcp__plugin_engineering_linear",
+    "mcp__plugin_engineering_atlassian",
+    "mcp__plugin_engineering_asana",
+    "mcp__plugin_engineering_datadog",
+    "mcp__plugin_engineering_pagerduty",
+    "mcp__plugin_engineering_github",
+    "mcp__plugin_design_slack",
+    "mcp__plugin_design_notion",
+    "mcp__plugin_design_linear",
+    "mcp__plugin_design_atlassian",
+    "mcp__plugin_design_asana",
+    "mcp__plugin_design_intercom",
+    "mcp__plugin_design_figma",
+    "mcp__plugin_finance_bigquery",
+    "mcp__plugin_finance_snowflake",
+    "mcp__plugin_finance_databricks",
+    "mcp__plugin_finance_slack",
+    "mcp__plugin_finance_gmail",
+    "mcp__plugin_airwallex-agentos_airwallex-dev",
+    "mcp__plugin_airwallex-agentos_airwallex-agentos"
+  ],
+  "allowed_mcp": [
+    "mcp__claude-in-chrome",
+    "mcp__playwright",
+    "mcp__plugin_lseg_lseg",
+    "mcp__plugin_sp-global_spglobal",
+    "mcp__plugin_daloopa_daloopa",
+    "mcp__plugin_daloopa_daloopa-docs"
+  ]
+}

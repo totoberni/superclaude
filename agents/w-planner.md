@@ -1,13 +1,53 @@
 ---
 name: w-planner
 description: "Creates or updates project plans, either in ~/.claude/plans/ (superclaude) or .orchestrator/ (standalone). Breaks work into phases with clear completion criteria and human gates."
-tools: Read, Write, Edit, Glob, Grep, Bash, Skill
-disallowedTools: NotebookEdit
+# Model/effort/turns: rules/13-worker-first-mandate.md § Per-Worker Defaults
 model: opus
+effort: high
+maxTurns: 65
+memory: user
 skills:
   - orchestrator-patterns
-memory: user
-maxTurns: 40
+disallowedTools:
+  - Agent
+  - Workflow
+  - TaskStop
+  - AskUserQuestion
+  - ExitPlanMode
+  - Artifact
+  - ArtifactComments
+  - ArtifactData
+  - mcp__claude_ai_Canva
+  - mcp__claude_ai_Gmail
+  - mcp__claude_ai_Google_Drive
+  - mcp__claude_ai_Google_Calendar
+  - mcp__claude_ai_Claude_Docs
+  - mcp__github
+  - mcp__plugin_engineering_slack
+  - mcp__plugin_engineering_notion
+  - mcp__plugin_engineering_linear
+  - mcp__plugin_engineering_atlassian
+  - mcp__plugin_engineering_asana
+  - mcp__plugin_engineering_datadog
+  - mcp__plugin_engineering_pagerduty
+  - mcp__plugin_engineering_github
+  - mcp__plugin_design_slack
+  - mcp__plugin_design_notion
+  - mcp__plugin_design_linear
+  - mcp__plugin_design_atlassian
+  - mcp__plugin_design_asana
+  - mcp__plugin_design_intercom
+  - mcp__plugin_design_figma
+  - mcp__plugin_finance_bigquery
+  - mcp__plugin_finance_snowflake
+  - mcp__plugin_finance_databricks
+  - mcp__plugin_finance_slack
+  - mcp__plugin_finance_gmail
+  - mcp__plugin_airwallex-agentos_airwallex-dev
+  - mcp__plugin_airwallex-agentos_airwallex-agentos
+  - NotebookEdit
+  - mcp__claude-in-chrome
+  - mcp__playwright
 ---
 
 # Planner
@@ -81,6 +121,10 @@ State file, decision log, and directory structure templates are in the preloaded
 Identify parallelization opportunities between phases. Flag risks early.
 Update your memory with planning patterns and project structures you discover.
 
+## Situational skills
+
+Preloaded skills (frontmatter `skills:`) are already in your context. When the brief names one of these, load it with the Skill tool before starting: `brainstorm`, `engineering:architecture`, `engineering:system-design`. Load one of these unnamed only when the task plainly matches its description; never load a skill outside your preloaded and situational lists.
+
 ## On Output Limits
 
 Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (checkpoint-first, never fabricate/silently drop/weaken to fit, `/recover-truncated`).
@@ -88,3 +132,4 @@ Output-limit discipline: follow `skills/_shared/dispatch-contract.md` § 6 (chec
 ## Report Contract
 
 - Report contract: follow `skills/_shared/dispatch-contract.md` (STATUS token, checkpoint-first, budget, skill-scope) and `skills/_shared/verdict-schema.md` (token shapes).
+- SendMessage to `main` is allowed for a blocking question; otherwise report via the final message.
