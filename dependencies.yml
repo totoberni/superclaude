@@ -1,5 +1,5 @@
 schema: 1
-updated: "2026-09-18"
+updated: "2026-10-16"
 
 python:   # pip; pinned; --export → requirements-format / --pip-install → venv; currency via PyPI JSON API
   - {name: fastembed, version: 0.8.0, via: superclaude-v3, reason: 'ONNX embeddings (bge-small, ~130 MB) for semantic memory'}
@@ -14,6 +14,7 @@ python:   # pip; pinned; --export → requirements-format / --pip-install → ve
   - {name: PyYAML, version: 6.0.3, via: superclaude-v3, reason: passport.yaml claim-provenance map + deps manifest parser}
   - {name: markdown, version: 3.10.3, via: superclaude-win11, reason: Markdown to HTML rendering for plan/render_plan.py}
   - {name: pytest, version: 9.1.1, via: superclaude-win11, reason: test runner for scripts/tests}
+  - {name: cryptography, version: 50.0.2, via: memory-sync, reason: 'AES-SIV + HKDF for the encrypted memory vault (mem sync)'}
 
 npm:   # node; currency via registry.npmjs.org (lookup not implemented: reported as needs-network)
   - {name: ccusage, scope: ryoppippi, install: npx-latest, version: latest, via: telemetry stopgap, reason: cost cross-check reference}
