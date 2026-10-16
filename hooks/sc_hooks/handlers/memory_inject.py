@@ -3,6 +3,8 @@
 Emette sempre un puntatore statico e imperativo al DB di memoria (comando `mem`).
 Solo su SessionStart aggiunge una "recovery slice": i 4 risultati FTS migliori
 per una query costruita dal nome dell'agente più i termini di recupero contesto.
+Si iniettano solo le righe senza realm (NULL), salvo in una sessione personale
+(SC_MEM_REALM=personal), che le vede tutte.
 
 La query FTS gira direttamente con sqlite3 della libreria standard, in sola
 lettura. La tabella `memories_vec` non viene mai toccata (la sua estensione non
@@ -10,10 +12,15 @@ lettura. La tabella `memories_vec` non viene mai toccata (la sua estensione non
 """
 from __future__ import annotations
 
+import os
+
 from sc_hooks import core
 from sc_hooks.core import Ctx, Result, on
 
 DB_PATH = core.sc_profile.memory_db_path(core.PROFILE)
+
+REALM_ENV = "SC_MEM_REALM"      # "personal" (a meno di maiuscole e spazi) = sessione personale
+REALM_PERSONAL = "personal"
 
 MAX_TOTAL = 9800        # tetto complessivo del testo iniettato
 MAX_SLICE = 4000        # tetto della recovery slice
@@ -45,6 +52,11 @@ def fts_match_query(query: str) -> str:
     return " OR ".join(f'"{t}"' for t in tokens)
 
 
+def _personal_session() -> bool:
+    # Stessa normalizzazione di memory_db._default_realm (scripts/memory/memory_db.py)
+    return os.environ.get(REALM_ENV, "").strip().lower() == REALM_PERSONAL
+
+
 def fts_search(query: str, k: int = SLICE_K) -> list[dict]:
     """Migliori `k` righe per bm25, tier 'archive' escluso. Lista vuota su ogni errore."""
     match = fts_match_query(query)
@@ -59,11 +71,18 @@ def fts_search(query: str, k: int = SLICE_K) -> list[dict]:
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+        # La colonna realm esiste solo nei DB migrati: un DB senza colonna si comporta come prima.
+        # Lista di ammissione, non di esclusione: un valore inatteso ('Personal', 'work')
+        # scritto fuori dalla normalizzazione di memory_db non arriva a una sessione di lavoro.
+        has_realm = any(c[1] == "realm" for c in conn.execute("PRAGMA table_info(memories)"))
+        realm_filter = ""
+        if has_realm and not _personal_session():
+            realm_filter = " AND m.realm IS NULL"
         rows = conn.execute(
             "SELECT m.id, m.name, m.tier, m.type, m.path, m.text, bm25(memories_fts) AS score "
             "FROM memories_fts JOIN memories m ON m.id = memories_fts.rowid "
-            "WHERE memories_fts MATCH ? AND COALESCE(m.tier, '') != 'archive' "
-            "ORDER BY score LIMIT ?",
+            "WHERE memories_fts MATCH ? AND COALESCE(m.tier, '') != 'archive'" + realm_filter +
+            " ORDER BY score LIMIT ?",
             (match, int(k)),
         ).fetchall()
     except (sqlite3.Error, OSError, ValueError):

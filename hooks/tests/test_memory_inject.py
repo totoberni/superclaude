@@ -142,3 +142,71 @@ def test_bad_agent_type(db):
     ctx = _ctx()
     ctx.agent = None                                            # type: ignore[assignment]
     assert mi.on_session_start(ctx).context[0].startswith(mi.POINTER)
+
+
+# Valori di realm memorizzati: oltre a NULL e 'personal', valori scritti fuori dalla
+# normalizzazione di memory_db, che una sessione di lavoro non deve vedere
+_REALM_ROWS = (("realm-null", None), ("realm-personal", "personal"), ("realm-odd-case", "Personal"),
+               ("realm-work", "work"), ("realm-empty", ""))
+ALL_REALM_NAMES = sorted(name for name, _ in _REALM_ROWS)
+
+
+def _make_realm_db(path):
+    # DB migrato: colonna realm aggiunta come nello schema futuro (TEXT NULL)
+    _make_db(path, rows=[])
+    conn = sqlite3.connect(str(path))
+    conn.execute("ALTER TABLE memories ADD COLUMN realm TEXT")
+    for name, realm in _REALM_ROWS:
+        conn.execute(
+            "INSERT INTO memories(path, tier, type, name, description, text, realm) VALUES (?,?,?,?,?,?,?)",
+            (f"shared-global/{name}.md", "shared-global", "note", name, "", "handoff realmprobe note", realm),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _names(query="handoff realmprobe"):
+    # k oltre SLICE_K: una sessione personale deve vedere tutte le righe di _REALM_ROWS
+    return sorted(r["name"] for r in mi.fts_search(query, k=10))
+
+
+def _set_realm_env(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("SC_MEM_REALM", raising=False)
+    else:
+        monkeypatch.setenv("SC_MEM_REALM", value)
+
+
+# Stessa normalizzazione di memory_db._default_realm: strip() e lower()
+@pytest.mark.parametrize("value", ["personal", "Personal", " personal", "personal\r", "PERSONAL\n"])
+def test_personal_session_injects_every_realm(db, monkeypatch, value):
+    _set_realm_env(monkeypatch, value)
+    _make_realm_db(db)
+    assert _names() == ALL_REALM_NAMES
+
+
+@pytest.mark.parametrize("value", [None, "", "work", "untagged", "personnel", "personal-x"])
+def test_work_session_injects_only_rows_without_realm(db, monkeypatch, value):
+    _set_realm_env(monkeypatch, value)
+    _make_realm_db(db)
+    assert _names() == ["realm-null"]
+
+
+def test_realm_null_rows_unaffected_in_both_modes(db, monkeypatch):
+    _make_realm_db(db)
+    for value in (None, "personal"):
+        if value is None:
+            monkeypatch.delenv("SC_MEM_REALM", raising=False)
+        else:
+            monkeypatch.setenv("SC_MEM_REALM", value)
+        assert "realm-null" in _names()
+
+
+def test_columnless_db_returns_same_rows_in_both_modes(db, monkeypatch):
+    _make_db(db)
+    monkeypatch.delenv("SC_MEM_REALM", raising=False)
+    default = mi.fts_search("meta recovery context current state handoff")
+    monkeypatch.setenv("SC_MEM_REALM", "personal")
+    personal = mi.fts_search("meta recovery context current state handoff")
+    assert default == personal
+    assert [r["name"] for r in default] == ["meta-handoff", "no-tier", "weak-hit"]
