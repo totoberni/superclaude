@@ -41,10 +41,6 @@
   ],
   "allowed_mcp": [
     "mcp__claude-in-chrome",
-    "mcp__playwright",
-    "mcp__plugin_lseg_lseg",
-    "mcp__plugin_sp-global_spglobal",
-    "mcp__plugin_daloopa_daloopa",
-    "mcp__plugin_daloopa_daloopa-docs"
+    "mcp__playwright"
   ]
 }
