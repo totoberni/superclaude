@@ -19,10 +19,6 @@ from pathlib import Path
 
 
 MEMORY_DB = Path.home() / ".claude" / "scripts" / "memory" / "memory_db.py"
-_VENV_DIR = Path.home() / ".claude" / ".venv"
-VENV_PYTHON = _VENV_DIR / (
-    "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
-)
 
 
 def die(msg: str) -> None:
@@ -171,8 +167,6 @@ def main():
 
     if not MEMORY_DB.exists():
         die(f"memory_db.py not found at {MEMORY_DB}")
-    if not VENV_PYTHON.exists():
-        die(f"venv python not found at {VENV_PYTHON}")
 
     card_body = build_card(plan_path, plan_html_path, args.campaign, args.status, lines)
     description = f"Plan index card for campaign {args.campaign} — status {args.status}; phases + gates + paths"
