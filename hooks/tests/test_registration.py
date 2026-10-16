@@ -253,7 +253,7 @@ def test_guards_are_registered_without_filters():
     registry = load_registry()
     hooks = load_hooks()
     names = {"write-acl", "git-policy", "commit-gate", "content-scan",
-             "notebook-guard", "baseline-stash"}
+             "notebook-guard", "baseline-stash", "key-guard"}
     seen = set()
     for event, tools, name, fn in registry:
         if name not in names:
@@ -268,17 +268,20 @@ def test_guards_are_registered_without_filters():
 
 
 # --------------------------------------------------------------------------
-# Read/Glob/Grep: entrano nel matcher solo per il firewall tra profili
+# Read/Glob/Grep: entrano nel matcher solo per il firewall tra profili e per key-guard
 # --------------------------------------------------------------------------
 READ_TOOLS = ("Read", "Glob", "Grep")
 # Unico handler registrato senza `tools` oltre al firewall: un avviso one-shot che
 # costa una sola open(), quindi puo' girare anche sugli strumenti di lettura
 _TOOLLESS_OK: frozenset[str] = frozenset()
+# Moduli ammessi sugli strumenti di lettura: il firewall (senza `tools`) e key-guard,
+# che nega la lettura per nome della chiave del vault della memoria
+_READ_TOOL_MODULES = (".profile_firewall", ".key_guard")
 
 
 def _may_run_on_read_tools(name: str, fn) -> bool:
-    # Il firewall si riconosce dal modulo, non dal nome scelto nel decoratore
-    return fn.__module__.endswith(".profile_firewall") or name in _TOOLLESS_OK
+    # Gli handler ammessi si riconoscono dal modulo, non dal nome scelto nel decoratore
+    return fn.__module__.endswith(_READ_TOOL_MODULES) or name in _TOOLLESS_OK
 
 
 def test_read_tools_reach_pretooluse_unfiltered():
