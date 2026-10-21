@@ -28,6 +28,10 @@ TEMPLATES: dict[str, Path] = {
 }
 # Modelli facoltativi: se il file manca il profilo usa un modello vuoto
 OPTIONAL_TEMPLATES = frozenset({"superclaude"})
+PERMISSION_KINDS = ("deny", "ask")
+# Tipi di regola condivisa applicati per profilo. Decisione del proprietario (2026-10-21): nessun
+# prompt di permesso in auto mode per superclaude, quindi niente 'ask' (restano i 'deny')
+SHARED_RULE_KINDS: dict[str, tuple[str, ...]] = {"superclaude": ("deny",)}
 PLACEHOLDERS = ("{{PYTHON}}", "{{DISPATCH}}")
 # Caratteri con significato per il matcher delle regole (jolly, escape, separatori, parentesi della regola)
 HOME_USER_FORBIDDEN = frozenset("*\\/()")
@@ -153,8 +157,10 @@ def desired_settings(profile: str) -> dict[str, Any]:
     desired = load_template(profile)
     rules = substitute(read_object(RULES_FILE, "rules file"), template_values())
     perms = desired.setdefault("permissions", {})
-    for kind in ("deny", "ask"):
-        perms[kind] = union(perms.get(kind, []), rules.get(kind, []))
+    shared_kinds = SHARED_RULE_KINDS.get(profile, PERMISSION_KINDS)
+    for kind in PERMISSION_KINDS:
+        shared = rules.get(kind, []) if kind in shared_kinds else []
+        perms[kind] = union(perms.get(kind, []), shared)  # lista vuota esplicita: l'applicazione sostituisce
     perms["disableBypassPermissionsMode"] = "disable"
     return desired
 

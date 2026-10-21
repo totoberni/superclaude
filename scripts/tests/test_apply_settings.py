@@ -153,11 +153,43 @@ def test_union_keeps_owner_entries_without_duplicates(home: Path, profile: str) 
     assert run("--profile", profile) == 0
     perms = json.loads(target.read_text(encoding="utf-8"))["permissions"]
     assert perms["allow"] == OWNER["permissions"]["allow"]
+    # superclaude: nessuna regola 'ask' condivisa, restano solo quelle del proprietario
+    shared_kinds = ("deny",) if profile == "superclaude" else ("deny", "ask")
     for kind in ("deny", "ask"):
         assert perms[kind][: len(OWNER["permissions"][kind])] == OWNER["permissions"][kind]
-        assert set(RULES[kind]) <= set(perms[kind])
+        if kind in shared_kinds:
+            assert set(RULES[kind]) <= set(perms[kind])
+        else:
+            assert perms[kind] == OWNER["permissions"][kind]
         assert len(perms[kind]) == len(set(perms[kind]))
     assert perms["disableBypassPermissionsMode"] == "disable"
+
+
+def test_superclaude_desired_has_empty_ask_and_full_deny(home: Path) -> None:
+    perms = apply_settings.desired_settings("superclaude")["permissions"]
+    template_deny = json.loads((ROOT / "scripts" / "settings" / "superclaude.base.json").read_text(encoding="utf-8"))
+    assert perms["ask"] == []
+    assert perms["deny"] == apply_settings.union(
+        apply_settings.substitute(template_deny, apply_settings.template_values())["permissions"]["deny"], RULES["deny"])
+    assert perms["disableBypassPermissionsMode"] == "disable"
+
+
+def test_deepseek_desired_keeps_shared_ask_and_deny(home: Path) -> None:
+    perms = apply_settings.desired_settings("deepseek")["permissions"]
+    assert set(RULES["ask"]) <= set(perms["ask"]) and set(RULES["deny"]) <= set(perms["deny"])
+
+
+def test_superclaude_apply_replaces_previously_owned_ask(home: Path) -> None:
+    # Con un registro che possiede le vecchie regole 'ask', l'applicazione le toglie e lascia quelle del proprietario
+    target = settings_file(home, "superclaude")
+    old_rules = ["Bash(old-shared-ask *)", RULES["ask"][0]]
+    write_owner(target, {"permissions": {"ask": ["Bash(owner-ask *)", *old_rules]}})
+    apply_settings.owned_path(target).write_text(
+        apply_settings.serialize_owned({("permissions", "ask"): old_rules}), encoding="utf-8")
+    assert run("--profile", "superclaude") == 0
+    assert perms_of(home)["ask"] == ["Bash(owner-ask *)"]
+    assert run("--profile", "superclaude") == 0
+    assert perms_of(home)["ask"] == ["Bash(owner-ask *)"]
 
 
 def test_superclaude_touches_only_hooks_and_permissions(home: Path) -> None:
@@ -526,8 +558,11 @@ def test_home_user_rendered_from_home_name(home: Path, rules_file: Any, capsys: 
     perms = json.loads(capsys.readouterr().out)["permissions"]
     assert home.name == FAKE_HOME_NAME
     assert f"Bash(rm -rf /c/Users/{home.name})" in perms["deny"]
-    assert f"Bash(rm -r C:/Users/{home.name}/*)" in perms["ask"]
-    assert "{{" not in json.dumps(perms)
+    assert perms["ask"] == []  # superclaude: nessun 'ask' condiviso
+    assert run("--profile", "deepseek", "--dry-run", "--full") == 0
+    ds_perms = json.loads(capsys.readouterr().out)["permissions"]
+    assert f"Bash(rm -r C:/Users/{home.name}/*)" in ds_perms["ask"]
+    assert "{{" not in json.dumps(perms) + json.dumps(ds_perms)
     rules_file(["Bash(rm -rf {{NOPE}})"])  # segnaposto sconosciuto nelle regole: rifiutato
     assert run("--profile", "superclaude", "--dry-run") == 1
 
