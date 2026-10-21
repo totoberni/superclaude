@@ -2,7 +2,6 @@
   "universal_deny_builtins": [
     "Agent",
     "Workflow",
-    "TaskStop",
     "AskUserQuestion",
     "ExitPlanMode",
     "Artifact",

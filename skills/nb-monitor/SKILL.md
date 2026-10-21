@@ -58,6 +58,8 @@ scpy nb-monitor.py run analysis.ipynb --cell-timeout 120 --kernel-name python3 -
 cat ~/.claude/.nb-progress.json
 ```
 
+A `w-*` worker never babysits a long notebook run: a run expected over ~5 minutes is launched by meta, detached, with `scpy job.py start --name <id> -- <the nb-monitor command line above>` and read with `scpy job.py status <id>` (`skills/_shared/dispatch-contract.md` § "No waiting").
+
 **Args**: subcommand `run` + positional `NOTEBOOK`; `--cell-timeout` (seconds,
 default `300`; exceeding it = HUNG); `--kernel-name` (kernelspec, default = the
 notebook's own); `--progress-path` (default `~/.claude/.nb-progress.json`);

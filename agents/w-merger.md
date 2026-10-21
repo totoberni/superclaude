@@ -11,7 +11,6 @@ skills:
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -161,6 +160,13 @@ STOP and report to spawning agent (do NOT auto-resolve) when:
 - Verification step fails (`git diff --check` reports markers after your "resolution")
 
 Escalation format: 2-3 candidate resolutions with risk analysis, what each side intended, evidence from `git log --oneline --merge -- <file>`.
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "One job, done means stop" and § "No waiting".
+- After the Post-Resolution Verification checks, write the checkpoint and hand back; suite runs go to w-tester via `NEXT-CHECKS:` (exact commands) in your report.
+- Never poll, sleep 30 s or more, or wait on another agent's file; wrap slow commands in `timeout <N>`; jobs over 5 minutes go to meta.
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before hand-back.
 
 ## Situational skills
 

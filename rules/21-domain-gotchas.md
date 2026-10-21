@@ -21,6 +21,12 @@ Project-specific traps that apply only to certain technology stacks. Loaded as p
 - A block is never evaded by switching network or IP for an automated fetcher (rate-limit circumvention): wait for the lapse or write to the ISTAT Contact Centre.
 - Source: geoscraper 2026-09-22 (own worker over-queried) + 2026-10-05 (probably another session's worker on the shared IP). Occ=2, promoted.
 
+## Windows Detached Processes and Tool Timeouts
+
+- Never pair `DETACHED_PROCESS` with `CREATE_NO_WINDOW` when spawning the venv `.venv\Scripts\python.exe`: it is a launcher stub, and its real-python grandchild gets a new VISIBLE console (Windows Terminal popups on the owner's desktop). Use `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`, or `pythonw.exe` for a detached supervisor plus `CREATE_NO_WINDOW` on its children (`scripts/job.py`).
+- The Bash/PowerShell tool `timeout` parameter does not kill a command: it moves it to the background, where it keeps the worker resident. Wrap slow commands as `timeout <N> <cmd>`; long jobs go through `scpy job.py` or meta's `run_in_background`.
+- Source: statusline G-7 (2026-09-30) + job.py WH-2 (2026-10-21, brief written without a Windows-process gotcha search). Occ=2, promoted.
+
 ## HDL Register-Lag in NBA Blocks
 
 - In Verilog non-blocking assignment (NBA) `always @(posedge clk)` blocks, `reg_a <= x; reg_b <= reg_a` reads the OLD value of `reg_a` (pre-clock-edge). This is by design but causes bugs when the intent is to use the newly-computed value.

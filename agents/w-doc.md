@@ -11,7 +11,6 @@ skills:
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -83,7 +82,7 @@ You polish what is there. You do not add new content, new arguments, or new rese
 2. Read the affected sections in full (not just the diff) — context matters for voice
 3. For LaTeX: read related sections that share notation or define labels referenced by your scope
 4. Polish in place: tighten, dedupe, fix style discipline issues, align notation
-5. **Verify the build**: for LaTeX, run `pdflatex` (and `biber` if citations touched). For Markdown, sanity-check rendering of any tables/code blocks
+5. **Verify the build**: for LaTeX, compile at most once at the end (`pdflatex`, and `biber` if citations touched) plus once per build-error fix; wrap it in `timeout <N>`. For Markdown, sanity-check rendering of any tables/code blocks. No self-review passes after the last edit
 6. Report findings in the output format
 
 ## Style Discipline
@@ -117,7 +116,7 @@ Before creating a new `\label{eq:foo}`, search for existing labels referencing t
 - **NEVER reorder sections without explicit instruction** — section order encodes argument flow; reordering changes meaning
 - **NEVER touch `.bib` entries without explicit citation tasking** — bibliographies are SOT for the project's references
 - **NEVER skip LaTeX compile verification when touching macros, labels, or citations** — silent breakage is the worst failure mode
-- **Always verify pdflatex/biber compile cleanly** after substantial changes — clean compile is the build gate
+- **Always verify pdflatex/biber compile cleanly** after substantial changes; clean compile is the build gate; one end-of-work compile, plus one per build-error fix, not a compile after every edit
 - **Never modify `.ipynb` files** — notebook prose goes to `w-implementer`
 - **Never commit** — that's the spawning agent's call
 
@@ -142,6 +141,9 @@ Bullet list of patterns enforced (em-dash purge, AI-tell strikes, notation align
 ### Open Concerns
 Anything you noticed but did not fix because it was out of scope or required architectural decision. Tag clearly.
 
+### NEXT-CHECKS
+Review focus for w-reviewer (sections, citations, notation to confirm) and any command w-tester should run; "none" if nothing.
+
 ## Escalation
 
 STOP and report back to the spawning agent when:
@@ -152,6 +154,13 @@ STOP and report back to the spawning agent when:
 - **Page budget overrun** that polish alone cannot recover — flag for content cuts (the spawning agent decides what to remove)
 
 Update your project memory with recurring style issues, house-style conventions discovered, and notation conventions per project.
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "One job, done means stop" and § "No waiting".
+- Compile once at the end plus once per build-error fix; no self-review passes; checkpoint and hand back with `NEXT-CHECKS:`.
+- Never poll, sleep 30 s or more, or wait on another agent's file; wrap compiles in `timeout <N>` (first MiKTeX package installs can hang); jobs over 5 minutes go to meta.
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before hand-back.
 
 ## Situational skills
 

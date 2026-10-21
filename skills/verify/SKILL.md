@@ -61,6 +61,10 @@ Before returning ANY `STATUS:` line or completion report:
 
 Fresh evidence means run in THIS session — not "it passed earlier" or "the worker said it passed."
 
+## Producers: verify the claim you make, route the rest
+
+A `w-*` producer (w-implementer, w-refactorer, w-debugger, w-doc) is one job (`skills/_shared/dispatch-contract.md` § "One job, done means stop"). Its evidence is ONE smoke check after the final edit (the changed code on a realistic sample, or one targeted test; at most 2 runs). It does not run the full suite, rerun, or sweep to back a claim. Claims the smoke check does not cover are stated as unverified and listed in `NEXT-CHECKS:` (test commands for w-tester, focus for w-reviewer); meta dispatches those in background (W-4). Never write "tests pass" for a suite that was not run.
+
 ## Anti-Rationalization
 
 | Excuse | Reality |

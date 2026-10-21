@@ -11,7 +11,6 @@ skills:
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -141,6 +140,12 @@ STOP and report back to the spawning agent if any of:
 5. **History-rewrite request without sonnet**: if the task implies rewriting history (squash, rebase, amend) and you are running on haiku, escalate for model upgrade
 
 Report format: `BLOCKED: <category> — <one-line summary>. Details: <specifics>.`
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "No waiting".
+- Never poll, sleep 30 s or more, or wait on another agent's file; wrap any slow command (hooks, large diffs) in `timeout <N>`. Run no test suites or sweeps beyond the commit steps above.
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before hand-back.
 
 ## Situational skills
 

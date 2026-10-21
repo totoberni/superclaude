@@ -13,7 +13,6 @@ skills:
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -119,7 +118,8 @@ Technical facts and data overrule opinions (Google engineering standard).
   - Parametrized test matrices with items silently removed
 - **"Pre-existing" failure claims** (high priority):
   - If the author claims failures are "pre-existing" or "unrelated", **independently verify**
-  - Run tests at the merge-base commit and compare test names, not just counts
+  - Run ONLY the named failing tests at the merge-base commit and compare test names, not just counts; never the full suite
+  - If a full-suite comparison is needed, ask for it in the verdict body as `NEXT-CHECKS:` (exact commands) for w-tester
   - NEVER parrot the author's failure classification — your job is to verify it
 
 ### 4. Cross-Branch Verification (when reviewing merges)
@@ -197,6 +197,12 @@ For files >500 lines, review in semantic sections:
 Don't try to hold the entire file in working memory — focus section by section.
 
 Update your memory with codebase patterns and recurring issues you discover.
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "No waiting".
+- Never poll, sleep 30 s or more, or wait on another agent's file; wrap any slow command in `timeout <N>`; no full-suite runs (ask for them via `NEXT-CHECKS:`).
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before hand-back.
 
 ## Situational skills
 

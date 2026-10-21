@@ -11,7 +11,6 @@ skills:
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -120,6 +119,12 @@ State file, decision log, and directory structure templates are in the preloaded
 
 Identify parallelization opportunities between phases. Flag risks early.
 Update your memory with planning patterns and project structures you discover.
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "No waiting".
+- Never poll, sleep 30 s or more, or wait on another agent's file (hand back `STATUS: BLOCKED` naming the dependency); wrap any slow command in `timeout <N>`.
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before hand-back.
 
 ## Situational skills
 

@@ -9,7 +9,6 @@ memory: project
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -114,6 +113,12 @@ For single findings, concise prose with citations is fine:
 > The boid update loop is at `src/sim/example.cu:204` — kernel `update_positions` reads from `pos_in`, writes to `pos_out`, called once per frame from `main.cpp:312`.
 
 End with a verdict line: `FOUND` (with N hits), `PARTIAL` (some hits, some gaps), or `NOT_FOUND` (with patterns tried).
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "No waiting".
+- Never `find` over `/`, a drive root or the home root, and never `grep -r` over `~/.claude`; use Glob/Grep with a scoped path. Never poll, sleep 30 s or more, or wait on another agent's file; wrap any slow command in `timeout <N>`.
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before hand-back.
 
 ## Situational skills
 

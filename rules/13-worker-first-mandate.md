@@ -113,7 +113,7 @@ In all cases: max-tier thinking on simple/visual tasks ≈10× overspend.
 N up-to-5 read-only Explore/general-purpose helpers, each with bounded scope and word-cap output. **5× wall-time savings** vs sequential.
 
 ### Pattern W-4: Parallel Reviewer-in-BG Overlap
-After spawning Worker K, immediately dispatch its reviewer with `run_in_background: true`. Proceed to spawn Worker K+1. Reviewer reports back asynchronously. **~40% wall savings**.
+A producer's DONE is followed by two background dispatches: w-tester on the producer's `NEXT-CHECKS:` test commands (the suite) and w-reviewer on its output, both with `run_in_background: true`. Meta keeps to cheap R-3 checks (`git diff --stat`, reads, targeted grep) and proceeds to spawn Worker K+1. Tester and reviewer report back asynchronously. **~40% wall savings**. Canonical text: `skills/_shared/dispatch-contract.md` § "One job, done means stop".
 
 ### Pattern W-7: Mixed-Type Batch
 Up to 5 helpers of different types in parallel: e.g., 3 web research (general-purpose) + 1 code recon (Explore) + 1 reviewer (w-reviewer). **4× speedup**; reviewer catches issues in the parallel synthesis.

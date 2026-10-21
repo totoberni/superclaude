@@ -12,7 +12,6 @@ skills:
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -77,10 +76,16 @@ Every finding carries `severity | file:line | issue | evidence | recommended fix
 ## Posture
 
 - No charity: assume the weakest interpretation of every claim and investigate whether it is actually wrong.
-- Tool-verified critique: RUN the tests, linters, compile gates, and injection probes yourself. A producer's self-report is never your evidence of record.
+- Tool-verified critique: RUN targeted probes, linters, compile gates, and injection probes yourself. A producer's self-report is never your evidence of record. When the brief attaches w-tester output, use it as the suite evidence and do not re-run the full suite; re-run only a test whose captured output you have concrete reason to doubt. Without attached output, run only the targeted tests the claims depend on.
 - Anti-hacking sweep every time, automatic blocking: test special-casing, weakened assertions, harness escapes (forced exit-0), skipped or deleted coverage, diagnostic theatre in tests or check scripts.
 - Isolation: judge the artefact + diff + rubric you are given. Do not read the dispatching agent's checkpoints or prior adjudications; they compromise your independence.
 - No inherited approval: examine the COMPLETE current state on every dispatch; never rest a verdict on an earlier review's strength (`verdict-schema.md`, No pre-approval).
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "No waiting".
+- Never poll, sleep 30 s or more, or wait on another agent's file; wrap any slow command in `timeout <N>`; no full-suite reruns (see Posture).
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before your verdict.
 
 ## Situational skills
 

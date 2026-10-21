@@ -65,14 +65,15 @@ Identify the files that need changes.
 
 ### 7. Run tests
 
-Run the project's test suite covering the changed code. Use a foreground command with the tool's own timeout parameter set to 10 minutes:
+Run the project's test suite covering the changed code. Wrap the command in `timeout <N> <cmd>`: the tool's own timeout parameter does not kill a command, it moves it to the background where it keeps running. A run expected to take over ~9 minutes goes through `scpy job.py start --name <id> -- <cmd...>` and `scpy job.py wait <id>` (see `skills/_shared/dispatch-contract.md` § "No waiting"):
 
 ```bash
 # Adjust the test command to the project's stack
-# Python: python -m pytest <test_file> -v
-# Node: npm test -- --testPathPattern=<pattern>
-# Set timeout: 600000 on the tool call (expected duration: up to 10 minutes)
+# Python: timeout 540 python -m pytest <test_file> -v
+# Node: timeout 540 npm test -- --testPathPattern=<pattern>
 ```
+
+This step runs in the main session. If the build is delegated to a `w-*` producer, the producer runs one targeted smoke check and hands back with `NEXT-CHECKS:`; the suite is then dispatched to w-tester in background (W-4), not run by the producer.
 
 If tests fail, fix and re-run. If tests fail 3 times, stop and report the failures to the user (per escalation rule).
 

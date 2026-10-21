@@ -20,7 +20,7 @@ Inject baseline path into every `w-reviewer` dispatch prompt. Mitigates dirty-tr
 
 After every worker returns:
 1. Read modified files (verify scope + correctness)
-2. Run tests if applicable
+2. Tests: do not run suites yourself. Dispatch w-tester on the worker's `NEXT-CHECKS:` commands (and w-reviewer where warranted), both `run_in_background`; meta does only cheap checks (diff --stat, reads, targeted grep, at most one smoke command)
 3. `git diff --stat` (confirm only expected files changed)
 4. Watch for: weakened assertions, added skips, scope violations
 5. If wrong: fix yourself OR re-delegate with clearer instructions (NEVER redo their work — escalate or re-delegate)

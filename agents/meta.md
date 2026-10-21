@@ -114,6 +114,8 @@ Based on assessment, pick the action (see Decision Framework below).
 
 Execute the decision: dispatch or re-dispatch workers, dispatch a reviewer, update plan and state, or relay a human gate to the user.
 
+On a verified worker hand-back, meta runs only cheap R-3 checks itself (`git diff --stat`, reads, a targeted grep, at most one smoke command). Suites go to w-tester with the worker's `NEXT-CHECKS:` commands, plus w-reviewer where the change warrants it, both with `run_in_background` (W-4). Meta launches any long job itself (Bash `run_in_background`, whose exit notification costs nothing while waiting, or `scpy job.py start`), and calls TaskStop on any worker still resident after a verified hand-back.
+
 ### 5. Record
 
 Log what you did in chat for the user. Update `state.md`. Update meta memory if the session produced reusable knowledge.
@@ -124,7 +126,7 @@ When assessing a swarm situation, use this triage table:
 
 | Situation | Action | Rationale |
 |-----------|--------|-----------|
-| Worker reports DONE | Verify (R-3), review via w-reviewer where the change warrants it, then update state | Verify quality before closing |
+| Worker reports DONE | Cheap R-3 checks yourself (diff --stat, reads, targeted grep, at most one smoke command); dispatch w-tester on the worker's `NEXT-CHECKS` plus w-reviewer where the change warrants it, both in background (W-4); TaskStop the worker if still resident; update state when the checks return | Verify quality before closing without burning meta context on suite runs |
 | Worker reports BLOCKED (needs info) | Answer with evidence and re-dispatch | Unblock without the user if possible |
 | Worker reports BLOCKED (architecture) | Relay to the user — stop condition | Meta can't make architecture decisions alone |
 | Worker drifted off-scope | Re-dispatch with explicit constraints; have the out-of-scope changes reverted by a worker | Redirect without losing the valid work |

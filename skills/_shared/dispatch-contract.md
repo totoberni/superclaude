@@ -14,8 +14,32 @@ Every Agent-tool spawn prompt from meta (or a plain session) carries the four pa
 ## Extensions
 
 5. **Tool-call estimate + effort** (rules/13 § Per-Worker Defaults, § Effort Assignment, § Turn Caps): state a tool-call estimate per class for the worker's own pacing: recon 3-10; standard build/extract/review 10-20; complex multi-file 20-40. The estimate never selects the model: the model is fixed per worker (rules/13 table), and meta switches it only through the table's "Model switch" column. Meta tunes depth by effort (default +-1 level within the worker's range) and states the chosen effort and the one-line reason in the dispatch. Never dispatch `model: fable`. `maxTurns` (rules/13 § Turn Caps) is the backstop: hitting it means checkpoint + STATUS: PARTIAL, and the run is resumable via SendMessage. Do not split a task only to stay under a call count.
-6. **Checkpoint-first**: the dispatch names a checkpoint path (default `~/.claude/plans/<campaign>/checkpoints/<task-id>.md`). The worker writes findings/progress there BEFORE composing its final message; the final message may be a pointer + summary. The parent never depends on the final message for load-bearing content. If the worker approaches its output budget before the task is finished, it must STOP and report exactly what is complete, what remains, and any uncommitted or partial state; it must never fabricate completion, silently drop work, or weaken/skip the task to fit. Producers close with `STATUS: PARTIAL`; reviewers close with a partial verdict noting the incomplete scope instead. Either way, the checkpoint plus a clean partial report let the parent finish or re-dispatch (see `/recover-truncated`).
+6. **Checkpoint-first**: the dispatch names a checkpoint path (default `~/.claude/plans/<campaign>/checkpoints/<task-id>.md`). The worker creates it within its first 5 tool calls (plan + scope), then appends findings/progress after each numbered check, file or corpus pass, never only at the end (a turn-cap hit or crash otherwise leaves nothing on disk; MC-4, 3 occurrences); the final message may be a pointer + summary. The parent never depends on the final message for load-bearing content. If the worker approaches its output budget before the task is finished, it must STOP and report exactly what is complete, what remains, and any uncommitted or partial state; it must never fabricate completion, silently drop work, or weaken/skip the task to fit. Producers close with `STATUS: PARTIAL`; reviewers close with a partial verdict noting the incomplete scope instead. Either way, the checkpoint plus a clean partial report let the parent finish or re-dispatch (see `/recover-truncated`).
 7. **Reviewer isolation**: dispatches to reviewers include artifact + diff + rubric ONLY. Never the producer's reasoning, self-assessment, or prior clean verdicts.
+
+## One job, done means stop
+
+Applies to producers (w-implementer, w-refactorer, w-debugger, w-doc). Evidence: plans/worker-hygiene/checkpoints/MINE-1.md.
+
+- After the final edit a producer runs ONE smoke check (the changed code on a realistic sample, or one targeted test; at most 2 runs after the last edit), writes the checkpoint, and hands back.
+- No full suite, no reruns, no lint/grep sweeps, no self-review pass after the last edit: those belong to w-tester and w-reviewer, which meta dispatches in background (W-4).
+- Interim checks DURING the work are fine: trying logic on a sample before applying it to everything, a targeted test right after a change, reproducing a bug.
+- The hand-back carries a `NEXT-CHECKS:` block: the exact test commands (with paths/selectors) for w-tester and the review focus for w-reviewer.
+- Before hand-back the worker stops every background task it started (TaskStop, or `scpy job.py stop <id>`). A report is final only with nothing left running.
+
+## No waiting
+
+Applies to every worker. A PreToolUse wait guard enforces most of these shapes (blocks or rewrites the call).
+
+- Never run: `tail -f` / `tail -F`, `Get-Content -Wait`, `watch`, `until` / `while` loops that sleep, `for` loops that poll a file and break, `sleep` / `Start-Sleep` of 30 s or more, `find` over `/`, a drive root or the home root, `grep -r` over `~/.claude` (it contains `.venv` and `tmp`; use the Grep tool with a scoped path), a bare `python -` with no heredoc or pipe (it waits on stdin forever).
+- Wrap any command that might be slow as `timeout <N> <cmd>`. The tool's own timeout does NOT kill a command: it moves it to the background, where it holds the worker resident.
+- A job expected to run over 5 minutes (downloads, rate-limited probes, pipelines, long builds) is not the worker's to babysit: write and smoke-test the script on a sample, then hand back with the launch command; meta launches it.
+- Never wait on another agent's file or checkpoint: hand back `STATUS: BLOCKED` naming the dependency.
+- For a bounded in-task wait under about 9 minutes use the job helper, never a hand-rolled loop:
+  - `scpy job.py start --name <id> [--marker <regex>] [--cwd <dir>] -- <cmd...>`: detached, returns at once; output in `~/.claude/tmp/jobs/<id>/out.log`, state in `status.json`.
+  - `scpy job.py status <id>`: one-shot, never blocks.
+  - `scpy job.py wait <id> [--max 540] [--stall 300] [--marker <regex> | --no-marker]`: returns on exit, marker, stall or `--max` (clamped to 580); `--no-marker` waits for the real exit even when `start` set a marker; exit 0 = ok or marker, 1 = non-zero exit, stopped or crashed, 2 = still running, 3 = stalled, 4 = usage error or unknown id. Commands are exec form; for a pipeline use `-- bash -c "..."`.
+  - `scpy job.py stop <id>`; `scpy job.py list`.
 
 ## Constants
 

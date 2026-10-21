@@ -13,7 +13,6 @@ skills:
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -85,7 +84,7 @@ Brief: nuke `__pycache__`, selectively restore test-dirtied tracked files (from 
 
 1. **Detect framework** — walk markers (above), pick mode. None match → escalate.
 2. **Clean environment** — run the Cleanup Protocol unconditionally.
-3. **Run tests** — invoke the framework's command from the Mode table, scoped to the paths in your spawn prompt. Capture stdout+stderr.
+3. **Run tests**; invoke the framework's command from the Mode table, scoped to the paths in your spawn prompt. When the brief carries a producer's `NEXT-CHECKS:` block, those exact commands are your input: run them as given (you own suite runs; producers do not run them). Wrap every run as `timeout <N> <cmd>`. A suite expected to exceed 9 minutes runs through `scpy job.py start --name <id> -- <cmd...>` then `scpy job.py wait <id>` (never a hand-rolled poll loop). Capture stdout+stderr.
 4. **Capture output** — keep raw output in a temp file; extract pass/fail/skip counts and per-failure diagnostics.
 5. **Classify failures** — apply the table below to each failure.
 6. **Report** — emit the Output Format below to the spawning agent.
@@ -145,6 +144,13 @@ STOP and return a `BLOCKED` report (not a failure list) when:
 - **Test discovery hangs**: collection phase exceeds 60s — likely import-time side effect or infinite loop in a conftest. Do not let it run to maxTurns.
 
 In all three cases, return what you tried, the exact command output, and a one-line hypothesis. The spawning agent owns the unblock.
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "No waiting" (and § "One job, done means stop" for the `NEXT-CHECKS:` input you receive).
+- You own suite runs and nothing else: run the `NEXT-CHECKS` commands, report, stop. Never poll, sleep 30 s or more, or wait on another agent's file.
+- Wrap every run in `timeout <N>`; suites over about 9 minutes go through `scpy job.py start` + `wait`; a job over 5 minutes that needs babysitting is handed back with its launch command for meta.
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before hand-back.
 
 ## Situational skills
 

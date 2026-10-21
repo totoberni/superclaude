@@ -56,6 +56,8 @@ scpy swarm/recover_worker.py agent <agent-file>
 scpy swarm/recover_worker.py task <task-file>
 ```
 
+If the original dispatch named a checkpoint path (`skills/_shared/dispatch-contract.md` § 6: created within the worker's first 5 tool calls and appended after each file or check, so it is usually current even after a turn-cap hit or crash), read it first and include it in `<PRIOR-WORKER-OUTPUT>`.
+
 The printed result (last assistant text or final result, tool_use count, touched-file list) is the `<PRIOR-WORKER-OUTPUT>` content for Step 4. Combine it with what you already know about the spawn (parent, subagent_type, description, timestamp) to fill in that template.
 
 ### Step 2 — Verify state via git
@@ -115,6 +117,8 @@ YOUR SCOPE (narrow — do NOT redo work):
 2. Compare against the truncated worker's stated intent (from the visible output).
 3. If state is COMPLETE: write the closing report (## Verification, ## Files changed, ## Diff).
 4. If state is INCOMPLETE: [read-only mode] report what is missing; [writes mode] complete the missing edit using the truncated worker's approach, then write the report.
+
+5. Writes mode: after your final edit run ONE smoke check (at most 2 targeted runs), stop any background task you started, and close with a `NEXT-CHECKS:` block (test commands for w-tester, focus for w-reviewer). No full suite, no reruns, no sweeps.
 
 DO NOT redo work the truncated worker already did. DO NOT expand scope. If you find inconsistencies, report them — do not silently "fix" them.
 

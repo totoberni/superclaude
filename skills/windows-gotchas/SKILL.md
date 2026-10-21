@@ -59,6 +59,22 @@ This skill is preloaded by every worker that runs shell commands (`w-implementer
 - R is at `%LOCALAPPDATA%\Programs\R\R-4.6.1\bin` (`R`, `Rscript`).
 - MiKTeX provides `latexmk` / `pdflatex`. First use of a missing package triggers an on-the-fly install, so the first build of a document can be slow or need network access.
 
+## Hang-prone commands
+
+The tool's own timeout does NOT kill a command: it moves it to the background, where it keeps running and holds the worker resident (commands killed at timeout and auto-backgrounded cost the fleet about 70 minutes in 30 days). Canonical rule: `skills/_shared/dispatch-contract.md` § "No waiting". A PreToolUse wait guard blocks or rewrites most of these shapes.
+
+| Shape | Use instead |
+|---|---|
+| `tail -f` / `-F`, `Get-Content -Wait`, `watch` | read the file once; for a running job `scpy job.py status <id>` |
+| `until` / `while` loop that sleeps, `for` loop that polls a file and breaks | `scpy job.py wait <id> [--max 540] [--marker <regex>]` |
+| `sleep` / `Start-Sleep` of 30 s or more | hand back and let meta relaunch, or `scpy job.py wait` |
+| `find /`, `find` over a drive root or the home root | Glob tool, or `find <scoped-dir> -maxdepth N` |
+| `grep -r` over `~/.claude` (`.venv` and `tmp` live there) | Grep tool with a scoped path |
+| bare `python -` or `cat > file` with no heredoc or pipe (waits on stdin forever) | Write tool for the file; `python script.py` or a heredoc |
+| any command that might be slow | `timeout <N> <cmd>` |
+
+Jobs expected over 5 minutes are launched by meta, not babysat: smoke-test on a sample, then hand back with the launch command.
+
 ## Quick triage
 
 | Symptom | Likely cause |

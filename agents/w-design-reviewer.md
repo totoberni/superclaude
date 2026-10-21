@@ -13,7 +13,6 @@ skills:
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -139,6 +138,12 @@ Minor visual polish, naming suggestions, pattern preferences. Prefix with "Nit:"
 Recognize good patterns -- reinforces good practices and shows the review is balanced.
 
 End with an overall **verdict**: PASS / PASS_WITH_NOTES / NEEDS_FIXES / BLOCK_MERGE.
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "No waiting".
+- Never poll, sleep 30 s or more, or wait on another agent's file or a dev server to "settle"; wrap any slow command in `timeout <N>`.
+- Stop every background task you started, including dev servers (TaskStop or `scpy job.py stop <id>`), before hand-back.
 
 ## Situational skills
 

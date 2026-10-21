@@ -39,7 +39,7 @@ Look for unexpected modifications. If you see anything you didn't intend, STOP a
 
 ### Step 4: Re-Run
 
-After cleanup, re-run the failing tests. If they pass after cleanup, the failure was environmental — note it in your report and move on. Do NOT waste time diagnosing phantom failures.
+After cleanup, re-run the failing tests (targeted selectors, wrapped in `timeout <N> <cmd>`; a run expected over ~5 minutes goes through `scpy job.py`, see `skills/_shared/dispatch-contract.md` § "No waiting"). A producer worker (w-debugger) re-runs only the failing tests; the full suite is w-tester's job. If they pass after cleanup, the failure was environmental; note it in your report and move on. Do NOT waste time diagnosing phantom failures.
 
 ## When To Use
 

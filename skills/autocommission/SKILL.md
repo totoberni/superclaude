@@ -71,9 +71,22 @@ memory: project
 ---
 ```
 
-No `tools:` line: the worker inherits every tool and `disallowedTools` is the negative filter (read the universal deny list from `~/.claude/config/worker-tool-policy.json`; do not copy it here). Add job-contradicting tools (for example `Edit` for a read-only job).
+No `tools:` line: the worker inherits every tool and `disallowedTools` is the negative filter (read the universal deny list from `~/.claude/config/worker-tool-policy.json`; do not copy it here). Add job-contradicting tools (for example `Edit` for a read-only job). Never add `TaskStop` to `disallowedTools`: ephemeral workers, like the permanent fleet, must be able to stop the background tasks they start.
 
 Body: embed the task description as instructions. Depth is set by `effort:` in the frontmatter, not a prompt keyword (see `13-worker-first-mandate.md` § Critical Implementation Note).
+
+The body ends with a `## Run hygiene` block matching the permanent workers (e.g. `agents/w-implementer.md` § Run hygiene; canonical text `skills/_shared/dispatch-contract.md` § "One job, done means stop" and § "No waiting"). Template:
+
+```markdown
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "One job, done means stop" and § "No waiting".
+- Producer: one smoke check after the final edit (at most 2 targeted runs), then checkpoint and hand back with `NEXT-CHECKS:`; no suites, reruns, sweeps or self-review. Read-only worker: report findings, no suites.
+- Never poll, sleep 30 s or more, or wait on another agent's file; wrap slow commands in `timeout <N>`; jobs over 5 minutes are launched by meta (hand back the launch command).
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before hand-back.
+```
+
+The spawn prompt also carries the dispatch-contract § 6 checkpoint path (create within the first 5 tool calls, append progressively).
 
 When authoring spawn prompts, keep `.workflow` / `/.deep-research` / `.ultracode` dot-escaped (see `rules/13-worker-first-mandate.md` § Trigger Escaping (Author-Time)).
 

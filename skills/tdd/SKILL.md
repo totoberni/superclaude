@@ -80,7 +80,7 @@ Next failing test for the next piece of behavior.
 2. Verify it fails for the RIGHT reason (the bug, not a typo)
 3. Fix the bug (minimal change)
 4. Verify the test passes
-5. Run the full suite — no regressions
+5. Run the full suite; no regressions (a `w-*` worker runs only the targeted tests and lists the full-suite command in `NEXT-CHECKS:` for w-tester; see `skills/_shared/dispatch-contract.md` § "One job, done means stop")
 
 ## Anti-Rationalization
 
@@ -109,7 +109,7 @@ Before marking work complete:
 - [ ] Every new function has a test
 - [ ] Watched each test fail before implementing
 - [ ] Wrote minimal code to pass each test
-- [ ] All tests pass (run full suite, not just new tests)
+- [ ] All tests pass (run full suite, not just new tests; as a `w-*` worker: targeted tests, full suite via `NEXT-CHECKS:`)
 - [ ] No warnings or errors in output
 
 ## Optional REFACTOR review

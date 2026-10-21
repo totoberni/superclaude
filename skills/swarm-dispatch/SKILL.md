@@ -19,7 +19,7 @@ Codifies the battle-tested swarm patterns (W-1, W-4, W-7, W-11) into a single di
 | Pattern arg | Source | Use for | Worker shape | Wall savings |
 |---|---|---|---|---|
 | `discovery` | W-1 | Read-only spec capture / recon | N up-to-5 read-only Explore/general-purpose helpers | 5x |
-| `reviewer-bg-overlap` | W-4 | Implement K + review K-1 in BG | 1 implementer + 1 reviewer (BG) per cycle | 40% |
+| `reviewer-bg-overlap` | W-4 | Implement K + test and review K-1 in BG | 1 producer + w-tester (suite from `NEXT-CHECKS`) + w-reviewer (both BG) per cycle | 40% |
 | `mixed-batch` | W-7 | Heterogeneous parallel work | up to 5 mixed: web research + code recon + reviewer | 4x |
 | `polish` | W-11 | Meta-direct polish on worker-DONE | Meta + 3 read-only helpers | ~5 hr saved per round |
 
@@ -37,11 +37,11 @@ Codifies the battle-tested swarm patterns (W-1, W-4, W-7, W-11) into a single di
 ### Pattern: `reviewer-bg-overlap` (W-4)
 
 1. Parse the pipeline of K writers (e.g., 3 sequential w-doc tasks).
-2. Spawn writer 1, await result.
-3. Immediately dispatch w-reviewer with `run_in_background: true` on writer 1's output.
-4. Spawn writer 2 (do not wait for reviewer 1).
-5. Repeat: each writer's reviewer runs in background while the next writer starts.
-6. Collect reviewer reports asynchronously near end of session; act on REJECTs via re-delegate.
+2. Spawn writer 1, await result. A producer does one job: one smoke check, then a hand-back with a `NEXT-CHECKS:` block (dispatch-contract § "One job, done means stop"). Meta does only cheap R-3 checks itself (`git diff --stat`, reads, targeted grep).
+3. Immediately dispatch, both with `run_in_background: true`: w-tester on the `NEXT-CHECKS` test commands (the suite), and w-reviewer on writer 1's output (artifact + diff + rubric only). Use `scpy job.py` for suites expected over ~5 minutes.
+4. Spawn writer 2 (do not wait for tester or reviewer 1).
+5. Repeat: each writer's tester and reviewer run in background while the next writer starts.
+6. Collect tester and reviewer reports asynchronously near end of session; act on failures and REJECTs via re-delegate (root causes of test failures go to w-debugger).
 
 ### Pattern: `mixed-batch` (W-7)
 
@@ -124,7 +124,7 @@ Spawn 5 parallel Explore helpers reading `report.tex` sections 1-5 (one per help
 
 ### `reviewer-bg-overlap` — sequential refactor with concurrent review (example-webapp)
 
-Pipeline: 3 sequential w-implementer tasks editing `src/components/{Hero,Nav,Footer}.tsx`. After each implementer returns, dispatch w-reviewer in BG on the modified file, then immediately spawn the next implementer. Collect 3 reviewer reports near end.
+Pipeline: 3 sequential w-implementer tasks editing `src/components/{Hero,Nav,Footer}.tsx`. After each implementer returns, dispatch w-tester (the `NEXT-CHECKS` test commands) and w-reviewer in BG on the modified file, then immediately spawn the next implementer. Collect 3 tester and 3 reviewer reports near end.
 
 ### `mixed-batch` — parallel research + code recon for new feature spec
 

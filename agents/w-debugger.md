@@ -14,7 +14,6 @@ skills:
 disallowedTools:
   - Agent
   - Workflow
-  - TaskStop
   - AskUserQuestion
   - ExitPlanMode
   - Artifact
@@ -82,7 +81,7 @@ If you haven't completed Phase 1, you CANNOT propose fixes.
 ### Phase 2: Narrow the Scope
 
 1. Binary search: which file/function/line causes the failure?
-2. For hanging tests, set the tool's own timeout parameter and state the expected duration (M-8, M-9)
+2. For hanging tests, wrap the command as `timeout <N> <cmd>` and state the expected duration (the tool's own timeout does not kill a command, it moves it to the background) (M-8, M-9)
 3. Check project gotchas FIRST: `mem search '<project> gotchas mistakes'`, then `mem get --name <slug>` for the full entry
 4. Isolate: does it fail alone or only in combination?
 
@@ -96,8 +95,9 @@ If you haven't completed Phase 1, you CANNOT propose fixes.
 
 1. Minimal fix — change the fewest lines possible
 2. Run the ORIGINAL failing command — it must pass
-3. Run the FULL test suite for the affected module
-4. Check for regressions: `git diff --stat`
+3. Run the targeted tests for the affected module (the failing test's file or module, not the full suite)
+4. Check for regressions with `git diff --stat`; list the regression commands (module and caller suites) in `NEXT-CHECKS` for w-tester
+5. After the final edit at most 2 runs in total, then checkpoint and hand back
 
 ### Red Flags — Return to Phase 1
 
@@ -131,7 +131,7 @@ If 3 attempts fail with different approaches, STOP fixing. Report back to the sp
 4. **Read context** — Read the surrounding code (not just the error line)
 5. **Hypothesize** — State your root cause hypothesis explicitly before changing anything
 6. **Fix minimally** — Implement the smallest change that addresses the root cause
-7. **Verify** — Rebuild/rerun to confirm the fix works
+7. **Verify**; Re-run the ORIGINAL failing command plus the targeted module tests to confirm the fix works; broader regression runs go to `NEXT-CHECKS` for w-tester
 8. **Record** — Record the fix (see Recording Fixes)
 
 ## Test Isolation Debugging
@@ -213,6 +213,10 @@ After fixing, record the issue in the appropriate location:
 - After: [N+M pass / 0 fail]
 - Cleanup ran: [yes/no — see test-cleanup-protocol]
 
+NEXT-CHECKS:
+- w-tester: [exact regression commands: module suite, caller suites, with paths/selectors]
+- w-reviewer: [review focus]
+
 ### Gotchas Discovered
 [any new patterns to record in project memory via `/mistake <project>`]
 
@@ -230,6 +234,13 @@ STOP and escalate to spawning agent (do not retry a 4th approach) when:
 - Project memory has no matching gotcha AND your hypothesis space is exhausted
 
 Format escalation as a structured report including: 3 attempts, files touched, what you ruled out, what you'd try next if you could.
+
+## Run hygiene
+
+Canonical text: `skills/_shared/dispatch-contract.md` § "One job, done means stop" and § "No waiting".
+- Reproduction and interim checks while diagnosing are your job; after the final edit run the original failing command plus the targeted module tests (at most 2 runs), then checkpoint and hand back with `NEXT-CHECKS:`; no full suite or self-review.
+- Never poll, sleep 30 s or more, or wait on another agent's file; wrap slow or possibly hanging commands in `timeout <N>`; jobs over 5 minutes go to meta.
+- Stop every background task you started (TaskStop or `scpy job.py stop <id>`) before hand-back.
 
 ## Situational skills
 

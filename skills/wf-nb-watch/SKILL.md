@@ -66,7 +66,7 @@ Print the pair, then stop. The human pastes `/loop` and `/goal` to arm the engin
 
 ## Cross-References
 
-- Notebook run monitor (progress file, BROKEN/HUNG/SLOW states): `/nb-monitor`
+- Notebook run monitor (progress file, BROKEN/HUNG/SLOW states): `/nb-monitor`; to launch the run detached from the session, `scpy job.py start --name <id> -- <nb-monitor command line>` (the scheduled polling here is unchanged)
 - Notebook mutation + execution (atomic, kernel-aware): `/notebook`
 - Executed-notebook audit: `w-reviewer` or `w-hostile-reviewer`, one-shot (`/review`, `/hostile-review`)
 - Fix round on BROKEN/HUNG: `w-debugger` (via `/autocommission`)
