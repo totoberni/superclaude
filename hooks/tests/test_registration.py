@@ -253,7 +253,7 @@ def test_guards_are_registered_without_filters():
     registry = load_registry()
     hooks = load_hooks()
     names = {"write-acl", "git-policy", "commit-gate", "content-scan",
-             "notebook-guard", "baseline-stash", "key-guard"}
+             "notebook-guard", "baseline-stash", "key-guard", "wait"}
     seen = set()
     for event, tools, name, fn in registry:
         if name not in names:
