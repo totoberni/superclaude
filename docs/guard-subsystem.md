@@ -13,7 +13,9 @@ The mechanical enforcement tier on native Windows 11. It replaces the former bas
 
 ## Guards present
 
-write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, notebook-guard, key-guard (PreToolUse), and worker-verify (PostToolUse on Agent, advisory).
+write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, notebook-guard, key-guard, wait (PreToolUse), and worker-verify (PostToolUse on Agent, advisory).
+
+The **wait** guard (`GUARD-BLOCK [wait]`, switch `SUPERCLAUDE_GUARD_WAIT`) stops agents from idling on a command. It rewrites in place what can be fixed mechanically (`tail -f`, `Get-Content -Wait`, a bare `python -` with no stdin) and blocks the rest: sleep/poll loops, a single sleep of 30 s or more, `find` over a drive root or the home root, `watch`, `Wait-Process` without a timeout. Monitor is denied to every non-meta `agent_type`. Every block message names the replacement (`scpy job.py wait <id>`, a scoped path, the Glob tool). Exact rules and exemptions: the module docstring of `hooks/sc_hooks/handlers/wait_guard.py`. The worker-side contract it enforces: `skills/_shared/dispatch-contract.md` § "No waiting".
 
 Non-guard handlers in the same package: memory-inject (realm-filtered: only rows with realm IS NULL unless `SC_MEM_REALM=personal`), context-check, thinking-nudge, baseline-stash, spawn-log, snapshots, session-cleanup, latex-warn.
 

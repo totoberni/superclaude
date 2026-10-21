@@ -58,7 +58,7 @@ A `meta` launcher function wraps the first form and sets `CLAUDE_AGENT_NAME=meta
 |---------|----------|---------|
 | **Rules** | `rules/` | Auto-loaded behavioral constraints. Numbered for order, path-scoped via frontmatter |
 | **Skills** | `skills/` | 50 slash commands and model-invocable protocols. See [Skills](#skills) |
-| **Hooks and guards** | `hooks/` | One Python dispatcher per hook event (`dispatch.py <Event>`); handlers aggregate into a single JSON response. Guards: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard. See [`docs/guard-subsystem.md`](docs/guard-subsystem.md) |
+| **Hooks and guards** | `hooks/` | One Python dispatcher per hook event (`dispatch.py <Event>`); handlers aggregate into a single JSON response. Guards: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard, key-guard, wait (keeps agents from idling on `tail -f`, sleep or poll loops). See [`docs/guard-subsystem.md`](docs/guard-subsystem.md) |
 | **Memory** | `agent-memory/` | Hybrid FTS5 + sqlite-vec SQLite store: shared project gotchas, per-agent instance context, wins. Self-maintains via `/lt-mem` (`mem compact` = FTS-optimize + vec-rebuild + VACUUM) |
 | **Memory search** | `mem` (`scripts/memory/memory_db.py`) | Hybrid FTS5 + vector retrieval (query-instruction prefix, widened candidate pool, RRF fusion, multi-query union) with a `--name` resolution ladder that refuses ambiguous guesses. Full protocol, search discipline, and get-ladder detail: `rules/12 § Memory Access` |
 | **Spawn logs** | `comms/` | The spawn-log hooks record every worker dispatch and outcome; `/swarm-status` reads them |
@@ -96,10 +96,12 @@ Each prints a ready-to-paste `/loop` block and stops; the human arms it. A sched
 | `scpy <script.py> [args]` | Run a superclaude script (path relative to `~/.claude/scripts/`) under the `~/.claude/.venv` interpreter |
 | `scpy memory/mem_health.py` | Memory DB health score (DB-aware: row size, FTS index cohesion, embedding coverage) |
 | `scpy better_super_deps.py <flags>` | Manage the dependency manifest: `--list`, `--check`, `--record`, `--export --out <file>` |
+| `scpy job.py <start\|status\|wait\|stop\|list> ...` | Run long jobs detached and wait in bounded calls (`wait` exit codes 0-4). See [`docs/usage-guide.md`](docs/usage-guide.md) § Worker Hygiene |
+| `scpy fleet_waste_audit.py --out <dir>` | KPI audit of subagent transcripts (post-work tails, waiting time) |
 
 ## Configuration
 
-`settings.json` controls permissions (`allow`/`deny` command lists), environment variables, and hook registration. It is written by `bin/apply-settings.ps1 -Profile superclaude`, run by the owner. There is no sandbox on native Windows: enforcement is the write-ACL guard plus `permissions.deny`.
+`settings.json` controls permissions (`allow`/`deny` command lists; the superclaude profile sets no `ask` rules, so there are no confirmation prompts in auto mode), environment variables, and hook registration. It is written by `bin/apply-settings.ps1 -Profile superclaude`, run by the owner. There is no sandbox on native Windows: enforcement is the write-ACL guard plus `permissions.deny`.
 
 Guard kill switches: `SUPERCLAUDE_GUARDS=off` disables every guard; `SUPERCLAUDE_GUARD_<NAME>=off|warn|block` sets one.
 

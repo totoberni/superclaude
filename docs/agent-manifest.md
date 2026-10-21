@@ -33,9 +33,13 @@ Model, default effort, per-dispatch effort range and `maxTurns` mirror `~/.claud
 
 Fleet composition: 3 haiku, 6 sonnet, 3 opus. Never `model: fable` (owner decision 2026-09-23).
 
+#### Worker contract (one job, no waiting)
+
+Canonical text: `~/.claude/skills/_shared/dispatch-contract.md` § "One job, done means stop", § "No waiting", § 6. Producers (w-implementer, w-refactorer, w-debugger, w-doc) do one smoke check after the final edit, checkpoint, and hand back with `NEXT-CHECKS:`; suites go to w-tester and review to w-reviewer, dispatched by meta in background. Meta does only cheap R-3 checks itself and launches jobs expected over 5 minutes. Every worker stops its own background tasks before hand-back.
+
 #### Tools: negative filter
 
-No worker has a `tools:` allowlist: each inherits every tool (MCP included) minus `disallowedTools`. Universal deny (every worker): built-ins `Agent`, `Workflow`, `TaskStop`, `AskUserQuestion`, `ExitPlanMode`, plus the outside-service MCP servers listed in `~/.claude/config/worker-tool-policy.json`. Extra denials per worker (BROWSER = `mcp__claude-in-chrome`, `mcp__playwright`):
+No worker has a `tools:` allowlist: each inherits every tool (MCP included) minus `disallowedTools`. Universal deny (every worker): built-ins `Agent`, `Workflow`, `AskUserQuestion`, `ExitPlanMode`, plus the outside-service MCP servers listed in `~/.claude/config/worker-tool-policy.json`. TaskStop is not denied: workers stop their own background tasks. Monitor is denied to every non-meta `agent_type` by the wait guard (not by this list). Extra denials per worker (BROWSER = `mcp__claude-in-chrome`, `mcp__playwright`):
 
 | Worker | Extra denials |
 |--------|---------------|
@@ -144,6 +148,7 @@ One Python dispatcher per hook event: `~/.claude/hooks/dispatch.py <Event>`. Han
 | `git_verb.py` | PreToolUse (shell tools) | Guard: git-verb |
 | `heuristics.py` | PreToolUse (Grep) | Guard: heuristics (advisory) |
 | `notebook_guard.py` | PreToolUse (write + shell tools) | Guard: the notebook guard for `.ipynb` writes |
+| `wait_guard.py` | PreToolUse (shell tools, Monitor) | Guard: the wait guard (`GUARD-BLOCK [wait]`, `SUPERCLAUDE_GUARD_WAIT=off\|warn\|block`): rewrites `tail -f`, `Get-Content -Wait`, bare `python -`; blocks sleep/poll loops, sleeps of 30 s or more, wide `find`, `watch`, `Wait-Process` without a timeout, and Monitor for every non-meta `agent_type` |
 | `worker_verify.py` | PostToolUse (Agent) | The worker-verify reminder (R-3) |
 | `baseline_stash.py` | PreToolUse (write tools) | The baseline-stash hook (R-2) |
 | `context_check.py` | PreToolUse | The context-check hook |
@@ -172,6 +177,8 @@ Run through the `scpy` shim (path relative to `~/.claude/scripts/`); the memory 
 | `better_super_deps.py` | Dependency manifest tool (`/better-super`) |
 | `ssot-lint.py` | SSOT drift lint (`~/.claude/docs/ssot-drift-gate.md`) |
 | `settings_dupcheck.py` | Duplicate-entry check for `settings.json` |
+| `job.py` | Detached long jobs with bounded waits: `start` / `status` / `wait` / `stop` / `list`, `wait` exit codes 0-4, `--no-marker`, `--max` clamped to 580 (module docstring) |
+| `fleet_waste_audit.py` | KPI audit of subagent transcripts (post-work tails, waiting time); `--since`, `--until`, `--out` |
 | `statusline_telemetry.py`, `cost_cache_computer.py` | Statusline telemetry and cost cache |
 
 ## Memory Matrix

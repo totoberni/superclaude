@@ -71,6 +71,24 @@ If an autocommissioned pattern recurs >=3 times across sessions (tracked in the 
 
 Full table: `~/.claude/rules/12-agent-hierarchy.md`. Worker-first mandate: `~/.claude/rules/13-worker-first-mandate.md`. Quality gates: `~/.claude/rules/40-swarm-quality-gates.md`.
 
+### Worker Hygiene (one job, no waiting)
+
+Canonical text: `~/.claude/skills/_shared/dispatch-contract.md` § "One job, done means stop", § "No waiting", § 6 (checkpoint created within the first 5 tool calls, appended progressively).
+
+- Producers (w-implementer, w-refactorer, w-debugger, w-doc) do one smoke check after the final edit, checkpoint, and hand back with a `NEXT-CHECKS:` block. Suites go to w-tester and review to w-reviewer, both dispatched by meta in background.
+- Meta does only cheap R-3 checks itself (`git diff --stat`, reads, a targeted grep).
+- Jobs expected over 5 minutes are launched by meta, never babysat by a worker. Workers stop their own background tasks before hand-back (TaskStop is available to them).
+- The wait guard enforces the no-waiting shapes mechanically.
+
+| Command | Purpose |
+|---------|---------|
+| `scpy job.py start --name <id> [--marker <regex>] [--cwd <dir>] -- <cmd...>` | Launch a detached job; returns at once |
+| `scpy job.py status <id>` / `list` / `stop <id>` | One-shot state, all jobs, kill the process tree |
+| `scpy job.py wait <id> [--max 540] [--stall 300] [--marker <regex> \| --no-marker]` | Bounded wait (`--max` clamped to 580). Exit 0 = exited 0 or marker, 1 = failed, 2 = still running, 3 = stalled, 4 = usage error or unknown id |
+| `scpy fleet_waste_audit.py --since YYYY-MM-DD --out <dir>` | KPI audit of subagent transcripts: post-work tails and waiting time. Run again about a week after a hygiene change and compare |
+
+Details: the module docstring of `scripts/job.py`; `scpy fleet_waste_audit.py --help`.
+
 ---
 
 ## Slash Commands
@@ -118,7 +136,7 @@ Types: `feedback`, `project`, `reference`, `user`. Query via `mem search|get|sim
 
 One Python dispatcher per hook event: `~/.claude/hooks/dispatch.py <Event>`. It loads the handlers under `~/.claude/hooks/sc_hooks/handlers/`, each registered with `@on(event, tools, name)`, and aggregates their results into a single JSON response, so there are no ordering races. A handler that raises is ignored (fail-open, except git-policy, which fails closed) and the error is logged to `~/.claude/logs/hooks.log`.
 
-Guards: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard, key-guard. Kill switches: `SUPERCLAUDE_GUARDS=off` (all), `SUPERCLAUDE_GUARD_<NAME>=off|warn|block` (one).
+Guards: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard, key-guard, wait (rewrites `tail -f` and similar, blocks sleep/poll loops; see `guard-subsystem.md`). Kill switches: `SUPERCLAUDE_GUARDS=off` (all), `SUPERCLAUDE_GUARD_<NAME>=off|warn|block` (one).
 
 Handler roster by event: `~/.claude/docs/agent-manifest.md` § Hooks. Design: `~/.claude/docs/guard-subsystem.md`. Context lifecycle: `~/.claude/rules/25-context-management.md`.
 
@@ -128,7 +146,7 @@ Handler roster by event: `~/.claude/docs/agent-manifest.md` § Hooks. Design: `~
 
 **Hierarchy**: User (`~/.claude/`) -> Project (`.claude/`) -> Local (`.claude/*.local.*`). Hooks MERGE across levels.
 
-**Settings**: `~/.claude/settings.json` — permissions, env, hooks. Written by `bin/apply-settings.ps1 -Profile superclaude`, run by the owner; agents do not edit it.
+**Settings**: `~/.claude/settings.json`: permissions, env, hooks. Written by `bin/apply-settings.ps1 -Profile superclaude`, run by the owner; agents do not edit it. The superclaude profile applies no `permissions.ask` rules (owner decision 2026-10-21: no prompts in auto mode), so destructive commands are governed by `permissions.deny` and the guards, not by a confirmation prompt; the deepseek profile keeps its `ask` rules. The deny list is unchanged.
 
 **Enforcement**: there is no sandbox on native Windows. Write scopes are enforced by the write-ACL guard plus `permissions.deny`.
 

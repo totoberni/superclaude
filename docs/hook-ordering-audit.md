@@ -15,4 +15,4 @@ The original audit (2026-05-09) analysed ordering and output races between the p
 
 Hooks merge across settings levels (user, project, local). A project-level hook would run as a separate process alongside the dispatcher; keep superclaude logic inside handlers rather than adding further hook commands.
 
-Guards present: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard. Design detail: `~/.claude/docs/guard-subsystem.md`.
+Guards present: write-acl, content-scan, git-policy, commit-gate, git-verb, heuristics, worker-verify, notebook-guard, key-guard, wait. Design detail: `~/.claude/docs/guard-subsystem.md`.
