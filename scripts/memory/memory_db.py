@@ -1186,6 +1186,36 @@ def _db_get_by_path(conn: sqlite3.Connection, path: str):
     ).fetchone()
 
 
+def _any_agent_reuse(tier: str, agent: str | None) -> bool:
+    """Regola unica: senza --agent, solo nel tier shared-global, il riuso ignora l'agent."""
+    return agent is None and tier == "shared-global"
+
+
+def _reusable_row(
+    conn: sqlite3.Connection, tier: str, agent: str | None, name: str, default_path: str
+):
+    """Riga esistente che un `upsert` della CLI senza --path deve aggiornare, oppure None.
+
+    Solo se al percorso di default non c'e' nessuna riga ed ESATTAMENTE UNA riga viva
+    (non archiviata) ha lo stesso name, tier e agent. Unica eccezione: senza --agent
+    (`agent` None) nel tier shared-global va bene qualunque agent, perche' le skill salvano
+    shared-global senza --agent righe importate con agent valorizzato; negli altri tier
+    agent None vale solo per le righe con agent NULL. E' il caso delle righe importate con
+    un nome di file diverso dal name, che un nuovo salvataggio per nome duplicherebbe.
+    """
+    if _db_get_by_path(conn, default_path) is not None:
+        return None
+    realm_col = "realm" if _has_realm(conn) else "NULL AS realm"
+    sql = f"SELECT id, tier, path, agent, {realm_col} FROM memories WHERE name = ? AND tier = ?"
+    params: tuple = (name, tier)
+    if not _any_agent_reuse(tier, agent):
+        sql += " AND agent IS ?"
+        params += (agent,)
+    rows = conn.execute(sql, params).fetchall()
+    live = [r for r in rows if not _is_archived_row(r)]
+    return live[0] if len(live) == 1 else None
+
+
 # --- Name resolution ladder --------------------------------------------------
 # A --name argument may be the stored human title ("European academic writing
 # style"), the filename slug (Path(path).stem, e.g. "feedback_european_style"),
@@ -1483,6 +1513,10 @@ def similar(
 _ARCH_SEP = "::"
 
 
+class TierMoveRefusedError(ValueError):
+    """Spostamento di tier rifiutato prima di scrivere: la CLI lo traduce in exit code 2."""
+
+
 def _archived_path(path: str, tier: str) -> str:
     """Compute the archive-tier path for an active row (losslessly reversible)."""
     return f"{ARCHIVE_TIER}/{tier}{_ARCH_SEP}{path}"
@@ -1538,6 +1572,27 @@ def _retier_update(
     )
 
 
+def _refuse_taken_path(
+    conn: sqlite3.Connection, row_id: int, new_path: str, action: str
+) -> None:
+    """Rifiuta lo spostamento se `new_path` e' gia' di un'altra riga.
+
+    Va chiamata prima di `_retier_update`, che altrimenti fallirebbe sul vincolo UNIQUE
+    di memories.path con un IntegrityError.
+    """
+    occupant = _db_get_by_path(conn, new_path)
+    if occupant is None or occupant["id"] == row_id:
+        return
+    occ_id = occupant["id"]
+    # una riga archiviata non si puo' spostare con retier (vedi `retier`): resta il prune
+    remedy = "Prune" if _is_archived_row(occupant) else "Prune or retier"
+    raise TierMoveRefusedError(
+        f"cannot {action} id={row_id}: target path {new_path!r} is taken by memory "
+        f"id={occ_id} (tier={occupant['tier']}); nothing changed. "
+        f"{remedy} id={occ_id} first, then retry"
+    )
+
+
 def archive(
     row_id: int, unarchive: bool = False, db_path: Path | str = DB_PATH
 ) -> dict:
@@ -1552,6 +1607,9 @@ def archive(
 
     Returns {'id', 'name', 'old_tier', 'new_tier', 'old_path', 'new_path'}.
     Raises LookupError if absent; ValueError on a redundant (un)archive.
+    Solleva TierMoveRefusedError, senza scrivere nulla, se il percorso di arrivo (quello
+    originale per l'unarchive, archive/<tier>::<path> per l'archive) e' gia' occupato da
+    un'altra riga.
     """
     conn = _connect(db_path)
     try:
@@ -1573,6 +1631,7 @@ def archive(
             new_tier = ARCHIVE_TIER
             new_path = _archived_path(old_path or "", old_tier or "unknown")
 
+        _refuse_taken_path(conn, row_id, new_path, "unarchive" if unarchive else "archive")
         _retier_update(conn, row_id, new_tier, new_path)
         conn.commit()
         return {
@@ -1606,6 +1665,10 @@ def retier(
 
     Returns {'id', 'name', 'old_tier', 'new_tier', 'old_path', 'new_path'}.
     Raises LookupError if absent; ValueError on archive-target or a redundant move.
+    Solleva TierMoveRefusedError, senza scrivere nulla, se la riga di partenza e'
+    archiviata (il suo percorso con l'origine codificata diventerebbe un percorso vivo
+    malformato: la ripristina `archive --unarchive`) o se il nuovo percorso e' gia'
+    occupato da un'altra riga.
     """
     target_tier = normalize_tier(target_tier)
     if target_tier == ARCHIVE_TIER:
@@ -1620,12 +1683,18 @@ def retier(
             raise LookupError(f"no memory with id={row_id}")
         old_tier = row["tier"]
         old_path = row["path"]
+        if old_tier == ARCHIVE_TIER:
+            raise TierMoveRefusedError(
+                f"memory id={row_id} is archived: retier would write a malformed live path; "
+                f"nothing changed. Use `mem archive --unarchive --id {row_id}` to restore it"
+            )
         if old_tier == target_tier:
             raise ValueError(
                 f"memory id={row_id} is already in tier {target_tier!r}"
             )
 
         new_path = _retiered_path(old_path or "", target_tier)
+        _refuse_taken_path(conn, row_id, new_path, "retier")
         _retier_update(conn, row_id, target_tier, new_path)
         conn.commit()
         return {
@@ -1643,12 +1712,35 @@ def retier(
 # --- Compact -----------------------------------------------------------------
 
 
+def _knn_unchanged(
+    rowid: int, pre: list[tuple[int, float]], post: list[tuple[int, float]]
+) -> bool:
+    """True se dopo il rebuild `rowid` ha gli stessi vicini KNN (rowid, distanza) di prima
+    e ritrova se stesso.
+
+    A parita' di distanza l'ordine dei rowid non e' stabile (vettori identici) e il limite
+    k puo' tagliare l'ultimo gruppo a pari distanza: si confrontano le distanze in ordine e
+    le coppie (rowid, distanza) fuori dall'ultimo gruppo. L'identita' vale se `rowid` e'
+    tra le righe a distanza zero, anche in pareggio con un gemello identico.
+    """
+    if not post or [d for _, d in pre] != [d for _, d in post]:
+        return False
+    last = post[-1][1]
+    if {p for p in pre if p[1] != last} != {p for p in post if p[1] != last}:
+        return False
+    return any(r == rowid and d == 0 for r, d in post)
+
+
 def compact_db(db_path=DB_PATH) -> dict:
     """Structural maintenance: FTS5 optimize + vec0 rebuild (reclaim dead chunk space) + VACUUM.
 
     Re-tier/upsert/prune churn fragments FTS and leaves dead vec0 slots that VACUUM alone can't repack.
-    Transactional vec rebuild (rollback-safe); verifies integrity + KNN identity before returning.
-    Returns {'before_bytes','after_bytes','ok'}. Raises on verification failure (after rollback).
+    Letture iniziali (conteggi, vettori, KNN del campione), optimize FTS, rebuild vec0 e
+    verifica (integrita', conteggi, nessun orfano, identita' KNN del campione) stanno in
+    UNA sola transazione di scrittura (BEGIN IMMEDIATE), verificata PRIMA del COMMIT; il
+    VACUUM gira solo dopo quel COMMIT (SQLite rifiuta il VACUUM dentro una transazione).
+    Returns {'before_bytes','after_bytes','ok'}. Se la verifica fallisce fa ROLLBACK (DB
+    invariato, nessun VACUUM) e solleva RuntimeError.
     """
     import os
 
@@ -1671,34 +1763,45 @@ def compact_db(db_path=DB_PATH) -> dict:
                 "SELECT embedding FROM memories_vec WHERE rowid=?", (rid,)
             ).fetchone()[0]
             return [
-                r[0]
+                (r[0], r[1])
                 for r in conn.execute(
-                    "SELECT rowid FROM memories_vec WHERE embedding MATCH ? AND k = 3 ORDER BY distance",
-                    (q,),
+                    "SELECT rowid, distance FROM memories_vec WHERE embedding MATCH ? AND k = ? "
+                    "ORDER BY distance",
+                    (q, k_of[rid]),
                 ).fetchall()
             ]
 
-        pre_counts = counts()
-        data = [
-            (r[0], r[1])
-            for r in conn.execute(
-                "SELECT rowid, embedding FROM memories_vec ORDER BY rowid"
-            ).fetchall()
-        ]
-        if not data:
-            return {"before_bytes": before, "after_bytes": before, "ok": True}
-        sample = [data[0][0], data[len(data) // 2][0], data[-1][0]]
-        pre_knn = {r: knn(r) for r in sample}
-
-        # 1. FTS optimize
-        conn.execute(
-            "INSERT INTO memories_fts(memories_fts, rank) VALUES('integrity-check', 1)"
-        )
-        conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('optimize')")
-
-        # 2. vec0 rebuild (transactional; preserves rowid = memories.id)
+        # le letture iniziali stanno nella stessa transazione di scrittura del rebuild:
+        # un upsert concorrente non puo' cambiare un vettore tra la copia e il rebuild
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute("BEGIN")
+            pre_counts = counts()
+            data = [
+                (r[0], r[1])
+                for r in conn.execute(
+                    "SELECT rowid, embedding FROM memories_vec ORDER BY rowid"
+                ).fetchall()
+            ]
+            if not data:
+                conn.execute("ROLLBACK")
+                return {"before_bytes": before, "after_bytes": before, "ok": True}
+            sample = [data[0][0], data[len(data) // 2][0], data[-1][0]]
+            # k copre tutti i vettori identici a quello campionato, cosi' la riga stessa
+            # resta sempre nel risultato anche quando ha dei gemelli a distanza zero
+            vectors = dict(data)
+            k_of = {
+                r: max(3, sum(1 for emb in vectors.values() if emb == vectors[r]))
+                for r in sample
+            }
+            pre_knn = {r: knn(r) for r in sample}
+
+            # 1. FTS optimize
+            conn.execute(
+                "INSERT INTO memories_fts(memories_fts, rank) VALUES('integrity-check', 1)"
+            )
+            conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('optimize')")
+
+            # 2. vec0 rebuild (preserves rowid = memories.id)
             conn.execute("DROP TABLE memories_vec")
             conn.execute(
                 f"CREATE VIRTUAL TABLE memories_vec USING vec0("
@@ -1707,36 +1810,30 @@ def compact_db(db_path=DB_PATH) -> dict:
             conn.executemany(
                 "INSERT INTO memories_vec(rowid, embedding) VALUES(?, ?)", data
             )
+
+            # 3. verifica prima del COMMIT: se fallisce, il ROLLBACK lascia il DB com'era
+            ic = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            post_counts = counts()
+            orphan = conn.execute(
+                "SELECT COUNT(*) FROM memories m WHERE NOT EXISTS "
+                "(SELECT 1 FROM memories_vec v WHERE v.rowid=m.id)"
+            ).fetchone()[0]
+            bad_knn = [r for r in sample if not _knn_unchanged(r, pre_knn[r], knn(r))]
+            if ic != "ok" or post_counts != pre_counts or orphan or bad_knn:
+                raise RuntimeError(
+                    f"compact verification FAILED: integrity={ic} "
+                    f"counts {pre_counts}->{post_counts} orphan={orphan} "
+                    f"knn_mismatch={bad_knn}; rolled back, DB unchanged"
+                )
             conn.execute("COMMIT")
         except Exception:
-            conn.execute("ROLLBACK")
+            # un errore SQLite grave puo' aver gia' annullato la transazione da solo
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
             raise
 
-        # 3. VACUUM
+        # 4. VACUUM, solo dopo il COMMIT verificato
         conn.execute("VACUUM")
-
-        # verify
-        ic = conn.execute("PRAGMA integrity_check").fetchone()[0]
-        post_counts = counts()
-        orphan = conn.execute(
-            "SELECT COUNT(*) FROM memories m WHERE NOT EXISTS "
-            "(SELECT 1 FROM memories_vec v WHERE v.rowid=m.id)"
-        ).fetchone()[0]
-        post_knn = {r: knn(r) for r in sample}
-        ok = (
-            ic == "ok"
-            and post_counts == pre_counts
-            and orphan == 0
-            and all(
-                post_knn[r] == pre_knn[r] and post_knn[r] and post_knn[r][0] == r
-                for r in sample
-            )
-        )
-        if not ok:
-            raise RuntimeError(
-                f"compact verification FAILED: integrity={ic} "
-                f"counts {pre_counts}->{post_counts} orphan={orphan}"
-            )
         return {"before_bytes": before, "after_bytes": os.path.getsize(db_path), "ok": True}
     finally:
         conn.close()
@@ -1917,7 +2014,9 @@ if __name__ == "__main__":
     p_upsert.add_argument(
         "--path",
         default=None,
-        help="Logical key path (default: <tier>/<agent-or-_>/<name>.md).",
+        help="Logical key path (default: <tier>/<agent-or-_>/<name>.md; if no row is there and "
+        "exactly one live row has the same name, tier and agent (any agent for tier "
+        "shared-global without --agent), that row's path and agent).",
     )
     p_upsert.add_argument(
         "--realm",
@@ -2156,12 +2255,38 @@ if __name__ == "__main__":
 
         ns.tier = _tier_or_die(ns.tier)
         agent_part = ns.agent or "_"
-        logical_path = ns.path or f"{ns.tier}/{agent_part}/{ns.name}.md"
+        default_path = f"{ns.tier}/{agent_part}/{ns.name}.md"
+        logical_path = ns.path or default_path
+        row_agent = ns.agent
+        if ns.path is None:
+            # Le skill salvano per nome senza --path: una riga unica con nome di file
+            # diverso dal name va aggiornata, non duplicata (vedi _reusable_row)
+            conn = _connect(db)
+            try:
+                reused = _reusable_row(conn, ns.tier, ns.agent, ns.name, default_path)
+            finally:
+                conn.close()
+            if reused is not None:
+                logical_path = reused["path"]
+                # senza --agent la riga riusata conserva il proprio agent
+                row_agent = reused["agent"]
+                match = "name and tier" if _any_agent_reuse(ns.tier, ns.agent) else "name, tier and agent"
+                # la riga riusata conserva il proprio realm: lo si segnala quando una riga
+                # nuova di questa sessione ne avrebbe un altro
+                realm_note = ""
+                if ns.realm is None and reused["realm"] != _default_realm():
+                    realm_note = f" realm={reused['realm'] or 'untagged'}"
+                print(
+                    f"note: no row at {default_path}; updating the only live row with this "
+                    f"{match}: id={reused['id']} path={logical_path} agent={row_agent}"
+                    f"{realm_note}",
+                    file=sys.stderr,
+                )
 
         row_id = upsert(
             path=logical_path,
             tier=ns.tier,
-            agent=ns.agent,
+            agent=row_agent,
             type=ns.mem_type,
             name=ns.name,
             description=ns.description,
@@ -2289,6 +2414,8 @@ if __name__ == "__main__":
 
         try:
             info = archive(row["id"], unarchive=ns.unarchive, db_path=db)
+        except TierMoveRefusedError as e:
+            _die(str(e), 2)
         except (LookupError, ValueError) as e:
             _die(str(e))
 
@@ -2313,6 +2440,8 @@ if __name__ == "__main__":
 
         try:
             info = retier(row["id"], _tier_or_die(ns.tier), db_path=db)
+        except TierMoveRefusedError as e:
+            _die(str(e), 2)
         except (LookupError, ValueError) as e:
             _die(str(e))
 
